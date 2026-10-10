@@ -72,6 +72,31 @@ describe("createTtyLineAsker", () => {
 	});
 });
 
+describe("review input handling", () => {
+	it("keeps input typed ahead of the comment question", async () => {
+		const s = setup();
+		const input = new PassThrough();
+		const output = new PassThrough();
+		output.resume();
+		input.write("n\nit missed the tests\n");
+		const asker = createTtyLineAsker(input, output);
+		expect(await promptReview({ asker, db: s.db, runId: s.run.id, redact: s.redact, io: s.io })).toBe("not_done");
+		expect(listFeedback(s.db, s.run.id)[0]?.comment).toBe("it missed the tests");
+	});
+
+	it("resolves null and releases the terminal when the signal aborts mid-question", async () => {
+		const input = new PassThrough();
+		const output = new PassThrough();
+		output.resume();
+		const asker = createTtyLineAsker(input, output);
+		const ac = new AbortController();
+		const answer = asker.ask("q? ", ac.signal);
+		ac.abort();
+		expect(await answer).toBeNull();
+		expect(await asker.ask("again? ", new AbortController().signal)).toBeNull();
+	});
+});
+
 describe("isInteractiveTerminal", () => {
 	it("asks only when stdin, stdout and stderr are all terminals", () => {
 		const tty = { isTTY: true };
