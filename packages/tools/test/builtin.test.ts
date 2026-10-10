@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -95,6 +95,46 @@ describe("bash", () => {
 		const r = await tool("bash").execute("1", { command: "head -c 3000000 /dev/zero | tr '\\0' 'a'" });
 		expect(text(r).length).toBeLessThan(MAX_BASH_OUTPUT_BYTES + 200);
 		expect(text(r)).toContain("[output truncated]");
+	});
+});
+
+describe("bash hardening", () => {
+	it("kills the whole process group on timeout and abort", async () => {
+		const { tool } = setup();
+		const t0 = Date.now();
+		const r = await tool("bash").execute("1", { command: "sleep 5; echo x", timeoutMs: 1000 });
+		expect(text(r)).toContain("timed out after 1000ms");
+		expect(Date.now() - t0).toBeLessThan(2500);
+		const ac = new AbortController();
+		setTimeout(() => ac.abort(), 100);
+		const t1 = Date.now();
+		const a = await tool("bash").execute("2", { command: "sleep 5; echo x" }, ac.signal);
+		expect(text(a)).toContain("aborted");
+		expect(Date.now() - t1).toBeLessThan(2500);
+	});
+
+	it("does not run when already aborted", async () => {
+		const { ws, tool } = setup();
+		const ac = new AbortController();
+		ac.abort();
+		const r = await tool("bash").execute("1", { command: "touch ran.txt" }, ac.signal);
+		expect(r.isError).toBe(true);
+		expect(text(r)).toContain("aborted");
+		expect(existsSync(join(ws, "ran.txt"))).toBe(false);
+	});
+
+	it("marks truncation when a single chunk crosses the cap", async () => {
+		const { tool } = setup();
+		const r = await tool("bash").execute("1", { command: `head -c ${MAX_BASH_OUTPUT_BYTES + 1} /dev/zero | tr '\\0' 'a'` });
+		expect(text(r)).toContain("[output truncated]");
+	});
+});
+
+describe("edit validation", () => {
+	it("rejects empty oldText", async () => {
+		const { ws, tool } = setup();
+		writeFileSync(join(ws, "a.txt"), "x");
+		await expect(tool("edit").execute("1", { path: "a.txt", oldText: "", newText: "z" })).rejects.toThrow(/must not be empty/);
 	});
 });
 
