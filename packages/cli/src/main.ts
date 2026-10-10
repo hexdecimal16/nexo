@@ -5,7 +5,9 @@ import { type CostReport, costReport, ensureNexoDirs, openDb, reindex, resolveNe
 import { type ErrorPayload, NexoError, type NexoErrorCode, toErrorPayload } from "@nexo/telemetry";
 import { nonInteractivePrompter, type Prompter } from "@nexo/tools";
 import { createTtyPrompter } from "./prompter.ts";
+import { createTtyLineAsker, isInteractiveTerminal, type LineAsker, promptReview } from "./review.ts";
 import { createRuntime } from "./runtime.ts";
+import { runUi } from "./ui.ts";
 
 export interface CliIO {
 	stdout: { write(text: string): boolean };
@@ -17,13 +19,16 @@ export interface CliOptions {
 	cwd?: string;
 	models?: Models;
 	prompter?: Prompter;
+	/** Asks the post-run review question. Undefined: a terminal asker when stdin, stdout and stderr are TTYs. Null: never ask. */
+	reviewAsker?: LineAsker | null;
 	signal?: AbortSignal;
 }
 
 const USAGE = `Usage:
-  nexo run <instruction...> [--skill <name>] [--model <s1|s2|provider/id>] [--effort <level>] [--workspace <dir>] [--budget <usd>]
+  nexo run <instruction...> [--skill <name>] [--model <s1|s2|provider/id>] [--effort <level>] [--workspace <dir>] [--budget <usd>] [--no-review]
   nexo cost [--by model|tier|day|run|skill] [--since YYYY-MM-DD]
   nexo reindex
+  nexo ui [--port <n>]
 `;
 
 export const EXIT_SIGINT = 130;
@@ -91,6 +96,12 @@ function defaultPrompter(): Prompter {
 	return createTtyPrompter(process.stdin, process.stdout, { onInterrupt: () => process.kill(process.pid, "SIGINT") });
 }
 
+/** The review prompt runs only when a person is at the terminal; piped, redirected or scripted runs never block on it. */
+function defaultReviewAsker(): LineAsker | null {
+	if (!isInteractiveTerminal(process)) return null;
+	return createTtyLineAsker(process.stdin, process.stderr);
+}
+
 async function runCommand(args: string[], io: CliIO, options: CliOptions): Promise<number> {
 	const { values, positionals } = parseArgs({
 		args,
@@ -101,6 +112,7 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 			effort: { type: "string" },
 			workspace: { type: "string" },
 			budget: { type: "string" },
+			"no-review": { type: "boolean" },
 		},
 	});
 	const instruction = positionals.join(" ").trim();
@@ -140,6 +152,15 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 	io.stderr.write(`${mark} ${result.status} · $${result.costUsd.toFixed(4)}${unknown} · trajectory ${result.trajectoryId ?? "-"}${result.runDir ? ` · ${result.runDir}` : ""}\n`);
 	if (result.error) printError(io, result.error);
 	if (result.status === "aborted") return EXIT_SIGINT;
+	const asker = values["no-review"] ? null : options.reviewAsker === undefined ? defaultReviewAsker() : options.reviewAsker;
+	if (asker && result.trajectoryId) {
+		try {
+			await promptReview({ asker, db: runtime.db, runId: result.trajectoryId, redact: runtime.redact, io });
+		} catch (error) {
+			if (!(error instanceof NexoError)) throw error;
+			printError(io, error.toPayload());
+		}
+	}
 	if (result.status === "succeeded") return 0;
 	return result.error ? exitCodeFor(result.error.code) : 1;
 }
@@ -182,6 +203,10 @@ export async function runCli(argv: string[], io: CliIO, options: CliOptions = {}
 				return costCommand(rest, io, options);
 			case "reindex":
 				return reindexCommand(io, options);
+			case "ui": {
+				const { values } = parseArgs({ args: rest, options: { port: { type: "string" } } });
+				return await runUi({ env: options.env ?? process.env, cwd: options.cwd ?? process.cwd(), port: values.port, io, signal: options.signal });
+			}
 			case undefined:
 			case "help":
 			case "--help":
