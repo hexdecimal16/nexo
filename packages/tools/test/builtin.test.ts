@@ -1,10 +1,12 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { createRedactor } from "@nexo/telemetry";
 import { describe, expect, it } from "vitest";
-import { createBuiltinTools, createChangeTracker, FileLeases, MAX_BASH_OUTPUT_BYTES, type ToolContext } from "../src/index.ts";
+import { createBuiltinTools, createChangeTracker, FileLeases, MAX_BASH_OUTPUT_BYTES, type ToolContext, trackedBashGroups } from "../src/index.ts";
 
 const redact = createRedactor();
 
@@ -127,6 +129,22 @@ describe("bash hardening", () => {
 		const { tool } = setup();
 		const r = await tool("bash").execute("1", { command: `head -c ${MAX_BASH_OUTPUT_BYTES + 1} /dev/zero | tr '\\0' 'a'` });
 		expect(text(r)).toContain("[output truncated]");
+	});
+});
+
+describe("bash process-group cleanup", () => {
+	it("empties the tracked set after a command closes", async () => {
+		const { tool } = setup();
+		await tool("bash").execute("1", { command: "echo hi" });
+		expect(trackedBashGroups()).toEqual([]);
+	});
+
+	it("kills live bash groups when the host process exits", async () => {
+		const out = execFileSync(process.execPath, [fileURLToPath(new URL("./exit-fixture.ts", import.meta.url))], { encoding: "utf8" });
+		const pgid = (JSON.parse(out.trim().split("\n").pop() ?? "[]") as number[])[0] ?? 0;
+		expect(pgid).toBeGreaterThan(0);
+		await new Promise((r) => setTimeout(r, 300));
+		expect(() => process.kill(-pgid, 0)).toThrow(/ESRCH/);
 	});
 });
 

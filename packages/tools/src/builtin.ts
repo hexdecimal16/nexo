@@ -13,6 +13,30 @@ const MAX_READ_LINES = 2000;
 const MAX_FETCH_CHARS = 100_000;
 const FETCH_TIMEOUT_MS = 30_000;
 
+const liveBashGroups = new Set<number>();
+let exitHandlerRegistered = false;
+
+export function killLiveBashGroups(): void {
+	for (const pgid of liveBashGroups) {
+		try {
+			process.kill(-pgid, "SIGKILL");
+		} catch {
+			// the process group already exited
+		}
+	}
+	liveBashGroups.clear();
+}
+
+export function trackedBashGroups(): number[] {
+	return [...liveBashGroups];
+}
+
+function ensureExitHandler(): void {
+	if (exitHandlerRegistered) return;
+	exitHandlerRegistered = true;
+	process.on("exit", killLiveBashGroups);
+}
+
 export interface ToolContext {
 	workspaceRoot: string;
 	holder: string;
@@ -106,6 +130,11 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 				if (signal?.aborted) return resolvePromise(textResult("Command aborted\n", true));
 				const timeoutMs = params.timeoutMs ?? ctx.bashTimeoutMs;
 				const child = spawn("bash", ["-c", params.command], { cwd: root, env: process.env, detached: true });
+				const pgid = child.pid;
+				if (pgid !== undefined) {
+					ensureExitHandler();
+					liveBashGroups.add(pgid);
+				}
 				const killGroup = () => {
 					try {
 						if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
@@ -137,6 +166,7 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 				};
 				signal?.addEventListener("abort", onAbort, { once: true });
 				child.on("close", (code) => {
+					if (pgid !== undefined) liveBashGroups.delete(pgid);
 					clearTimeout(timer);
 					signal?.removeEventListener("abort", onAbort);
 					const output = new StringDecoder("utf8").write(Buffer.concat(chunks));
@@ -146,6 +176,7 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 					resolvePromise(textResult(`exit code: ${code ?? -1}\n${body}`, code !== 0));
 				});
 				child.on("error", (error) => {
+					if (pgid !== undefined) liveBashGroups.delete(pgid);
 					clearTimeout(timer);
 					resolvePromise(textResult(`Failed to start bash: ${error.message}`, true));
 				});
