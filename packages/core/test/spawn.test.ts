@@ -2,14 +2,28 @@ import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall, type JsonValue } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getRun, listChildRuns, listSpans, readRunJson } from "@nexo/store";
+import { Recorder } from "../src/engine/recorder.ts";
 import { createEngine } from "../src/index.ts";
-import { lastToolResultText, makeEnv, useDispatcher } from "./helpers.ts";
+import { firstUserText, lastToolResultText, makeEnv, useDispatcher } from "./helpers.ts";
 
 const spawnCall = (tasks: JsonValue[]) => fauxAssistantMessage([fauxToolCall("spawn", { tasks })]);
 
+/** The USD the run has spent according to the last budget line the engine added to the transcript. */
+function spentFromBudgetLine(ctx: Parameters<typeof firstUserText>[0]): number {
+	const text = JSON.stringify(ctx.messages);
+	const matches = [...text.matchAll(/Budget: \$([0-9.]+) of \$([0-9.]+) remaining/g)];
+	const last = matches.at(-1);
+	if (!last) throw new Error("no budget line in transcript");
+	return Number(last[2]) - Number(last[1]);
+}
+
 describe("spawn", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
 	it("runs independent children in parallel, nests them on disk and in spans, and rolls up cost", async () => {
 		const env = makeEnv();
 		let active = 0;
@@ -44,7 +58,10 @@ describe("spawn", () => {
 		expect(subSpans).toHaveLength(2);
 		expect(subSpans.every((s) => s.parentSpanId === spawnSpan?.id)).toBe(true);
 		const childCost = children.reduce((sum, c) => sum + c.costUsd, 0);
-		expect(getRun(env.deps.db, result.trajectoryId as string)?.costUsd).toBeGreaterThan(childCost);
+		const ownLlmCost = parentSpans.filter((s) => s.kind === "llm_call").reduce((sum, s) => sum + s.costUsd, 0);
+		expect(ownLlmCost).toBeGreaterThan(0);
+		expect(childCost).toBeGreaterThan(0);
+		expect(getRun(env.deps.db, result.trajectoryId as string)?.costUsd).toBeCloseTo(ownLlmCost + childCost, 9);
 		const graph = readRunJson(result.runDir as string).taskGraphs;
 		expect(graph).toHaveLength(1);
 		expect(graph[0]?.planned).toHaveLength(2);
@@ -180,5 +197,108 @@ describe("spawn", () => {
 		const result = await createEngine(env.deps).run({ instruction: "PARENT", workspace: ws });
 		expect(result.status).toBe("succeeded");
 		expect(bToolResult).toContain("another task");
+	});
+	it("keeps a child's real result and cost when its subagent span cannot be finished", async () => {
+		const env = makeEnv({ config: { models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "pricey" } } } });
+		const finish = Recorder.prototype.finish;
+		vi.spyOn(Recorder.prototype, "finish").mockImplementation(function (this: Recorder, id, patch) {
+			if (patch.attrs && "childCostUsd" in patch.attrs) throw new Error("disk full");
+			finish.call(this, id, patch);
+		});
+		let toolResult = "";
+		let spentAfterSpawn = 0;
+		useDispatcher(env, {
+			PARENT: [
+				spawnCall([{ id: "p", instruction: "CHILD-PRICEY", model: "s2" }]),
+				async (ctx) => {
+					toolResult = lastToolResultText(ctx);
+					spentAfterSpawn = spentFromBudgetLine(ctx);
+					return fauxAssistantMessage("done");
+				},
+			],
+			"CHILD-PRICEY": [fauxAssistantMessage("x".repeat(4000))],
+		});
+		const result = await createEngine(env.deps).run({ instruction: "PARENT", budgetUsd: 5 });
+		expect(result.status).toBe("succeeded");
+		const [child] = listChildRuns(env.deps.db, result.trajectoryId as string);
+		expect(child?.status).toBe("succeeded");
+		expect(child?.costUsd).toBeGreaterThan(0.5);
+		const outcome = (JSON.parse(toolResult) as { status: string; costUsd: number }[])[0];
+		expect(outcome).toMatchObject({ status: "succeeded" });
+		expect(outcome?.costUsd).toBeCloseTo(child?.costUsd as number, 6);
+		expect(spentAfterSpawn).toBeGreaterThanOrEqual((child?.costUsd as number) - 1e-4);
+	});
+
+	it("stops starting children once the parent is aborted mid-spawn", async () => {
+		const env = makeEnv({ config: { spawn: { maxParallelSubagents: 1 } } });
+		const ac = new AbortController();
+		let callsAfterAbort = 0;
+		const count = (step: () => Promise<ReturnType<typeof fauxAssistantMessage>>) => async () => {
+			if (ac.signal.aborted) callsAfterAbort++;
+			return step();
+		};
+		useDispatcher(env, {
+			PARENT: [spawnCall([{ id: "a", instruction: "CHILD-A" }, { id: "b", instruction: "CHILD-B" }]), count(async () => fauxAssistantMessage("parent again"))],
+			"CHILD-A": [
+				async () => {
+					ac.abort();
+					await new Promise((r) => setTimeout(r, 30));
+					return fauxAssistantMessage("late");
+				},
+				count(async () => fauxAssistantMessage("a again")),
+			],
+			"CHILD-B": [count(async () => fauxAssistantMessage("b ran"))],
+		});
+		const result = await createEngine(env.deps).run({ instruction: "PARENT" }, ac.signal);
+		expect(result.status).toBe("aborted");
+		expect(callsAfterAbort).toBe(0);
+		const children = listChildRuns(env.deps.db, result.trajectoryId as string);
+		expect(children.map((c) => [c.instruction, c.status])).toEqual([["CHILD-A", "aborted"]]);
+		expect(existsSync(join(result.runDir as string, "subagents"))).toBe(true);
+		const subSpans = listSpans(env.deps.db, result.trajectoryId as string).filter((s) => s.kind === "subagent");
+		expect(subSpans.map((s) => s.name)).toEqual(["a"]);
+		const executed = readRunJson(result.runDir as string).taskGraphs[0]?.executed as { id: string; status: string; trajectoryId: string | null }[] | undefined;
+		expect(executed?.map((o) => [o.id, o.status, o.trajectoryId === null])).toEqual([
+			["a", "aborted", false],
+			["b", "aborted", true],
+		]);
+	});
+
+	it("frees a failed child's reservation so the next sibling reserves the full remaining budget", async () => {
+		const env = makeEnv({
+			config: { spawn: { maxParallelSubagents: 1 } },
+			skills: { lite: "---\nname: lite\ndescription: Lite\nmetadata:\n  nexo-model-allowed: s1\n---\nBe brief.\n" },
+		});
+		useDispatcher(env, {
+			PARENT: [spawnCall([{ id: "bad", instruction: "CHILD-BAD", skill: "lite", model: "s2" }, { id: "ok", instruction: "CHILD-OK" }]), fauxAssistantMessage("done")],
+			"CHILD-OK": [fauxAssistantMessage("ok done")],
+		});
+		const result = await createEngine(env.deps).run({ instruction: "PARENT", budgetUsd: 1 });
+		expect(result.status).toBe("succeeded");
+		const spans = listSpans(env.deps.db, result.trajectoryId as string);
+		const firstLlmCost = spans.find((s) => s.kind === "llm_call")?.costUsd ?? 0;
+		const sub = (name: string) => spans.find((s) => s.kind === "subagent" && s.name === name);
+		expect(sub("bad")?.attrs.budgetUsd).toBeCloseTo((1 - firstLlmCost) / 2, 9);
+		expect(sub("bad")?.attrs.status).toBe("failed");
+		expect(sub("ok")?.attrs.budgetUsd).toBeCloseTo(1 - firstLlmCost, 9);
+	});
+
+	it("passes a dependency's output into the dependent task's instruction", async () => {
+		const env = makeEnv();
+		let dependentPrompt = "";
+		useDispatcher(env, {
+			PARENT: [spawnCall([{ id: "first", instruction: "STEP-ONE" }, { id: "second", instruction: "STEP-TWO", dependsOn: ["first"] }]), fauxAssistantMessage("done")],
+			"STEP-ONE": [fauxAssistantMessage("alpha-result-42")],
+			"STEP-TWO": [
+				async (ctx) => {
+					dependentPrompt = firstUserText(ctx);
+					return fauxAssistantMessage("used it");
+				},
+			],
+		});
+		const result = await createEngine(env.deps).run({ instruction: "PARENT" });
+		expect(result.status).toBe("succeeded");
+		expect(dependentPrompt).toContain("STEP-TWO");
+		expect(dependentPrompt).toContain("Results of tasks this depends on:\n[first]\nalpha-result-42");
 	});
 });
