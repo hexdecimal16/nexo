@@ -291,14 +291,17 @@ export function listChildSummaries(db: Db, parentRunId: string): RunSummary[] {
 	return db.prepare(`${SUMMARY_SELECT} WHERE r.parent_run_id = ? ORDER BY r.started_at, r.id`).all(parentRunId).map(decodeSummary);
 }
 
-/** The run and all of its descendants (subagents at any depth), the run itself first. */
+/** Deepest subagent nesting followed by `descendantRunIds`; bounds the walk if the parent links form a loop. */
+export const MAX_RUN_DEPTH = 64;
+
+/** The run and all of its descendants (subagents at any depth), the run itself first. A parent loop cannot hang it. */
 export function descendantRunIds(db: Db, runId: string): string[] {
 	return db
 		.prepare(
 			`WITH RECURSIVE tree(id, depth) AS (
 				SELECT id, 0 FROM runs WHERE id = ?
-				UNION ALL SELECT r.id, t.depth + 1 FROM runs r JOIN tree t ON r.parent_run_id = t.id
-			) SELECT id FROM tree ORDER BY depth, id`,
+				UNION SELECT r.id, t.depth + 1 FROM runs r JOIN tree t ON r.parent_run_id = t.id WHERE t.depth < ${MAX_RUN_DEPTH}
+			) SELECT id FROM tree GROUP BY id ORDER BY MIN(depth), id`,
 		)
 		.all(runId)
 		.map((row) => String(row.id));
