@@ -2,6 +2,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Db } from "./db.ts";
 import { transaction } from "./db.ts";
+import { restoreFeedback } from "./feedback.ts";
 import { readRunJson, readTrajectory, type RunJson } from "./run-dir.ts";
 import { insertRun } from "./runs.ts";
 import { insertSpan } from "./spans.ts";
@@ -14,6 +15,7 @@ export interface ReindexResult {
 
 /**
  * Rebuilds the `runs` and `spans` tables from run directories. Run directories are the source of truth.
+ * The feedback table is kept; a run with no feedback rows gets one back from its run.json `humanVerdict`.
  * A run.json still marked running is indexed as aborted, because a reindexed row has no pid for crash recovery to check.
  */
 export function reindex(db: Db, runsRoot: string): ReindexResult {
@@ -76,6 +78,7 @@ function indexRun(db: Db, dir: string): { spans: number } | null {
 				? { code: "INTERNAL", message: "The run was still marked running when the index was rebuilt", retryable: false }
 				: run.error,
 		});
+		if (run.humanVerdict) restoreFeedback(db, run.id, run.humanVerdict);
 		let spans = 0;
 		for (const span of readTrajectory(dir)) {
 			insertSpan(db, span);

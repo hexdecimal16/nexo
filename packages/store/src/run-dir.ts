@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { type ErrorPayload, NexoError, type Redactor } from "@nexo/telemetry";
+import type { HumanVerdict } from "./feedback.ts";
 import type { RunStatus } from "./runs.ts";
 import type { SpanRow } from "./spans.ts";
 
@@ -38,6 +39,8 @@ export interface RunJson {
 	configSnapshotHash: string;
 	workspace: string;
 	taskGraphs: TaskGraphRecord[];
+	/** The latest human verdict; written by `recordFeedback` after the run ends. */
+	humanVerdict?: HumanVerdict | null;
 }
 
 const SUBDIRS = ["artifacts", "context", "workspace", "tool_outputs", "scores", "subagents"] as const;
