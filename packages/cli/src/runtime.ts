@@ -3,7 +3,7 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { createEngine, type DeepPartial, type Engine, type EngineEvent, loadConfig, type NexoConfig } from "@nexo/core";
 import { loadSkills, type SkillCatalog } from "@nexo/skills";
 import { type Db, ensureNexoDirs, type NexoPaths, openDb, resolveNexoPaths } from "@nexo/store";
-import { createLogger, createRedactor } from "@nexo/telemetry";
+import { createLogger, createRedactor, type Redactor } from "@nexo/telemetry";
 import type { Prompter } from "@nexo/tools";
 
 export interface Runtime {
@@ -12,6 +12,7 @@ export interface Runtime {
 	db: Db;
 	skills: SkillCatalog;
 	engine: Engine;
+	redact: Redactor;
 }
 
 export interface RuntimeOptions {
@@ -44,5 +45,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 		skills,
 		onEvent: options.onEvent,
 	});
-	return { paths, config, db, skills, engine };
+	return { paths, config, db, skills, engine, redact };
 }

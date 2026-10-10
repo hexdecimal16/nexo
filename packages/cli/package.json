@@ -12,6 +12,7 @@
     "@nexo/skills": "0.1.0",
     "@nexo/store": "0.1.0",
     "@nexo/telemetry": "0.1.0",
-    "@nexo/tools": "0.1.0"
+    "@nexo/tools": "0.1.0",
+    "@nexo/web": "0.1.0"
   }
 }

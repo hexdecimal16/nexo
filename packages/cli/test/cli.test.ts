@@ -1,10 +1,11 @@
+import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readFileSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
-import { describe, expect, it, vi } from "vitest";
-import { costReport, insertRun, insertSpan, openDb } from "@nexo/store";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { costReport, insertRun, insertSpan, listFeedback, openDb, queryRuns, resolveNexoPaths } from "@nexo/store";
 import { runRow, spanRow } from "../../store/test/fixtures.ts";
 import { abortOnSignals, type CliIO, runCli } from "../src/main.ts";
 
@@ -19,8 +20,14 @@ function io(): CliIO & { out: () => string; err: () => string } {
 	};
 }
 
+const homes: string[] = [];
+afterEach(() => {
+	for (const dir of homes.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
 function home(config?: unknown): { env: NodeJS.ProcessEnv; cwd: string } {
 	const root = mkdtempSync(join(tmpdir(), "nexo-cli-"));
+	homes.push(root);
 	mkdirSync(join(root, "home"), { recursive: true });
 	if (config) writeFileSync(join(root, "home", "config.json"), JSON.stringify(config));
 	return { env: { NEXO_HOME: join(root, "home") }, cwd: root };
@@ -90,6 +97,114 @@ describe("nexo run", () => {
 		const runDir = /· (\S+)\n/.exec(t.err())?.[1];
 		expect(runDir && existsSync(join(runDir, "run.json"))).toBe(true);
 		expect(JSON.parse(readFileSync(join(runDir as string, "run.json"), "utf8")).status).toBe("aborted");
+	});
+});
+
+describe("post-run review", () => {
+	it("records the verdict typed after a run", async () => {
+		const h = home(config);
+		const answers = ["n", "wrong greeting"];
+		const asked: string[] = [];
+		const reviewAsker = { ask: async (q: string) => (asked.push(q), answers.shift() ?? null) };
+		const code = await runCli(["run", "Say", "hello"], io(), { ...h, models: fauxModels([fauxAssistantMessage("hi")]), reviewAsker });
+		expect(code).toBe(0);
+		expect(asked[0]).toContain("[d]one / [n]ot done / [s]kip");
+		const db = openDb(resolveNexoPaths(h.env).db);
+		const [run] = queryRuns(db).runs;
+		expect(run?.verdict).toBe("not_done");
+		expect(listFeedback(db, run?.id ?? "")[0]?.comment).toBe("wrong greeting");
+	});
+
+	it("never asks with --no-review or without a terminal, so the run waits in the review queue", async () => {
+		const h = home(config);
+		const reviewAsker = { ask: vi.fn(async () => "d") };
+		await runCli(["run", "--no-review", "x"], io(), { ...h, models: fauxModels([fauxAssistantMessage("ok")]), reviewAsker });
+		await runCli(["run", "y"], io(), { ...h, models: fauxModels([fauxAssistantMessage("ok")]), reviewAsker: null });
+		expect(reviewAsker.ask).not.toHaveBeenCalled();
+		expect(queryRuns(openDb(resolveNexoPaths(h.env).db), { reviewed: false }).runs).toHaveLength(2);
+	});
+});
+
+describe("post-run review store failure", () => {
+	it("reports a failed run.json mirror write without changing the run's exit code", async () => {
+		const h = home(config);
+		const t = io();
+		let runDir = "";
+		const reviewAsker = {
+			ask: async () => {
+				runDir = join(resolveNexoPaths(h.env).runs, queryRuns(openDb(resolveNexoPaths(h.env).db)).runs[0]?.id ?? "");
+				chmodSync(runDir, 0o500);
+				return "d";
+			},
+		};
+		try {
+			const code = await runCli(["run", "x"], t, { ...h, models: fauxModels([fauxAssistantMessage("ok")]), reviewAsker });
+			expect(code).toBe(0);
+			expect(t.err()).toContain("error [STORE_IO]");
+		} finally {
+			if (runDir) chmodSync(runDir, 0o700);
+		}
+	});
+});
+
+describe("nexo ui", () => {
+	async function startUi(h: { env: NodeJS.ProcessEnv; cwd: string }, t: ReturnType<typeof io>) {
+		const ac = new AbortController();
+		const running = runCli(["ui", "--port", "0"], t, { ...h, signal: ac.signal });
+		for (let i = 0; i < 100 && !t.out().includes("token="); i++) await new Promise((r) => setTimeout(r, 10));
+		const url = /nexo UI: (\S+)/.exec(t.out())?.[1] ?? "";
+		const token = new URL(url).searchParams.get("token") ?? "";
+		const postVerdict = (runId: string) =>
+			fetch(new URL(`/api/runs/${runId}/feedback`, url), {
+				method: "POST",
+				headers: { "content-type": "application/json", "x-nexo-token": token },
+				body: JSON.stringify({ verdict: "done", comment: "looks right" }),
+			});
+		return { url, running, stop: () => ac.abort(), postVerdict };
+	}
+
+	it("prints a tokenized URL, serves the API read-only without a config and stops when the signal aborts", async () => {
+		const h = home();
+		const t = io();
+		const ui = await startUi(h, t);
+		expect(ui.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/\?token=[\w-]{32}$/);
+		expect(t.err()).toContain("config is missing or invalid; the UI is read-only");
+		const res = await fetch(new URL("/api/runs", ui.url));
+		expect(await res.json()).toEqual({ runs: [], nextCursor: null });
+		const meta = (await (await fetch(new URL("/api/meta", ui.url))).json()) as { readOnly: { message: string } | null };
+		expect(meta.readOnly?.message).toBe("the nexo config is missing or invalid");
+		const refused = await ui.postVerdict("01UNKNOWN0000000000000000");
+		expect(refused.status).toBe(400);
+		expect(((await refused.json()) as { error: { code: string } }).error.code).toBe("CONFIG_INVALID");
+		ui.stop();
+		expect(await ui.running).toBe(0);
+		expect(t.err()).toContain("nexo UI stopped");
+		await expect(fetch(new URL("/api/runs", ui.url))).rejects.toThrow();
+	});
+
+	it("marks runs left by a crashed process as aborted at startup, so they can be reviewed", async () => {
+		const h = home(config);
+		const deadPid = spawnSync(process.execPath, ["-e", ""]).pid;
+		const db = openDb(resolveNexoPaths(h.env).db);
+		const crashed = runRow({ status: "running", pid: deadPid, dirPath: join(h.cwd, "gone") });
+		insertRun(db, crashed);
+		db.close();
+		const t = io();
+		const ui = await startUi(h, t);
+		expect(t.err()).toContain("Marked 1 run(s) left by a crashed process as aborted");
+		const list = (await (await fetch(new URL("/api/runs?reviewed=false", ui.url))).json()) as { runs: { id: string; status: string }[] };
+		expect(list.runs.map((r) => [r.id, r.status])).toEqual([[crashed.id, "aborted"]]);
+		expect((await ui.postVerdict(crashed.id)).status).toBe(201);
+		ui.stop();
+		expect(await ui.running).toBe(0);
+	});
+
+	it("rejects an invalid --port and an invalid ui.port with exit 2", async () => {
+		const t = io();
+		expect(await runCli(["ui", "--port", "99999"], t, home())).toBe(2);
+		expect(t.err()).toContain("--port must be an integer");
+		expect(await runCli(["ui"], t, home({ ...config, ui: { port: 0 } }))).toBe(2);
+		expect(t.err()).toContain("ui.port must be an integer from 1 to 65535");
 	});
 });
 
