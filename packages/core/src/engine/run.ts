@@ -33,7 +33,7 @@ import type { NexoConfig } from "../config/schema.ts";
 import { checkAdmission, recordSpend } from "../cost/admission.ts";
 import { budgetLine, RunBudget } from "../cost/budget.ts";
 import { estimateCallCostUsd, priceUsage } from "../cost/pricing.ts";
-import { classifyProviderError, retryAfterMs } from "./errors.ts";
+import { classifyProviderError, retryAfterMs, toolErrorText, withToolErrorCodes } from "./errors.ts";
 import { assistantText, contentText, estimatePromptChars, lastAssistant, withBudgetLine } from "./messages.ts";
 import { DEFAULT_PLANNER_PROMPT, DEFAULT_SYSTEM_PROMPT, renderSystemPrompt } from "./prompts.ts";
 import { createGatedStreamFn } from "./provider-gate.ts";
@@ -355,7 +355,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 
 		// Tools.
 		const toolSpans = new Map<string, string>();
-		const tools: AgentTool<any>[] = [
+		const baseTools: AgentTool<any>[] = [
 			...createBuiltinTools({ workspaceRoot: workspace, holder: runId, leases, changeTracker: changeTracker ?? undefined, bashTimeoutMs: config.tools.bashTimeoutMs }),
 			createLoadSkillTool({
 				catalog: deps.skills,
@@ -383,7 +383,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				costUnknown ||= unknown;
 			},
 		};
-		for (const factory of extraToolFactories) tools.push(...factory(toolCtx));
+		for (const factory of extraToolFactories) baseTools.push(...factory(toolCtx));
+		const tools = baseTools.map(withToolErrorCodes);
 
 		const systemPrompt = renderSystemPrompt({
 			systemPrompt: DEFAULT_SYSTEM_PROMPT,
@@ -420,7 +421,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 					return { block: true, reason: "BUDGET_EXCEEDED: the run budget is exhausted", terminate: true };
 				}
 				const auth = await env.policy.authorize(deps.prompter, toolCall.name, args, signal, depth > 0 ? `subagent ${runId.slice(-6)}` : undefined);
-				if (!auth.allowed) return { block: true, reason: `${auth.error.code}: ${auth.error.message}` };
+				if (!auth.allowed) return { block: true, reason: toolErrorText(auth.error) };
 				return undefined;
 			},
 		});

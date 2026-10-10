@@ -1,5 +1,4 @@
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { NexoError } from "@nexo/telemetry";
 import { Type } from "typebox";
 import { EffortSchema } from "../config/schema.ts";
 import { RunBudget } from "../cost/budget.ts";
@@ -118,15 +117,7 @@ function createSpawnTool(ctx: RunToolContext): AgentTool<typeof SpawnParams, Tas
 		description:
 			"Run tasks as parallel subagents. Independent tasks run at the same time; dependsOn orders tasks. Returns each task's status and output.",
 		parameters: SpawnParams,
-		execute: async (toolCallId, params, signal) => {
-			try {
-				return await runSpawn(ctx, toolCallId, params.tasks as SpawnTask[], signal);
-			} catch (error) {
-				// pi turns a thrown error into a tool result holding only `error.message`; prefix the code so the model sees it.
-				if (error instanceof NexoError) throw new Error(`${error.code}: ${error.message}`, { cause: error });
-				throw error;
-			}
-		},
+		execute: (toolCallId, params, signal) => runSpawn(ctx, toolCallId, params.tasks as SpawnTask[], signal),
 	};
 }
 

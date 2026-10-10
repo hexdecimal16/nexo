@@ -196,7 +196,7 @@ describe("spawn", () => {
 		});
 		const result = await createEngine(env.deps).run({ instruction: "PARENT", workspace: ws });
 		expect(result.status).toBe("succeeded");
-		expect(bToolResult).toContain("another task");
+		expect(bToolResult).toMatch(/^WRITE_CONFLICT \(retryable\): .*another task/);
 	});
 	it("keeps a child's real result and cost when its subagent span cannot be finished", async () => {
 		const env = makeEnv({ config: { models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "pricey" } } } });
