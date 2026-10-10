@@ -1,4 +1,4 @@
-import { Agent, type AgentEvent, type AgentTool } from "@earendil-works/pi-agent-core";
+import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { type Api, type AssistantMessage, isRetryableAssistantError, type Model, type Models } from "@earendil-works/pi-ai";
 import { createModelRegistry, type Effort, type ModelChoice, type ModelRegistry, type ResolvedModel, resolveModel } from "@nexo/router";
 import { createLoadSkillTool, formatSkillIndex, type SkillCatalog } from "@nexo/skills";
@@ -136,9 +136,13 @@ export type ExtraToolsFactory = (ctx: RunToolContext) => AgentTool<any>[];
 
 const extraToolFactories: ExtraToolsFactory[] = [];
 
-/** Registers tools that every run receives in addition to the built-ins (used by the spawn tool). */
-export function registerExtraTools(factory: ExtraToolsFactory): void {
+/** Registers tools that every run receives in addition to the built-ins (used by the spawn tool). Returns an unregister function. */
+export function registerExtraTools(factory: ExtraToolsFactory): () => void {
 	extraToolFactories.push(factory);
+	return () => {
+		const index = extraToolFactories.indexOf(factory);
+		if (index >= 0) extraToolFactories.splice(index, 1);
+	};
 }
 
 function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -152,8 +156,8 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
 	});
 }
 
-function failedResult(error: unknown, status: RunStatus = "failed"): RunResult {
-	return { trajectoryId: null, runDir: null, status, output: "", costUsd: 0, costUnknown: false, error: toErrorPayload(error) };
+function failedResult(redact: Redactor, error: unknown, status: RunStatus = "failed"): RunResult {
+	return { trajectoryId: null, runDir: null, status, output: "", costUsd: 0, costUnknown: false, error: redact(toErrorPayload(error)) };
 }
 
 export function createEngine(deps: EngineDeps): Engine {
@@ -176,22 +180,23 @@ export function createEngine(deps: EngineDeps): Engine {
 			try {
 				checkAdmission(deps.db, deps.config.budgets, now());
 			} catch (error) {
-				return failedResult(error, "budget_exceeded");
+				return failedResult(deps.redact, error, "budget_exceeded");
 			}
 			let budget: RunBudget;
 			try {
 				budget = new RunBudget(request.budgetUsd ?? deps.config.budgets.perRunUsd);
 			} catch (error) {
-				return failedResult(error);
+				return failedResult(deps.redact, error);
 			}
 			return executeRun(env, { request, budget, signal });
 		},
 	};
 }
 
-function resolveWorkspace(request: RunRequest, parent: ParentLink | undefined, runDir: RunDir): { dir: string; shared: string | null } {
-	if (parent) return parent.sharedWorkspace ? { dir: parent.sharedWorkspace, shared: parent.sharedWorkspace } : { dir: runDir.workspaceDir, shared: null };
-	if (!request.workspace) return { dir: runDir.workspaceDir, shared: null };
+/** The shared workspace a run edits in place, or null when it uses its own isolated run workspace. */
+function resolveSharedWorkspace(request: RunRequest, parent: ParentLink | undefined): string | null {
+	if (parent) return parent.sharedWorkspace;
+	if (!request.workspace) return null;
 	let real: string;
 	try {
 		real = realpathSync(request.workspace);
@@ -199,7 +204,7 @@ function resolveWorkspace(request: RunRequest, parent: ParentLink | undefined, r
 		throw new NexoError({ code: "CONFIG_INVALID", message: `Workspace ${request.workspace} does not exist`, hint: "Pass an existing directory to --workspace", cause });
 	}
 	if (!statSync(real).isDirectory()) throw new NexoError({ code: "CONFIG_INVALID", message: `Workspace ${request.workspace} is not a directory` });
-	return { dir: real, shared: real };
+	return real;
 }
 
 export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<RunResult> {
@@ -208,10 +213,10 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	const { request, budget, parent } = input;
 	const depth = parent ? parent.depth : 0;
 
-	// Resolve skill and model before creating anything on disk.
+	// Resolve skill, model and workspace before creating anything on disk.
 	const skill = request.skill ? deps.skills.skills.get(request.skill) : undefined;
 	if (request.skill && !skill) {
-		return failedResult(new NexoError({
+		return failedResult(deps.redact, new NexoError({
 			code: "SKILL_NOT_FOUND",
 			message: `Unknown skill "${request.skill}"`,
 			hint: `Available: ${[...deps.skills.skills.keys()].join(", ") || "(none)"}`,
@@ -220,6 +225,9 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	const pin = request.skill ? config.skills.pins[request.skill] : undefined;
 	let resolved: ResolvedModel;
 	let model: Model<Api>;
+	let sharedWorkspace: string | null;
+	let runDir: RunDir;
+	const runId = newId();
 	try {
 		const user: ModelChoice = { model: (parent ? undefined : request.model) ?? pin?.model, effort: (parent ? undefined : request.effort) ?? pin?.effort };
 		const parentChoice: ModelChoice | undefined = parent ? { model: request.model, effort: request.effort } : undefined;
@@ -232,13 +240,13 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		});
 		model = env.registry.get(resolved.provider, resolved.id);
 		resolved = { ...resolved, effort: env.registry.clampEffort(model, resolved.effort) };
+		sharedWorkspace = resolveSharedWorkspace(request, parent);
+		runDir = parent ? parent.runDir.child(runId) : RunDir.create(deps.paths.runs, runId, deps.redact);
 	} catch (error) {
-		return failedResult(error);
+		return failedResult(deps.redact, error);
 	}
 
-	const runId = newId();
 	const rootRunId = parent?.rootRunId ?? runId;
-	const runDir = parent ? parent.runDir.child(runId) : RunDir.create(deps.paths.runs, runId, deps.redact);
 	const startedAt = now().toISOString();
 	const leases = parent?.leases ?? new FileLeases();
 	const logger = deps.logger.child({ run_id: runId, correlation_id: rootRunId });
@@ -248,9 +256,9 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	let costUnknown = false;
 	let tokensIn = 0;
 	let tokensOut = 0;
-	let workspace = runDir.workspaceDir;
+	const workspace = sharedWorkspace ?? runDir.workspaceDir;
 	let changeTracker: ChangeTracker | null = parent?.changeTracker ?? null;
-	let sharedWorkspace: string | null = null;
+	let artifactSetId: string | null = null;
 
 	const recorder = new Recorder({ db, runDir, runId, now, redact: deps.redact });
 	const runJson = (status: RunStatus, output: string, error: ErrorPayload | null): RunJson => ({
@@ -275,13 +283,9 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		taskGraphs,
 	});
 
-	let artifactSetId: string | null = null;
-	let runSpan = "";
+	// Setup up to and including the DB row. A failure here leaves no row, only a failed run.json.
 	try {
-		const ws = resolveWorkspace(request, parent, runDir);
-		workspace = ws.dir;
-		sharedWorkspace = ws.shared;
-		if (!parent && ws.shared) changeTracker = createChangeTracker(ws.shared, runDir.changesDir, (s) => deps.redact(s));
+		if (!parent && sharedWorkspace) changeTracker = createChangeTracker(sharedWorkspace, runDir.changesDir, (s) => deps.redact(s));
 
 		// Snapshot the exact artifacts this run uses.
 		const nowIso = now().toISOString();
@@ -319,203 +323,219 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			pid: process.pid,
 			error: null,
 		});
-		runSpan = recorder.start({
-			kind: "run",
-			name: request.skill ? `skill:${request.skill}` : "run",
-			parentSpanId: null,
-			attrs: { instruction: deps.redact(request.instruction), parentSpanId: parent?.spanId ?? null, depth },
-		});
-		runDir.writeRunJson(runJson("running", "", null));
-	} catch (error) {
-		logger.error("run setup failed", { error });
-		const payload = toErrorPayload(error);
+	} catch (caught) {
+		logger.error("run setup failed", { error: caught });
+		const payload = deps.redact(toErrorPayload(caught));
 		try {
 			runDir.writeRunJson(runJson("failed", "", payload));
 		} catch {}
 		return { trajectoryId: runId, runDir: runDir.root, status: "failed", output: "", costUsd: 0, costUnknown: false, error: payload };
 	}
 
-	deps.onEvent?.({ type: "run_start", runId, parentRunId: parent?.runId ?? null, instruction: request.instruction, depth });
-
-	// Tools.
-	const toolSpans = new Map<string, string>();
-	const tools: AgentTool<any>[] = [
-		...createBuiltinTools({ workspaceRoot: workspace, holder: runId, leases, changeTracker: changeTracker ?? undefined, bashTimeoutMs: config.tools.bashTimeoutMs }),
-		createLoadSkillTool({
-			catalog: deps.skills,
-			onLoad: (s) => {
-				ensureManualArtifact(db, "skill", s.name, s.content, now().toISOString());
-				runDir.writeArtifact(`skills/${s.name}/SKILL.md`, s.content);
-			},
-		}),
-	];
-	const toolCtx: RunToolContext = {
-		env,
-		runId,
-		rootRunId,
-		runDir,
-		depth,
-		budget,
-		leases,
-		sharedWorkspace,
-		changeTracker,
-		recorder,
-		toolSpanId: (id) => toolSpans.get(id) ?? null,
-		recordTaskGraph: (record) => taskGraphs.push(record),
-		addChildCost: (usd, unknown) => {
-			childCost += usd;
-			costUnknown ||= unknown;
-		},
-	};
-	for (const factory of extraToolFactories) tools.push(...factory(toolCtx));
-
-	const systemPrompt = renderSystemPrompt({
-		systemPrompt: DEFAULT_SYSTEM_PROMPT,
-		plannerPrompt: tools.some((t) => t.name === "spawn") ? DEFAULT_PLANNER_PROMPT : null,
-		workspace,
-		skillIndex: formatSkillIndex(deps.skills),
-		activeSkill: skill ? { name: skill.name, body: skill.body } : undefined,
-	});
-
-	let budgetExceeded = false;
-	const overrides = config.pricingOverrides;
-	const agent: Agent = new Agent({
-		streamFn: env.streamFn,
-		initialState: { systemPrompt, model, thinkingLevel: resolved.effort, tools },
-		toolExecution: "parallel",
-		prepareRequest: async ({ context, model: requestModel }) => {
-			const estimate = estimateCallCostUsd(requestModel, overrides, estimatePromptChars(context.messages), config.budgets.estimateOutputTokens);
-			if (!budget.canAfford(estimate)) {
-				budgetExceeded = true;
-				agent.abort();
-			}
-			return undefined;
-		},
-		transformContext: async (messages) => withBudgetLine(messages, budgetLine(budget)),
-		beforeToolCall: async ({ toolCall, args }, signal) => {
-			if (budget.isExhausted()) {
-				budgetExceeded = true;
-				return { block: true, reason: "BUDGET_EXCEEDED: the run budget is exhausted", terminate: true };
-			}
-			const auth = await env.policy.authorize(deps.prompter, toolCall.name, args, signal);
-			if (!auth.allowed) return { block: true, reason: `${auth.error.code}: ${auth.error.message}` };
-			return undefined;
-		},
-	});
-
-	let turnSpan: string | null = null;
-	let llmSpan: string | null = null;
-	let turnIndex = 0;
-	agent.subscribe((event: AgentEvent) => {
-		switch (event.type) {
-			case "turn_start":
-				turnSpan = recorder.start({ kind: "turn", name: `turn ${++turnIndex}`, parentSpanId: runSpan });
-				break;
-			case "message_start":
-				if (event.message.role === "assistant") {
-					llmSpan = recorder.start({
-						kind: "llm_call",
-						name: model.id,
-						parentSpanId: turnSpan ?? runSpan,
-						model: model.id,
-						provider: model.provider,
-						tier: resolved.role ?? "custom",
-						effort: resolved.effort,
-						modelSource: resolved.source,
-					});
-				}
-				break;
-			case "message_update":
-				if (event.assistantMessageEvent.type === "text_delta") {
-					deps.onEvent?.({ type: "text_delta", runId, depth, delta: event.assistantMessageEvent.delta });
-				}
-				break;
-			case "message_end": {
-				if (event.message.role !== "assistant" || !llmSpan) break;
-				const msg = event.message as AssistantMessage;
-				const priced = priceUsage(model, msg.usage, overrides);
-				budget.charge(priced.costUsd);
-				recordSpend(db, rootRunId, priced.costUsd, now());
-				ownCost += priced.costUsd;
-				costUnknown ||= priced.costUnknown;
-				tokensIn += msg.usage.input + msg.usage.cacheRead + msg.usage.cacheWrite;
-				tokensOut += msg.usage.output;
-				recorder.finish(llmSpan, {
-					status: msg.stopReason === "error" ? "error" : "ok",
-					tokensIn: msg.usage.input,
-					tokensOut: msg.usage.output,
-					cacheRead: msg.usage.cacheRead,
-					cacheWrite: msg.usage.cacheWrite,
-					costUsd: priced.costUsd,
-					costUnknown: priced.costUnknown,
-					attrs: { stopReason: msg.stopReason, errorMessage: msg.errorMessage, responseModel: msg.responseModel },
-				});
-				llmSpan = null;
-				break;
-			}
-			case "tool_execution_start": {
-				const kind = event.toolName === "load_skill" ? "skill_load" : "tool_call";
-				toolSpans.set(event.toolCallId, recorder.start({ kind, name: event.toolName, parentSpanId: turnSpan ?? runSpan, attrs: { args: deps.redact(event.args) } }));
-				deps.onEvent?.({ type: "tool_start", runId, depth, toolName: event.toolName });
-				break;
-			}
-			case "tool_execution_end": {
-				const spanId = toolSpans.get(event.toolCallId);
-				if (!spanId) break;
-				const text = contentText((event.result as { content?: unknown } | undefined)?.content);
-				const payloadRef = text.length > TOOL_RESULT_INLINE_LIMIT ? runDir.writeToolOutput(spanId, text) : null;
-				recorder.finish(spanId, {
-					status: event.isError ? "error" : "ok",
-					payloadRef,
-					attrs: { durationMs: event.durationMs, result: payloadRef ? undefined : deps.redact(text) },
-				});
-				break;
-			}
-			case "turn_end":
-				if (turnSpan) recorder.finish(turnSpan, { status: "ok" });
-				turnSpan = null;
-				break;
-			default:
-				break;
-		}
-	});
-
-	const onAbort = () => agent.abort();
-	input.signal?.addEventListener("abort", onAbort, { once: true });
-
+	// From here the DB row exists: every path below ends by writing a terminal status to run.json and the DB.
 	let status: RunStatus = "succeeded";
 	let error: ErrorPayload | null = null;
 	let output = "";
+	let runSpan: string | null = null;
+	let turnSpan: string | null = null;
+	let llmSpan: string | null = null;
+	let agent: Agent | null = null;
+	let budgetExceeded = false;
+	const onAbort = () => agent?.abort();
 	try {
-		await agent.prompt(request.instruction);
-		const providerCfg = config.providers[model.provider] ?? {};
-		const maxRetries = providerCfg.maxRetries ?? 3;
-		const baseDelay = providerCfg.retryBaseDelayMs ?? 1000;
-		for (let attempt = 1; ; attempt++) {
-			const last = lastAssistant(agent.state.messages);
-			if (!last || last.stopReason !== "error" || !isRetryableAssistantError(last)) break;
-			if (attempt > maxRetries || input.signal?.aborted || budgetExceeded) break;
-			const delay = Math.max(Math.random() * baseDelay * 2 ** (attempt - 1), retryAfterMs(last.errorMessage ?? "") ?? 0);
-			logger.warn("retrying provider error", { attempt, delay_ms: Math.round(delay), error_message: last.errorMessage });
-			await env.sleep(delay, input.signal);
-			agent.state.messages = agent.state.messages.slice(0, -1);
-			await agent.continue();
-		}
+		runSpan = recorder.start({
+			kind: "run",
+			name: request.skill ? `skill:${request.skill}` : "run",
+			parentSpanId: null,
+			attrs: { instruction: deps.redact(request.instruction), parentSpanId: parent?.spanId ?? null, depth },
+		});
+		const rootSpan = runSpan;
+		runDir.writeRunJson(runJson("running", "", null));
+		deps.onEvent?.({ type: "run_start", runId, parentRunId: parent?.runId ?? null, instruction: deps.redact(request.instruction), depth });
 
-		const last = lastAssistant(agent.state.messages);
-		output = assistantText(last);
-		if (budgetExceeded) {
-			status = "budget_exceeded";
-			error = new NexoError({
-				code: "BUDGET_EXCEEDED",
-				message: `Run budget of $${budget.limitUsd.toFixed(2)} exhausted ($${budget.spentUsd.toFixed(4)} spent)`,
-				hint: "Pass --budget or raise budgets.perRunUsd",
-			}).toPayload();
-		} else if (input.signal?.aborted || last?.stopReason === "aborted") {
+		// Tools.
+		const toolSpans = new Map<string, string>();
+		const tools: AgentTool<any>[] = [
+			...createBuiltinTools({ workspaceRoot: workspace, holder: runId, leases, changeTracker: changeTracker ?? undefined, bashTimeoutMs: config.tools.bashTimeoutMs }),
+			createLoadSkillTool({
+				catalog: deps.skills,
+				onLoad: (s) => {
+					ensureManualArtifact(db, "skill", s.name, s.content, now().toISOString());
+					runDir.writeArtifact(`skills/${s.name}/SKILL.md`, s.content);
+				},
+			}),
+		];
+		const toolCtx: RunToolContext = {
+			env,
+			runId,
+			rootRunId,
+			runDir,
+			depth,
+			budget,
+			leases,
+			sharedWorkspace,
+			changeTracker,
+			recorder,
+			toolSpanId: (id) => toolSpans.get(id) ?? null,
+			recordTaskGraph: (record) => taskGraphs.push(record),
+			addChildCost: (usd, unknown) => {
+				childCost += usd;
+				costUnknown ||= unknown;
+			},
+		};
+		for (const factory of extraToolFactories) tools.push(...factory(toolCtx));
+
+		const systemPrompt = renderSystemPrompt({
+			systemPrompt: DEFAULT_SYSTEM_PROMPT,
+			plannerPrompt: tools.some((t) => t.name === "spawn") ? DEFAULT_PLANNER_PROMPT : null,
+			workspace,
+			skillIndex: formatSkillIndex(deps.skills),
+			activeSkill: skill ? { name: skill.name, body: skill.body } : undefined,
+		});
+
+		/** Prompt size for the pre-call estimate: the system prompt, the tool definitions and the non-system transcript. */
+		const requestChars = (messages: readonly AgentMessage[], requestTools: readonly AgentTool<any>[]): number =>
+			systemPrompt.length +
+			JSON.stringify(requestTools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }))).length +
+			estimatePromptChars(messages.filter((m) => m.role !== "system"));
+
+		const overrides = config.pricingOverrides;
+		const runAgent: Agent = new Agent({
+			streamFn: env.streamFn,
+			initialState: { systemPrompt, model, thinkingLevel: resolved.effort, tools },
+			toolExecution: "parallel",
+			prepareRequest: async ({ context, model: requestModel }) => {
+				const chars = requestChars(context.messages, context.tools ?? tools);
+				const estimate = estimateCallCostUsd(requestModel, overrides, chars, config.budgets.estimateOutputTokens);
+				if (!budget.canAfford(estimate)) {
+					budgetExceeded = true;
+					runAgent.abort();
+				}
+				return undefined;
+			},
+			transformContext: async (messages) => withBudgetLine(messages, budgetLine(budget)),
+			beforeToolCall: async ({ toolCall, args }, signal) => {
+				if (budget.isExhausted()) {
+					budgetExceeded = true;
+					return { block: true, reason: "BUDGET_EXCEEDED: the run budget is exhausted", terminate: true };
+				}
+				const auth = await env.policy.authorize(deps.prompter, toolCall.name, args, signal);
+				if (!auth.allowed) return { block: true, reason: `${auth.error.code}: ${auth.error.message}` };
+				return undefined;
+			},
+		});
+		agent = runAgent;
+
+		let turnIndex = 0;
+		runAgent.subscribe((event: AgentEvent) => {
+			switch (event.type) {
+				case "turn_start":
+					turnSpan = recorder.start({ kind: "turn", name: `turn ${++turnIndex}`, parentSpanId: rootSpan });
+					break;
+				case "message_start":
+					if (event.message.role === "assistant") {
+						if (llmSpan) recorder.finish(llmSpan, { status: "error", attrs: { reason: "superseded by a new assistant message" } });
+						llmSpan = recorder.start({
+							kind: "llm_call",
+							name: model.id,
+							parentSpanId: turnSpan ?? rootSpan,
+							model: model.id,
+							provider: model.provider,
+							tier: resolved.role ?? "custom",
+							effort: resolved.effort,
+							modelSource: resolved.source,
+						});
+					}
+					break;
+				case "message_update":
+					if (event.assistantMessageEvent.type === "text_delta") {
+						deps.onEvent?.({ type: "text_delta", runId, depth, delta: event.assistantMessageEvent.delta });
+					}
+					break;
+				case "message_end": {
+					if (event.message.role !== "assistant" || !llmSpan) break;
+					const msg = event.message as AssistantMessage;
+					const priced = priceUsage(model, msg.usage, overrides);
+					budget.charge(priced.costUsd);
+					recordSpend(db, rootRunId, priced.costUsd, now());
+					ownCost += priced.costUsd;
+					costUnknown ||= priced.costUnknown;
+					tokensIn += msg.usage.input + msg.usage.cacheRead + msg.usage.cacheWrite;
+					tokensOut += msg.usage.output;
+					recorder.finish(llmSpan, {
+						status: msg.stopReason === "error" || msg.stopReason === "aborted" ? "error" : "ok",
+						tokensIn: msg.usage.input,
+						tokensOut: msg.usage.output,
+						cacheRead: msg.usage.cacheRead,
+						cacheWrite: msg.usage.cacheWrite,
+						costUsd: priced.costUsd,
+						costUnknown: priced.costUnknown,
+						attrs: { stopReason: msg.stopReason, errorMessage: msg.errorMessage, responseModel: msg.responseModel },
+					});
+					llmSpan = null;
+					break;
+				}
+				case "tool_execution_start": {
+					const kind = event.toolName === "load_skill" ? "skill_load" : "tool_call";
+					toolSpans.set(event.toolCallId, recorder.start({ kind, name: event.toolName, parentSpanId: turnSpan ?? rootSpan, attrs: { args: deps.redact(event.args) } }));
+					deps.onEvent?.({ type: "tool_start", runId, depth, toolName: event.toolName });
+					break;
+				}
+				case "tool_execution_end": {
+					const spanId = toolSpans.get(event.toolCallId);
+					if (!spanId) break;
+					const text = contentText((event.result as { content?: unknown } | undefined)?.content);
+					const payloadRef = text.length > TOOL_RESULT_INLINE_LIMIT ? runDir.writeToolOutput(spanId, text) : null;
+					recorder.finish(spanId, {
+						status: event.isError ? "error" : "ok",
+						payloadRef,
+						attrs: { durationMs: event.durationMs, result: payloadRef ? undefined : deps.redact(text) },
+					});
+					break;
+				}
+				case "turn_end":
+					if (turnSpan) recorder.finish(turnSpan, { status: "ok" });
+					turnSpan = null;
+					break;
+				default:
+					break;
+			}
+		});
+
+		input.signal?.addEventListener("abort", onAbort, { once: true });
+		if (input.signal?.aborted) {
 			status = "aborted";
-		} else if (last?.stopReason === "error") {
-			status = "failed";
-			error = classifyProviderError(last.errorMessage ?? "Provider error").toPayload();
+		} else {
+			await runAgent.prompt(request.instruction);
+			const providerCfg = config.providers[model.provider] ?? {};
+			const maxRetries = providerCfg.maxRetries ?? 3;
+			const baseDelay = providerCfg.retryBaseDelayMs ?? 1000;
+			for (let attempt = 1; ; attempt++) {
+				const last = lastAssistant(runAgent.state.messages);
+				if (!last || last.stopReason !== "error" || !isRetryableAssistantError(last)) break;
+				if (attempt > maxRetries || input.signal?.aborted || budgetExceeded) break;
+				const delay = Math.max(Math.random() * baseDelay * 2 ** (attempt - 1), retryAfterMs(last.errorMessage ?? "") ?? 0);
+				logger.warn("retrying provider error", { attempt, delay_ms: Math.round(delay), error_message: last.errorMessage });
+				await env.sleep(delay, input.signal);
+				runAgent.state.messages = runAgent.state.messages.slice(0, -1);
+				await runAgent.continue();
+			}
+
+			const last = lastAssistant(runAgent.state.messages);
+			output = assistantText(last);
+			if (budgetExceeded) {
+				status = "budget_exceeded";
+				error = new NexoError({
+					code: "BUDGET_EXCEEDED",
+					message: `Run budget of $${budget.limitUsd.toFixed(2)} exhausted ($${budget.spentUsd.toFixed(4)} spent)`,
+					hint: "Pass --budget or raise budgets.perRunUsd",
+				}).toPayload();
+			} else if (input.signal?.aborted || last?.stopReason === "aborted") {
+				status = "aborted";
+			} else if (last?.stopReason === "error") {
+				status = "failed";
+				error = classifyProviderError(last.errorMessage ?? "Provider error").toPayload();
+			}
 		}
 	} catch (caught) {
 		status = input.signal?.aborted ? "aborted" : "failed";
@@ -526,27 +546,33 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		leases.releaseAll(runId);
 	}
 
-	if (!parent && changeTracker) {
+	const safeError = error ? deps.redact(error) : null;
+	const totalCost = ownCost + childCost;
+	const attempt = (what: string, fn: () => void) => {
 		try {
-			changeTracker.finalize();
+			fn();
 		} catch (caught) {
-			logger.error("change tracking failed", { error: caught });
+			logger.error(`${what} failed`, { error: caught });
 		}
+	};
+	if (!parent && changeTracker) {
+		const tracker = changeTracker;
+		attempt("change tracking", () => tracker.finalize());
 	}
-
-	recorder.finish(runSpan, { status: status === "succeeded" ? "ok" : "error", costUsd: 0, attrs: { status, totalCostUsd: ownCost + childCost } });
-	const finalJson = runJson(status, output, error);
-	runDir.writeRunJson(finalJson);
-	updateRun(db, runId, {
-		status,
-		endedAt: finalJson.endedAt,
-		costUsd: ownCost + childCost,
-		costUnknown,
-		tokensIn,
-		tokensOut,
-		error: error ? deps.redact(error) : null,
-	});
-	deps.onEvent?.({ type: "run_end", runId, depth, status, costUsd: ownCost + childCost });
-	logger.info("run finished", { status, cost_usd: ownCost + childCost });
-	return { trajectoryId: runId, runDir: runDir.root, status, output, costUsd: ownCost + childCost, costUnknown, ...(error ? { error } : {}) };
+	const spanStatus = status === "succeeded" ? "ok" : "error";
+	for (const open of [llmSpan, turnSpan]) {
+		if (open) attempt("closing open span", () => recorder.finish(open, { status: "error", attrs: { reason: `run ended: ${status}` } }));
+	}
+	if (runSpan) {
+		const span = runSpan;
+		attempt("finishing run span", () => recorder.finish(span, { status: spanStatus, costUsd: 0, attrs: { status, totalCostUsd: totalCost } }));
+	}
+	const finalJson = runJson(status, output, safeError);
+	attempt("writing run.json", () => runDir.writeRunJson(finalJson));
+	attempt("updating run row", () =>
+		updateRun(db, runId, { status, endedAt: finalJson.endedAt, costUsd: totalCost, costUnknown, tokensIn, tokensOut, error: safeError }),
+	);
+	attempt("run_end event", () => deps.onEvent?.({ type: "run_end", runId, depth, status, costUsd: totalCost }));
+	logger.info("run finished", { status, cost_usd: totalCost });
+	return { trajectoryId: runId, runDir: runDir.root, status, output, costUsd: totalCost, costUnknown, ...(safeError ? { error: safeError } : {}) };
 }
