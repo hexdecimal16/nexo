@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createRedactor, NexoError, REDACTED } from "@nexo/telemetry";
-import { insertRun, latestFeedback, listFeedback, openDb, recordFeedback, reindex } from "../src/index.ts";
+import { insertRun, latestFeedback, listFeedback, openDb, recordFeedback, reindex, restoreFeedback } from "../src/index.ts";
 import { runRow } from "./fixtures.ts";
 
 const redact = createRedactor();
@@ -93,9 +93,33 @@ describe("recordFeedback", () => {
 		expect(latestFeedback(db, row.id)?.comment).toBe("#19");
 		expect(JSON.parse(readFileSync(join(dir, "run.json"), "utf8")).humanVerdict.comment).toBe("#19");
 	});
+
+	it("rewrites a corrupt run.json with the verdict", () => {
+		const { db, row, dir } = runWithDir();
+		writeFileSync(join(dir, "run.json"), "{not json");
+		recordFeedback(db, { runId: row.id, verdict: "done", nowIso: "2026-10-11T00:00:00.000Z", redact });
+		expect(JSON.parse(readFileSync(join(dir, "run.json"), "utf8")).humanVerdict.verdict).toBe("done");
+	});
+
+	it("throws STORE_IO and leaves no tmp file when run.json cannot be written", () => {
+		const { db, row, dir } = runWithDir();
+		chmodSync(dir, 0o500);
+		try {
+			expect(codeOf(() => recordFeedback(db, { runId: row.id, verdict: "done", nowIso: "2026-10-11T00:00:00.000Z", redact }))).toBe("STORE_IO");
+		} finally {
+			chmodSync(dir, 0o700);
+		}
+		expect(readdirSync(dir).filter((n) => n.endsWith(".tmp"))).toEqual([]);
+	});
 });
 
 describe("reindex and feedback", () => {
+	it("does not restore a humanVerdict without a createdAt", () => {
+		const db = openDb(":memory:");
+		expect(restoreFeedback(db, "r1", { verdict: "done", comment: "" } as never)).toBe(false);
+		expect(listFeedback(db, "r1")).toEqual([]);
+	});
+
 	it("keeps feedback rows and restores a verdict from run.json into an empty table", () => {
 		const root = tempDir("nexo-fb-reindex-");
 		const id = "01J0000000000000000000000A";

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { NexoError, type Redactor } from "@nexo/telemetry";
 import type { Db } from "./db.ts";
@@ -105,13 +105,13 @@ export function latestFeedback(db: Db, runId: string): FeedbackRow | undefined {
 
 /** Inserts a feedback row taken from run.json during reindex, unless the run already has feedback. */
 export function restoreFeedback(db: Db, runId: string, verdict: HumanVerdict): boolean {
-	if (!isVerdict(verdict.verdict) || latestFeedback(db, runId)) return false;
+	if (!isVerdict(verdict.verdict) || typeof verdict.createdAt !== "string" || latestFeedback(db, runId)) return false;
 	db.prepare("INSERT INTO feedback (id, run_id, verdict, comment, created_at) VALUES (?, ?, ?, ?, ?)").run(
 		newId(),
 		runId,
 		verdict.verdict,
 		typeof verdict.comment === "string" ? verdict.comment : "",
-		String(verdict.createdAt),
+		verdict.createdAt,
 	);
 	return true;
 }
@@ -119,19 +119,37 @@ export function restoreFeedback(db: Db, runId: string, verdict: HumanVerdict): b
 /**
  * Mirrors `verdict` into run.json as `humanVerdict` with a read-compare-write: a verdict already in the file with a
  * newer `createdAt` (written by another process) is kept. The feedback table stays authoritative; run.json is a copy
- * that `reindex` reads back. A missing or unreadable run.json is left alone.
+ * that `reindex` reads back. A missing run.json is left alone and a corrupt one is rewritten. Read and write failures
+ * throw STORE_IO.
  */
 function writeHumanVerdict(dir: string, verdict: HumanVerdict): void {
 	const file = join(dir, "run.json");
 	if (!existsSync(file)) return;
+	const tmp = `${file}.${process.pid}.tmp`;
 	try {
-		const json = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+		const text = readFileSync(file, "utf8");
+		let json: Record<string, unknown> = {};
+		try {
+			const parsed: unknown = JSON.parse(text);
+			if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) json = parsed as Record<string, unknown>;
+		} catch {
+			json = {};
+		}
 		const current = json.humanVerdict as Partial<HumanVerdict> | null | undefined;
 		if (typeof current?.createdAt === "string" && current.createdAt > verdict.createdAt) return;
-		const tmp = `${file}.${process.pid}.tmp`;
 		writeFileSync(tmp, `${JSON.stringify({ ...json, humanVerdict: verdict }, null, 2)}\n`);
 		renameSync(tmp, file);
-	} catch {
-		return;
+	} catch (error) {
+		try {
+			unlinkSync(tmp);
+		} catch {
+			// the tmp file may not exist
+		}
+		throw new NexoError({
+			code: "STORE_IO",
+			message: `Could not write the verdict to ${file}: ${error instanceof Error ? error.message : String(error)}`,
+			retryable: true,
+			context: { path: file },
+		});
 	}
 }
