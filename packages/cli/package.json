@@ -1,0 +1,17 @@
+{
+  "name": "@nexo/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "nexo": "./src/bin.ts" },
+  "exports": { ".": "./src/main.ts" },
+  "dependencies": {
+    "@earendil-works/pi-ai": "1.1.0",
+    "@nexo/core": "0.1.0",
+    "@nexo/router": "0.1.0",
+    "@nexo/skills": "0.1.0",
+    "@nexo/store": "0.1.0",
+    "@nexo/telemetry": "0.1.0",
+    "@nexo/tools": "0.1.0"
+  }
+}
