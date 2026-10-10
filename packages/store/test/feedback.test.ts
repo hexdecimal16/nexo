@@ -113,11 +113,41 @@ describe("recordFeedback", () => {
 	});
 });
 
+function runJsonFor(id: string) {
+	return {
+		id, parentRunId: null, rootRunId: id, instruction: "x", skill: null, status: "succeeded", model: null,
+		startedAt: "2026-10-10T00:00:00.000Z", endedAt: "2026-10-10T00:00:01.000Z", costUsd: 0, costUnknown: false,
+		tokensIn: 0, tokensOut: 0, output: "", error: null, artifactSetId: null, configSnapshotHash: "h", workspace: "/w", taskGraphs: [],
+	};
+}
+
 describe("reindex and feedback", () => {
 	it("does not restore a humanVerdict without a createdAt", () => {
 		const db = openDb(":memory:");
 		expect(restoreFeedback(db, "r1", { verdict: "done", comment: "" } as never)).toBe(false);
 		expect(listFeedback(db, "r1")).toEqual([]);
+	});
+
+	it("keeps feedback recorded through recordFeedback across a reindex", () => {
+		const { db, row, root } = runWithDir();
+		writeFileSync(join(root, row.id, "run.json"), JSON.stringify({ ...runJsonFor(row.id), status: "succeeded" }));
+		recordFeedback(db, { runId: row.id, verdict: "not_done", comment: "kept", nowIso: "2026-10-11T00:00:00.000Z", redact });
+		reindex(db, root);
+		expect(listFeedback(db, row.id).map((f) => [f.verdict, f.comment])).toEqual([["not_done", "kept"]]);
+	});
+
+	it("does not let a stale run.json humanVerdict override newer rows in the database", () => {
+		const root = tempDir("nexo-fb-stale-");
+		const id = "01J0000000000000000000000B";
+		mkdirSync(join(root, id), { recursive: true });
+		const stale = { verdict: "not_done", comment: "old", createdAt: "2026-10-10T00:00:00.000Z" };
+		writeFileSync(join(root, id, "run.json"), JSON.stringify({ ...runJsonFor(id), humanVerdict: stale }));
+		const db = openDb(":memory:");
+		reindex(db, root);
+		recordFeedback(db, { runId: id, verdict: "done", comment: "new", nowIso: "2026-10-11T00:00:00.000Z", redact });
+		reindex(db, root);
+		expect(latestFeedback(db, id)).toMatchObject({ verdict: "done", comment: "new" });
+		expect(listFeedback(db, id)).toHaveLength(2);
 	});
 
 	it("keeps feedback rows and restores a verdict from run.json into an empty table", () => {
