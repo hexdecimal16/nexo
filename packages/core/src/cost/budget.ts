@@ -1,6 +1,18 @@
+import { NexoError } from "@nexo/telemetry";
+
 const EPSILON = 1e-9;
 
-/** USD budget of one run. Child runs reserve from it and settle their actual spend back into it. */
+function assertAmount(method: string, name: string, value: number): void {
+	if (!Number.isFinite(value) || value < 0) {
+		throw new NexoError({
+			code: "INTERNAL",
+			message: `RunBudget.${method} received an invalid ${name}: ${value}`,
+			context: { method, argument: name, value },
+		});
+	}
+}
+
+/** USD budget of one run. Amounts must be finite and >= 0, otherwise INTERNAL is thrown. Child runs reserve from it and settle their actual spend back into it. */
 export class RunBudget {
 	readonly limitUsd: number;
 	private spent = 0;
@@ -31,16 +43,20 @@ export class RunBudget {
 	}
 
 	charge(usd: number): void {
+		assertAmount("charge", "usd", usd);
 		this.spent += usd;
 	}
 
 	tryReserve(usd: number): boolean {
+		assertAmount("tryReserve", "usd", usd);
 		if (usd <= 0 || !this.canAfford(usd)) return false;
 		this.reserved += usd;
 		return true;
 	}
 
 	settleReservation(reservedUsd: number, actualUsd: number): void {
+		assertAmount("settleReservation", "reservedUsd", reservedUsd);
+		assertAmount("settleReservation", "actualUsd", actualUsd);
 		this.reserved = Math.max(0, this.reserved - reservedUsd);
 		this.spent += actualUsd;
 	}

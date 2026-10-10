@@ -7,6 +7,14 @@ export function checkAdmission(db: Db, budgets: { dailyUsd: number; monthlyUsd: 
 		{ scope: monthScope(now), limit: budgets.monthlyUsd, label: "Monthly", key: "budgets.monthlyUsd", wait: "next month (UTC)" },
 	];
 	for (const c of checks) {
+		if (!Number.isFinite(c.limit)) {
+			throw new NexoError({
+				code: "CONFIG_INVALID",
+				message: `${c.label} budget limit is not a finite number: ${c.limit}`,
+				hint: `Set ${c.key} to a number in your nexo config`,
+				context: { key: c.key, value: c.limit },
+			});
+		}
 		const spent = getSpent(db, c.scope);
 		if (spent >= c.limit) {
 			throw new NexoError({
@@ -20,5 +28,8 @@ export function checkAdmission(db: Db, budgets: { dailyUsd: number; monthlyUsd: 
 }
 
 export function recordSpend(db: Db, rootRunId: string, usd: number, now: Date): void {
+	if (!Number.isFinite(usd) || usd < 0) {
+		throw new NexoError({ code: "INTERNAL", message: `recordSpend received an invalid amount: ${usd}`, context: { rootRunId, usd } });
+	}
 	addSpend(db, [dayScope(now), monthScope(now), `run:${rootRunId}`], usd, now.toISOString());
 }
