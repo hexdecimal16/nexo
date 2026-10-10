@@ -101,7 +101,7 @@ export const ConfigSchema = Type.Object(
 				{ additionalProperties: false },
 			),
 		),
-		redaction: Type.Object({ patterns: Type.Array(Type.String()) }, { additionalProperties: false }),
+		redaction: Type.Object({ patterns: Type.Array(Type.String({ minLength: 1 })) }, { additionalProperties: false }),
 		memory: Type.Optional(LooseSection),
 		learning: Type.Optional(LooseSection),
 		optimize: Type.Optional(LooseSection),

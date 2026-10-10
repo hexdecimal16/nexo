@@ -94,8 +94,8 @@ export function loadSkills(dirs: readonly string[]): SkillCatalog {
 		if (!existsSync(root) || !statSync(root).isDirectory()) continue;
 		for (const entry of readdirSync(root).sort()) {
 			const dir = join(root, entry);
-			if (!statSync(dir).isDirectory() || !existsSync(join(dir, "SKILL.md"))) continue;
 			try {
+				if (!statSync(dir).isDirectory() || !existsSync(join(dir, "SKILL.md"))) continue;
 				const skill = loadSkill(dir);
 				catalog.skills.set(skill.name, skill);
 			} catch (error) {

@@ -49,4 +49,13 @@ describe("createRedactor", () => {
 			expect((err as NexoError).code).toBe("CONFIG_INVALID");
 		}
 	});
+
+	it("rejects an empty extra pattern with CONFIG_INVALID", () => {
+		try {
+			createRedactor([""]);
+			expect.unreachable();
+		} catch (err) {
+			expect((err as NexoError).code).toBe("CONFIG_INVALID");
+		}
+	});
 });

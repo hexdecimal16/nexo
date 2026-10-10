@@ -20,6 +20,13 @@ export type Redactor = <T>(value: T) => T;
 export function createRedactor(extraPatterns: readonly string[] = []): Redactor {
 	const patterns = [...BUILTIN_PATTERNS];
 	for (const source of extraPatterns) {
+		if (source === "") {
+			throw new NexoError({
+				code: "CONFIG_INVALID",
+				message: "Empty redaction pattern",
+				hint: "Remove empty strings from redaction.patterns in your nexo config",
+			});
+		}
 		try {
 			patterns.push(new RegExp(source, "g"));
 		} catch (cause) {
