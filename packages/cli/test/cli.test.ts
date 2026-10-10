@@ -4,9 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { insertRun, insertSpan, openDb } from "@nexo/store";
+import { costReport, insertRun, insertSpan, openDb } from "@nexo/store";
 import { runRow, spanRow } from "../../store/test/fixtures.ts";
-import { costReport } from "../src/cost-report.ts";
 import { abortOnSignals, type CliIO, runCli } from "../src/main.ts";
 
 function io(): CliIO & { out: () => string; err: () => string } {
@@ -115,13 +114,21 @@ describe("nexo reindex and cost", () => {
 		span("fast", "s1", 0.1);
 		span("fast", "s1", 0.2);
 		span("slow", "s2", 0.5, true);
-		expect(costReport(db, { by: "model", since: "2026-01-01" })).toEqual([
+		expect(costReport(db, { by: "model", since: "2026-01-01" }).rows).toEqual([
 			{ key: "faux/slow", costUsd: 0.5, calls: 1, unknownCalls: 1 },
 			{ key: "faux/fast", costUsd: expect.closeTo(0.3), calls: 2, unknownCalls: 0 },
 		]);
-		expect(costReport(db, { by: "skill", since: "2026-01-01" })[0]?.key).toBe("report");
-		expect(costReport(db, { by: "day", since: "2026-01-01" })[0]?.key).toBe("2026-10-10");
-		expect(costReport(db, { by: "tier", since: "2027-01-01" })).toEqual([]);
+		expect(costReport(db, { by: "skill", since: "2026-01-01" }).rows[0]?.key).toBe("report");
+		expect(costReport(db, { by: "day", since: "2026-01-01" }).rows[0]?.key).toBe("2026-10-10");
+		expect(costReport(db, { by: "tier", since: "2027-01-01" }).rows).toEqual([]);
+	});
+
+	it("cost rejects an unknown --by and an impossible --since with exit 2", async () => {
+		const t = io();
+		expect(await runCli(["cost", "--by", "color"], t, home())).toBe(2);
+		expect(t.err()).toContain('Unknown cost dimension "color"');
+		expect(await runCli(["cost", "--since", "2026-02-30"], t, home())).toBe(2);
+		expect(t.err()).toContain("since must be a date");
 	});
 });
 
