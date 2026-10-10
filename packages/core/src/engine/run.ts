@@ -301,7 +301,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		const nowIso = now().toISOString();
 		const members: ArtifactSetMember[] = [];
 		const snapshot = (kind: ArtifactSetMember["kind"], name: string, content: string, relPath: string) => {
-			const a = ensureManualArtifact(db, kind, name, content, nowIso);
+			const a = ensureManualArtifact(db, kind, name, deps.redact(content), nowIso);
 			members.push({ kind, name, artifactId: a.id, version: a.version });
 			runDir.writeArtifact(relPath, content);
 		};
@@ -378,7 +378,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			createLoadSkillTool({
 				catalog: deps.skills,
 				onLoad: (s) => {
-					ensureManualArtifact(db, "skill", s.name, s.content, now().toISOString());
+					ensureManualArtifact(db, "skill", s.name, deps.redact(s.content), now().toISOString());
 					runDir.writeArtifact(`skills/${s.name}/SKILL.md`, s.content);
 				},
 			}),
@@ -577,9 +577,15 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			}
 		}
 	} catch (caught) {
-		status = input.signal?.aborted ? "aborted" : "failed";
-		error = toErrorPayload(caught);
-		logger.error("run failed", { error: caught });
+		if (input.signal?.aborted) {
+			// An abort surfaces as a rejection from whatever was awaiting (for example the retry backoff); it is not a failure.
+			status = "aborted";
+			logger.info("run aborted", { error: caught });
+		} else {
+			status = "failed";
+			error = toErrorPayload(caught);
+			logger.error("run failed", { error: caught });
+		}
 	} finally {
 		input.signal?.removeEventListener("abort", onAbort);
 		leases.releaseAll(runId);
