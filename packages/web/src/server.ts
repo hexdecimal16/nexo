@@ -133,7 +133,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 		const path = url.pathname;
 		const mutating = method !== "GET";
 		if (mutating && !tokensMatch(req.headers[TOKEN_HEADER] as string | undefined, token)) {
-			throw forbidden("Missing or wrong UI token", `Send the token printed by \`nexo ui\` in the ${TOKEN_HEADER} header`);
+			throw forbidden("Missing or wrong UI token", `The token is per \`nexo ui\` launch. If this page was opened before a restart, reload it from the URL the newest \`nexo ui\` printed; scripts send that URL's token in the ${TOKEN_HEADER} header`);
 		}
 		if (!path.startsWith("/api/")) {
 			if (method !== "GET") throw methodNotAllowed(method, path, "GET");

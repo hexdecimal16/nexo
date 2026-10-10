@@ -144,6 +144,7 @@ describe("startWebServer", () => {
 		const missing = await raw(server.port, `/api/runs/${run.id}/feedback`, { method: "POST", headers: json, body });
 		expect(missing.status).toBe(403);
 		expect(missing.json().error).toMatchObject({ code: "FORBIDDEN", hint: expect.stringContaining("x-nexo-token") });
+		expect(missing.json().error.hint).toMatch(/previous|reload/);
 		const wrong = await raw(server.port, `/api/runs/${run.id}/feedback`, { method: "POST", headers: { ...json, "x-nexo-token": "x".repeat(32) }, body });
 		expect(wrong.status).toBe(403);
 		const ok = await raw(server.port, `/api/runs/${run.id}/feedback`, { method: "POST", headers: { ...json, "x-nexo-token": server.token }, body });
