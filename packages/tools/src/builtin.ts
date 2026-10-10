@@ -1,0 +1,159 @@
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, relative } from "node:path";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import { Type } from "typebox";
+import type { ChangeTracker } from "./change-tracker.ts";
+import { resolveConfined } from "./confine.ts";
+import type { FileLeases } from "./leases.ts";
+
+export const MAX_BASH_OUTPUT_BYTES = 1_000_000;
+const MAX_READ_LINES = 2000;
+const MAX_FETCH_CHARS = 100_000;
+const FETCH_TIMEOUT_MS = 30_000;
+
+export interface ToolContext {
+	workspaceRoot: string;
+	holder: string;
+	leases: FileLeases;
+	changeTracker?: ChangeTracker;
+	bashTimeoutMs: number;
+	fetch?: typeof fetch;
+}
+
+function textResult(text: string, isError = false): AgentToolResult<undefined> {
+	return isError ? { content: [{ type: "text", text }], details: undefined, isError: true } : { content: [{ type: "text", text }], details: undefined };
+}
+
+const ReadParams = Type.Object({
+	path: Type.String({ description: "File path relative to the workspace" }),
+	offset: Type.Optional(Type.Integer({ minimum: 1, description: "1-based first line" })),
+	limit: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum number of lines" })),
+});
+const WriteParams = Type.Object({ path: Type.String(), content: Type.String() });
+const EditParams = Type.Object({
+	path: Type.String(),
+	oldText: Type.String({ description: "Exact text to replace; must occur exactly once" }),
+	newText: Type.String(),
+});
+const BashParams = Type.Object({
+	command: Type.String(),
+	timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
+});
+const FetchParams = Type.Object({ url: Type.String({ description: "http(s) URL" }) });
+
+export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
+	const root = realpathSync(ctx.workspaceRoot);
+	const writeFile = (abs: string, content: string): void => {
+		ctx.leases.acquire(abs, ctx.holder);
+		ctx.changeTracker?.beforeWrite(abs);
+		mkdirSync(dirname(abs), { recursive: true });
+		writeFileSync(abs, content);
+	};
+
+	const read: AgentTool<typeof ReadParams> = {
+		name: "read",
+		label: "Read file",
+		description: "Read a text file from the workspace.",
+		parameters: ReadParams,
+		execute: async (_id, params) => {
+			const abs = resolveConfined(root, params.path);
+			if (!existsSync(abs)) throw new Error(`File not found: ${params.path}`);
+			const lines = readFileSync(abs, "utf8").split("\n");
+			const start = (params.offset ?? 1) - 1;
+			return textResult(lines.slice(start, start + (params.limit ?? MAX_READ_LINES)).join("\n"));
+		},
+	};
+
+	const write: AgentTool<typeof WriteParams> = {
+		name: "write",
+		label: "Write file",
+		description: "Create or overwrite a file in the workspace.",
+		parameters: WriteParams,
+		execute: async (_id, params) => {
+			const abs = resolveConfined(root, params.path);
+			writeFile(abs, params.content);
+			return textResult(`Wrote ${Buffer.byteLength(params.content)} bytes to ${relative(root, abs) || params.path}`);
+		},
+	};
+
+	const edit: AgentTool<typeof EditParams> = {
+		name: "edit",
+		label: "Edit file",
+		description: "Replace one exact, unique occurrence of oldText with newText.",
+		parameters: EditParams,
+		execute: async (_id, params) => {
+			const abs = resolveConfined(root, params.path);
+			if (!existsSync(abs)) throw new Error(`File not found: ${params.path}`);
+			const content = readFileSync(abs, "utf8");
+			const count = content.split(params.oldText).length - 1;
+			if (count === 0) throw new Error(`oldText not found in ${params.path}`);
+			if (count > 1) throw new Error(`oldText matches ${count} times in ${params.path}; include more surrounding text`);
+			writeFile(abs, content.replace(params.oldText, () => params.newText));
+			return textResult(`Edited ${params.path}`);
+		},
+	};
+
+	const bash: AgentTool<typeof BashParams> = {
+		name: "bash",
+		label: "Run command",
+		description: "Run a bash command in the workspace directory.",
+		parameters: BashParams,
+		execute: (_id, params, signal) =>
+			new Promise((resolvePromise) => {
+				const timeoutMs = params.timeoutMs ?? ctx.bashTimeoutMs;
+				const child = spawn("bash", ["-c", params.command], { cwd: root, env: process.env });
+				let output = "";
+				let truncated = false;
+				let ended: "timeout" | "aborted" | undefined;
+				const collect = (chunk: Buffer) => {
+					if (output.length >= MAX_BASH_OUTPUT_BYTES) {
+						truncated = true;
+						return;
+					}
+					output += chunk.toString("utf8").slice(0, MAX_BASH_OUTPUT_BYTES - output.length);
+				};
+				child.stdout.on("data", collect);
+				child.stderr.on("data", collect);
+				const timer = setTimeout(() => {
+					ended = "timeout";
+					child.kill("SIGKILL");
+				}, timeoutMs);
+				const onAbort = () => {
+					ended = "aborted";
+					child.kill("SIGKILL");
+				};
+				signal?.addEventListener("abort", onAbort, { once: true });
+				child.on("close", (code) => {
+					clearTimeout(timer);
+					signal?.removeEventListener("abort", onAbort);
+					const body = `${output}${truncated ? "\n[output truncated]" : ""}`;
+					if (ended === "timeout") return resolvePromise(textResult(`Command timed out after ${timeoutMs}ms\n${body}`, true));
+					if (ended === "aborted") return resolvePromise(textResult(`Command aborted\n${body}`, true));
+					resolvePromise(textResult(`exit code: ${code ?? -1}\n${body}`, code !== 0));
+				});
+				child.on("error", (error) => {
+					clearTimeout(timer);
+					resolvePromise(textResult(`Failed to start bash: ${error.message}`, true));
+				});
+			}),
+	};
+
+	const webFetch: AgentTool<typeof FetchParams> = {
+		name: "web_fetch",
+		label: "Fetch URL",
+		description: "Fetch an http(s) URL and return the response body as text.",
+		parameters: FetchParams,
+		execute: async (_id, params, signal) => {
+			const url = new URL(params.url);
+			if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error(`Only http and https URLs are allowed: ${params.url}`);
+			const signals = [AbortSignal.timeout(FETCH_TIMEOUT_MS), ...(signal ? [signal] : [])];
+			const response = await (ctx.fetch ?? fetch)(url.toString(), { signal: AbortSignal.any(signals) });
+			const body = (await response.text()).slice(0, MAX_FETCH_CHARS);
+			if (!response.ok) return textResult(`HTTP ${response.status} for ${params.url}\n${body}`, true);
+			return textResult(body);
+		},
+	};
+
+	return [read, write, edit, bash, webFetch];
+}
