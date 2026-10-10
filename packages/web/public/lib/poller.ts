@@ -50,9 +50,15 @@ export function createPoller(options: PollerOptions): Poller {
 				failures = 0;
 			} catch (error) {
 				failures++;
-				options.onError(error);
+				try {
+					options.onError(error);
+				} catch {
+					// A failing error handler must not end the loop.
+				}
 			}
 		} while (again);
+		// Cleared in the same synchronous step as the schedule, so a refresh() can never see a finished loop as in flight.
+		inFlight = null;
 		if (polling) schedule(pollDelay(failures, options.intervalMs, options.maxBackoffMs));
 	};
 
@@ -65,9 +71,7 @@ export function createPoller(options: PollerOptions): Poller {
 			again = true;
 			return inFlight;
 		}
-		inFlight = runOnce().finally(() => {
-			inFlight = null;
-		});
+		inFlight = runOnce();
 		return inFlight;
 	};
 
