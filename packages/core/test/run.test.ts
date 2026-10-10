@@ -278,4 +278,46 @@ describe("engine run", () => {
 		expect(tool?.payloadRef).toMatch(/^tool_outputs\/.+\.txt$/);
 		expect(readFileSync(join(result.runDir as string, tool?.payloadRef as string), "utf8").length).toBeGreaterThan(40000);
 	});
+
+	it("sends the model a head and tail excerpt of a large tool result with a pointer it can read", async () => {
+		const env = makeEnv({ config: { tools: { policy: { bash: "allow" } } } });
+		let excerpt = "";
+		let readBack = "";
+		const pointer = () => /@tool_outputs\/[A-Z0-9]+\.txt/.exec(excerpt)?.[0] ?? "missing";
+		env.faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("bash", { command: "seq 1 100000" })]),
+			async (ctx) => {
+				excerpt = lastToolResultText(ctx);
+				return fauxAssistantMessage([fauxToolCall("read", { path: pointer(), offset: 50001, limit: 2 })]);
+			},
+			async (ctx) => {
+				readBack = lastToolResultText(ctx);
+				return fauxAssistantMessage("ok");
+			},
+		]);
+		const result = await createEngine(env.deps).run({ instruction: "huge output" });
+		expect(result.status).toBe("succeeded");
+		expect(excerpt.length).toBeLessThan(20_000);
+		expect(excerpt.startsWith("exit code: 0\n1\n2\n3\n")).toBe(true);
+		expect(excerpt.endsWith("99999\n100000\n")).toBe(true);
+		expect(excerpt).toMatch(/\[\d+ characters omitted\. The full output is saved; read it with read\(\{ path: "@tool_outputs\/[A-Z0-9]+\.txt"/);
+		const tool = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.name === "bash");
+		expect(pointer()).toBe(`@${tool?.payloadRef}`);
+		expect(readBack).toBe("50000\n50001");
+	});
+
+	it("fails a context-window overflow without retrying it", async () => {
+		const env = makeEnv();
+		let calls = 0;
+		env.faux.setResponses(
+			Array.from({ length: 4 }, () => () => {
+				calls++;
+				return fauxAssistantMessage("", { stopReason: "error", errorMessage: "400 prompt is too long: 250000 tokens > 200000 maximum" });
+			}),
+		);
+		const result = await createEngine(env.deps).run({ instruction: "overflow" });
+		expect(calls).toBe(1);
+		expect(result.status).toBe("failed");
+		expect(result.error).toMatchObject({ code: "PROVIDER_CONTEXT_OVERFLOW", retryable: false });
+	});
 });
