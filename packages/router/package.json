@@ -1,0 +1,11 @@
+{
+  "name": "@nexo/router",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@nexo/telemetry": "0.1.0",
+    "@earendil-works/pi-ai": "1.1.0"
+  }
+}
