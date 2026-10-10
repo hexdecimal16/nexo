@@ -130,6 +130,7 @@ describe("run view", () => {
 		dirMissing: false,
 		children: [],
 		feedback: [],
+		childFeedback: {},
 		...overrides,
 	});
 
@@ -162,6 +163,13 @@ describe("run view", () => {
 		expect(markup).toContain("Verdicts are disabled");
 		expectInert(markup);
 		expect(renderChildren([summary({ id: "c1" })], NOW, readOnly).value).not.toContain("data-feedback-run");
+	});
+
+	it("shows each subagent's latest verdict line with its comment", () => {
+		const latest = { id: "f", runId: "c1", verdict: "not_done" as const, comment: XSS, createdAt: "2026-10-10T11:00:00.000Z" };
+		const markup = renderChildren([summary({ id: "c1" }), summary({ id: "c2" })], NOW, null, { c1: latest }).value;
+		expect(markup.match(/Latest verdict:/g)).toHaveLength(1);
+		expectInert(markup);
 	});
 
 	it("gives each subagent run its own form", () => {
@@ -239,6 +247,7 @@ describe("files view", () => {
 		expect(parseUnifiedDiff(diff).map((l) => l.kind)).toEqual(["meta", "meta", "hunk", "del", "add", "ctx"]);
 		const markup = renderFile("changes/changes.diff", diff, null).value;
 		expect(markup).toContain(`<span class="diff-add">+&lt;img`);
+		expect(markup).not.toMatch(/<\/span>\s+<span/);
 		expectInert(markup);
 	});
 

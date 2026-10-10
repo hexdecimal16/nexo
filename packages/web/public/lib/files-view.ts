@@ -31,7 +31,7 @@ export function parseUnifiedDiff(text: string): DiffLine[] {
 }
 
 export function renderDiff(lines: DiffLine[]): SafeHtml {
-	return html`<pre class="diff">${lines.map((l) => html`<span class="diff-${l.kind}">${l.text}</span>\n`)}</pre>`;
+	return html`<pre class="diff">${lines.map((l) => html`<span class="diff-${l.kind}">${l.text}</span>`)}</pre>`;
 }
 
 function formatSize(bytes: number): string {

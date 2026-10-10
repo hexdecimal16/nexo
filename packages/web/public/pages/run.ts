@@ -127,7 +127,7 @@ async function load(): Promise<boolean> {
 	document.title = `nexo · ${run.run.instruction.slice(0, 60)}`;
 	setHtml(header, renderRunHeader(run, now));
 	setHtml(review, renderFeedbackForm(run.run, run.feedback.at(-1), readOnly ?? null));
-	setHtml(children, renderChildren(run.children, now, readOnly ?? null));
+	setHtml(children, renderChildren(run.children, now, readOnly ?? null, run.childFeedback));
 	roots = spans.roots;
 	setHtml(timeline, renderTimeline(timelineRows(roots, now)));
 	setHtml(tree, html`${spans.truncated ? html`<p class="warn">This run has ${spans.total} spans; only the earliest are shown.</p>` : ""}${renderSpanTree(roots, now)}`);
