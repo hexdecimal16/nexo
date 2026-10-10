@@ -109,4 +109,9 @@ describe("loadConfig", () => {
 		const hb = loadConfig({ paths: b.paths, cwd: b.cwd }).hash;
 		expect(ha).toBe(hb);
 	});
+
+	it("rejects an empty redaction pattern", () => {
+		const { paths, cwd } = setup({ models, redaction: { patterns: [""] } });
+		expect(expectConfigError(() => loadConfig({ paths, cwd })).message).toContain("/redaction/patterns/0");
+	});
 });

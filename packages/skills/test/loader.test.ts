@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -84,5 +84,16 @@ describe("loadSkills", () => {
 		writeSkill(root, "a", "name: a\ndescription: Alpha");
 		expect(formatSkillIndex(loadSkills([root]))).toBe("Available skills (call load_skill before using one):\n- a: Alpha");
 		expect(formatSkillIndex({ skills: new Map(), diagnostics: [] })).toBe("");
+	});
+
+	it("reports a dangling symlink in a skills dir as a diagnostic instead of throwing", () => {
+		const root = mkdtempSync(join(tmpdir(), "nexo-skills-"));
+		writeSkill(root, "summarize", "name: summarize\ndescription: Summarize documents");
+		symlinkSync(join(root, "gone"), join(root, "broken"));
+		const { skills, diagnostics } = loadSkills([root]);
+		expect([...skills.keys()]).toEqual(["summarize"]);
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0]?.path).toBe(join(root, "broken", "SKILL.md"));
+		expect(diagnostics[0]?.error.message).toContain("ENOENT");
 	});
 });
