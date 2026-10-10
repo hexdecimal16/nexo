@@ -75,4 +75,29 @@ describe("FileLeases", () => {
 		leases.acquire(join(realpathSync(ws), "a.txt"), "run-1");
 		expect(leases.holderOf(join(ws, "a.txt"))).toBe("run-1");
 	});
+
+	it("lets runs in one ancestor line share a file but not concurrent siblings", () => {
+		const leases = new FileLeases();
+		leases.link("child-a", "parent");
+		leases.link("child-b", "parent");
+		leases.link("grandchild", "child-a");
+		const conflict = (holder: string) => {
+			try {
+				leases.acquire("/w/notes.md", holder);
+				return null;
+			} catch (err) {
+				return (err as NexoError).code;
+			}
+		};
+		expect(conflict("parent")).toBeNull();
+		expect(conflict("child-a")).toBeNull();
+		expect(conflict("grandchild")).toBeNull();
+		expect(conflict("parent")).toBeNull();
+		expect(conflict("child-b")).toBe("WRITE_CONFLICT");
+		expect(conflict("stranger")).toBe("WRITE_CONFLICT");
+		leases.releaseAll("grandchild");
+		leases.releaseAll("child-a");
+		expect(conflict("child-b")).toBeNull();
+		expect(leases.holderOf("/w/notes.md")).toBe("parent");
+	});
 });
