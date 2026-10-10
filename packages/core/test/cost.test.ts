@@ -143,6 +143,17 @@ describe("non-finite and negative amounts", () => {
 		expect(b.isExhausted()).toBe(true);
 	});
 
+	it("releases a reservation even when the actual amount is invalid", () => {
+		const b = new RunBudget(1);
+		expect(b.tryReserve(0.4)).toBe(true);
+		expect(code(() => b.settleReservation(0.4, Number.NaN))).toBe("INTERNAL");
+		expect(b.reservedUsd).toBe(0);
+		expect(b.spentUsd).toBe(0);
+		expect(b.tryReserve(0.6)).toBe(true);
+		expect(code(() => b.settleReservation(Number.NaN, 0.1))).toBe("INTERNAL");
+		expect(b.reservedUsd).toBeCloseTo(0.6);
+	});
+
 	it("rejects bad spend and non-finite limits in admission", () => {
 		const db = openDb(":memory:");
 		expect(code(() => recordSpend(db, "r", Number.NaN, now))).toBe("INTERNAL");

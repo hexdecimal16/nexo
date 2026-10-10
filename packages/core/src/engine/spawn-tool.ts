@@ -51,6 +51,10 @@ async function runSpawn(
 			budget.settleReservation(reserved, outcome.costUsd);
 		},
 		runTask: async (task, input) => {
+			if (signal?.aborted) {
+				// The parent was aborted while this task waited: report it without creating a child run.
+				return { trajectoryId: null, status: "aborted", output: "", costUsd: 0, startedAt: null, endedAt: null };
+			}
 			const subSpan = recorder.start({ kind: "subagent", name: task.id, parentSpanId: spawnSpanId, queuedMs: input.queuedMs, attrs: { task, budgetUsd: input.budgetUsd } });
 			const startedAt = env.now().toISOString();
 			const result = await executeRun(env, {
@@ -75,10 +79,15 @@ async function runSpawn(
 				},
 			});
 			ctx.addChildCost(result.costUsd, result.costUnknown);
-			recorder.finish(subSpan, {
-				status: result.status === "succeeded" ? "ok" : "error",
-				attrs: { trajectoryId: result.trajectoryId, status: result.status, childCostUsd: result.costUsd, error: result.error },
-			});
+			try {
+				recorder.finish(subSpan, {
+					status: result.status === "succeeded" ? "ok" : "error",
+					attrs: { trajectoryId: result.trajectoryId, status: result.status, childCostUsd: result.costUsd, error: result.error },
+				});
+			} catch (caught) {
+				// The child's result stands even if its span cannot be written: its cost must still settle against the budget.
+				env.deps.logger.error("finishing subagent span failed", { run_id: ctx.runId, task_id: task.id, error: caught });
+			}
 			return {
 				trajectoryId: result.trajectoryId,
 				status: result.status,

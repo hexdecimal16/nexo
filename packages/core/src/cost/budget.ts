@@ -64,8 +64,9 @@ export class RunBudget {
 
 	settleReservation(reservedUsd: number, actualUsd: number): void {
 		assertAmount("settleReservation", "reservedUsd", reservedUsd);
-		assertAmount("settleReservation", "actualUsd", actualUsd);
+		// The reservation is freed before the actual amount is checked, so a bad actual never leaks reserved budget.
 		this.reserved = Math.max(0, this.reserved - reservedUsd);
+		assertAmount("settleReservation", "actualUsd", actualUsd);
 		this.spent += actualUsd;
 	}
 
