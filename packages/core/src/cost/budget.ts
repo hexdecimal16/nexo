@@ -19,6 +19,14 @@ export class RunBudget {
 	private reserved = 0;
 
 	constructor(limitUsd: number) {
+		if (!Number.isFinite(limitUsd) || limitUsd < 0) {
+			throw new NexoError({
+				code: "CONFIG_INVALID",
+				message: `Run budget limit must be a finite number >= 0, got ${limitUsd}`,
+				hint: "Set budgets.perRunUsd to a non-negative number in your nexo config",
+				context: { limitUsd },
+			});
+		}
 		this.limitUsd = limitUsd;
 	}
 
