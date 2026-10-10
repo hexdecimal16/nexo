@@ -30,20 +30,30 @@ const USAGE = `Usage:
 export const EXIT_SIGINT = 130;
 export const EXIT_SIGTERM = 143;
 
+type NexoSignal = "SIGINT" | "SIGTERM";
+
 interface SignalSource {
-	once(signal: "SIGINT" | "SIGTERM", listener: () => void): unknown;
-	off(signal: "SIGINT" | "SIGTERM", listener: () => void): unknown;
+	on(signal: NexoSignal, listener: () => void): unknown;
+	off(signal: NexoSignal, listener: () => void): unknown;
 }
 
-/** Aborts `controller` on the first SIGINT or SIGTERM; `received()` names the signal that did it. */
-export function abortOnSignals(source: SignalSource, controller: AbortController): { received: () => "SIGINT" | "SIGTERM" | undefined; dispose: () => void } {
-	let first: "SIGINT" | "SIGTERM" | undefined;
+/**
+ * Aborts `controller` on the first SIGINT or SIGTERM and exits the process on any later one. The exit goes through
+ * `exit` (process.exit by default) so exit handlers still run; `received()` names the first signal.
+ */
+export function abortOnSignals(
+	source: SignalSource,
+	controller: AbortController,
+	exit: (code: number) => void = (code) => process.exit(code),
+): { received: () => NexoSignal | undefined; dispose: () => void } {
+	let first: NexoSignal | undefined;
 	const handlers = (["SIGINT", "SIGTERM"] as const).map((name) => {
 		const handler = () => {
-			first ??= name;
+			if (first) return exit(name === "SIGINT" ? EXIT_SIGINT : EXIT_SIGTERM);
+			first = name;
 			controller.abort();
 		};
-		source.once(name, handler);
+		source.on(name, handler);
 		return [name, handler] as const;
 	});
 	return { received: () => first, dispose: () => handlers.forEach(([name, handler]) => source.off(name, handler)) };
@@ -91,7 +101,7 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 		throw usageError(`--effort must be one of ${EFFORTS.join(", ")}`);
 	}
 	const budgetUsd = values.budget === undefined ? undefined : Number(values.budget);
-	if (budgetUsd !== undefined && !(budgetUsd > 0)) throw usageError("--budget must be a positive number of USD");
+	if (budgetUsd !== undefined && !(Number.isFinite(budgetUsd) && budgetUsd > 0)) throw usageError("--budget must be a positive number of USD");
 
 	const runtime = createRuntime({
 		env: options.env ?? process.env,

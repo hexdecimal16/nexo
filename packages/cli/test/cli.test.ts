@@ -1,9 +1,9 @@
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { insertRun, insertSpan, openDb } from "@nexo/store";
 import { runRow, spanRow } from "../../store/test/fixtures.ts";
 import { costReport } from "../src/cost-report.ts";
@@ -60,6 +60,11 @@ describe("nexo run", () => {
 		expect(t.err()).toMatch(/hint: .*\/models\/s1.*\/models\/s2/);
 	});
 
+	it("rejects a non-finite --budget with exit 2", async () => {
+		const h = home(config);
+		expect(await runCli(["run", "--budget", "Infinity", "x"], io(), { ...h, models: fauxModels([]) })).toBe(2);
+	});
+
 	it("rejects invalid --effort and a missing instruction with exit 2", async () => {
 		const h = home(config);
 		expect(await runCli(["run", "--effort", "extreme", "x"], io(), { ...h, models: fauxModels([]) })).toBe(2);
@@ -83,6 +88,9 @@ describe("nexo run", () => {
 		const code = await runCli(["run", "slow"], t, { ...h, models, signal: ac.signal });
 		expect(code).toBe(130);
 		expect(t.err()).toContain("aborted");
+		const runDir = /· (\S+)\n/.exec(t.err())?.[1];
+		expect(runDir && existsSync(join(runDir, "run.json"))).toBe(true);
+		expect(JSON.parse(readFileSync(join(runDir as string, "run.json"), "utf8")).status).toBe("aborted");
 	});
 });
 
@@ -118,17 +126,42 @@ describe("nexo reindex and cost", () => {
 });
 
 describe("signal wiring", () => {
-	it("aborts on SIGINT or SIGTERM, remembers the first, and detaches on dispose", () => {
+	function setup() {
+		const source = new EventEmitter();
+		const controller = new AbortController();
+		const exit = vi.fn();
+		const signals = abortOnSignals(source, controller, exit);
+		return { source, controller, exit, signals };
+	}
+
+	it("aborts on the first SIGINT or SIGTERM and remembers which", () => {
 		for (const name of ["SIGINT", "SIGTERM"] as const) {
-			const source = new EventEmitter();
-			const controller = new AbortController();
-			const signals = abortOnSignals(source, controller);
-			expect(controller.signal.aborted).toBe(false);
+			const { source, controller, exit, signals } = setup();
 			source.emit(name);
 			expect(controller.signal.aborted).toBe(true);
 			expect(signals.received()).toBe(name);
-			signals.dispose();
-			expect(source.listenerCount("SIGINT") + source.listenerCount("SIGTERM")).toBe(0);
+			expect(exit).not.toHaveBeenCalled();
 		}
+	});
+
+	it("exits on a second signal of either kind", () => {
+		const a = setup();
+		a.source.emit("SIGTERM");
+		a.source.emit("SIGINT");
+		expect(a.exit).toHaveBeenCalledWith(130);
+		const b = setup();
+		b.source.emit("SIGINT");
+		b.source.emit("SIGINT");
+		expect(b.exit).toHaveBeenCalledWith(130);
+		const c = setup();
+		c.source.emit("SIGINT");
+		c.source.emit("SIGTERM");
+		expect(c.exit).toHaveBeenCalledWith(143);
+	});
+
+	it("removes its listeners on dispose", () => {
+		const { source, signals } = setup();
+		signals.dispose();
+		expect(source.listenerCount("SIGINT") + source.listenerCount("SIGTERM")).toBe(0);
 	});
 });
