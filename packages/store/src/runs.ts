@@ -150,18 +150,18 @@ function markRunJsonAborted(dir: string, nowIso: string, error: ErrorPayload): v
 }
 
 /**
- * Marks runs left `running` by processes that no longer exist as `aborted`, in SQLite and in their run.json.
+ * Marks runs left `running` by processes that no longer exist (runs without a recorded pid are left alone) as `aborted`, in SQLite and in their run.json.
  * Returns the affected ids.
  */
 export function recoverCrashedRuns(db: Db, isAlive: (pid: number) => boolean, nowIso: string): string[] {
-	const stuck = db.prepare("SELECT id, pid, dir_path FROM runs WHERE status = 'running'").all();
+	const stuck = db.prepare("SELECT id, pid, dir_path FROM runs WHERE status = 'running' AND pid IS NOT NULL").all();
 	const ids: string[] = [];
 	for (const row of stuck) {
-		const pid = row.pid === null ? null : Number(row.pid);
-		if (pid !== null && isAlive(pid)) continue;
+		const pid = Number(row.pid);
+		if (isAlive(pid)) continue;
 		const error: ErrorPayload = {
 			code: "INTERNAL",
-			message: `The nexo process (pid ${pid ?? "unknown"}) exited while this run was running`,
+			message: `The nexo process (pid ${pid}) exited while this run was running`,
 			retryable: false,
 		};
 		updateRun(db, String(row.id), { status: "aborted", endedAt: nowIso, error });

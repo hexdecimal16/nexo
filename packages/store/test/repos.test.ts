@@ -69,6 +69,14 @@ describe("runs", () => {
 		});
 		expect(getRun(db, alive.id)?.status).toBe("running");
 	});
+
+	it("leaves running rows without a pid alone", () => {
+		const db = openDb(":memory:");
+		const noPid = run({ pid: null });
+		insertRun(db, noPid);
+		expect(recoverCrashedRuns(db, () => false, "2026-10-10T01:00:00.000Z")).toEqual([]);
+		expect(getRun(db, noPid.id)?.status).toBe("running");
+	});
 });
 
 describe("spans", () => {
@@ -111,6 +119,18 @@ describe("artifacts", () => {
 		expect(v2.version).toBe(2);
 		expect(v2.parentVersionId).toBe(v1.id);
 		expect(getActiveArtifact(db, "system_prompt", "default")?.id).toBe(v2.id);
+	});
+
+	it("keeps exactly one active version when a second writer acts on a stale view", () => {
+		const db = openDb(":memory:");
+		ensureManualArtifact(db, "playbook", "p", "one", "t1");
+		ensureManualArtifact(db, "playbook", "p", "two", "t2");
+		ensureManualArtifact(db, "playbook", "p", "two", "t3");
+		const active = db.prepare("SELECT COUNT(*) AS n FROM artifacts WHERE kind='playbook' AND name='p' AND status='active'").get();
+		expect(active?.n).toBe(1);
+		expect(() =>
+			db.prepare("INSERT INTO artifacts VALUES ('dup','playbook','p',9,'x','h',NULL,'manual','active','t')").run(),
+		).toThrow();
 	});
 
 	it("deduplicates artifact sets by members", () => {
