@@ -19,8 +19,13 @@ export function createGatedStreamFn(models: Models, limits: Record<string, numbe
 	return async (model, context, options) => {
 		const sem = semaphoreFor(model.provider);
 		const release = sem ? await sem.acquire(options?.signal) : () => {};
-		const stream = models.streamSimple(model, context, options);
-		stream.result().then(release, release);
-		return stream;
+		try {
+			const stream = models.streamSimple(model, context, options);
+			stream.result().then(release, release);
+			return stream;
+		} catch (error) {
+			release();
+			throw error;
+		}
 	};
 }

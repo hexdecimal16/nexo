@@ -97,6 +97,76 @@ describe("createGatedStreamFn", () => {
 	});
 });
 
+describe("createGatedStreamFn permit handling", () => {
+	const model = { provider: "p" } as never;
+	const ctx = { messages: [] } as never;
+	const modelsOf = (streamSimple: () => unknown) => ({ streamSimple }) as unknown as Models;
+
+	it("releases the permit when result() rejects or resolves with an error message", async () => {
+		const results = [() => Promise.reject(new Error("boom")), () => Promise.resolve({ stopReason: "error", errorMessage: "x" }), () => Promise.resolve({})];
+		let i = 0;
+		const streamFn = createGatedStreamFn(modelsOf(() => ({ result: results[i++ % results.length] })), { p: 1 });
+		for (let n = 0; n < 3; n++) {
+			const s = await streamFn(model, ctx);
+			await s.result().catch(() => undefined);
+		}
+		expect(i).toBe(3);
+	});
+
+	it("releases the permit when streamSimple throws synchronously", async () => {
+		let calls = 0;
+		const streamFn = createGatedStreamFn(
+			modelsOf(() => {
+				calls++;
+				if (calls === 1) throw new Error("no api key");
+				return { result: () => Promise.resolve({}) };
+			}),
+			{ p: 1 },
+		);
+		await expect(streamFn(model, ctx)).rejects.toThrow("no api key");
+		await streamFn(model, ctx);
+		expect(calls).toBe(2);
+	});
+
+	it("rejects a waiting request on abort without consuming a permit", async () => {
+		let resolveFirst: () => void = () => {};
+		let calls = 0;
+		const streamFn = createGatedStreamFn(
+			modelsOf(() => {
+				calls++;
+				return { result: () => new Promise<void>((r) => (resolveFirst = r)) };
+			}),
+			{ p: 1 },
+		);
+		await streamFn(model, ctx);
+		const ac = new AbortController();
+		const waiting = streamFn(model, ctx, { signal: ac.signal } as never);
+		ac.abort();
+		await expect(waiting).rejects.toMatchObject({ name: "AbortError" });
+		expect(calls).toBe(1);
+		resolveFirst();
+		await new Promise((r) => setTimeout(r, 0));
+		await streamFn(model, ctx);
+		expect(calls).toBe(2);
+	});
+
+	it("does not gate providers without a limit", async () => {
+		let active = 0;
+		let maxActive = 0;
+		const streamFn = createGatedStreamFn(
+			modelsOf(() => {
+				active++;
+				maxActive = Math.max(maxActive, active);
+				return { result: () => new Promise((r) => setTimeout(r, 20)).then(() => void active--) };
+			}),
+			{ other: 1 },
+		);
+		const streams = await Promise.all([1, 2, 3].map(() => streamFn(model, ctx)));
+		await Promise.all(streams.map((s) => s.result()));
+		expect(maxActive).toBe(3);
+	});
+});
+
 describe("messages helpers", () => {
 	it("appends the budget line to the last user or tool-result message only", () => {
 		const user: AgentMessage = { role: "user", content: "hi", timestamp: 1 };
