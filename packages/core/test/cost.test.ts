@@ -152,3 +152,23 @@ describe("non-finite and negative amounts", () => {
 		expect(code(() => checkAdmission(db, { dailyUsd: 10, monthlyUsd: Number.NaN }, now))).toBe("CONFIG_INVALID");
 	});
 });
+
+describe("RunBudget limit and usage without cost", () => {
+	it("rejects a non-finite or negative limit", () => {
+		for (const limit of [Number.NaN, -1, Number.POSITIVE_INFINITY]) {
+			try {
+				new RunBudget(limit);
+				expect.unreachable();
+			} catch (err) {
+				expect((err as NexoError).code).toBe("CONFIG_INVALID");
+			}
+		}
+	});
+
+	it("treats a usage lacking cost as not reported", () => {
+		const noCost = { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 1_000_000 } as unknown as Usage;
+		expect(priceUsage(model({ input: 3 }), noCost, {})).toEqual({ costUsd: 3, costUnknown: false });
+		expect(priceUsage(model(), noCost, {})).toEqual({ costUsd: 0, costUnknown: true });
+		expect(priceUsage(model(), noCost, { "p/m": { input: 2, output: 0 } })).toEqual({ costUsd: 2, costUnknown: false });
+	});
+});
