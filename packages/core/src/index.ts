@@ -5,3 +5,5 @@ export * from "./cost/budget.ts";
 export * from "./cost/pricing.ts";
 export * from "./engine/prompts.ts";
 export * from "./engine/run.ts";
+export * from "./engine/task-graph.ts";
+import "./engine/spawn-tool.ts";
