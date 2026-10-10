@@ -147,15 +147,19 @@ export function readRunJson(dir: string): RunJson {
 	return JSON.parse(readFileSync(join(dir, "run.json"), "utf8")) as RunJson;
 }
 
-/** Reads trajectory.jsonl; later records for the same span id replace earlier ones, keeping first-seen order. */
+/** Reads trajectory.jsonl, skipping unparsable lines (such as a truncated last line); later records for the same span id replace earlier ones, keeping first-seen order. */
 export function readTrajectory(dir: string): SpanRow[] {
 	const file = join(dir, "trajectory.jsonl");
 	if (!existsSync(file)) return [];
 	const byId = new Map<string, SpanRow>();
 	for (const line of readFileSync(file, "utf8").split("\n")) {
 		if (!line.trim()) continue;
-		const span = JSON.parse(line) as SpanRow;
-		byId.set(span.id, span);
+		try {
+			const span = JSON.parse(line) as SpanRow;
+			byId.set(span.id, span);
+		} catch {
+			continue;
+		}
 	}
 	return [...byId.values()];
 }

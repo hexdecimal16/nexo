@@ -27,46 +27,64 @@ export function reindex(db: Db, runsRoot: string): ReindexResult {
 }
 
 function indexDir(db: Db, dir: string, result: ReindexResult): void {
-	if (!statSync(dir).isDirectory()) return;
-	let run: RunJson;
 	try {
-		run = readRunJson(dir);
+		if (!statSync(dir).isDirectory()) return;
 	} catch {
+		return;
+	}
+	const counts = indexRun(db, dir);
+	if (!counts) {
 		result.skipped.push(dir);
 		return;
 	}
-	const stillRunning = run.status === "running";
-	insertRun(db, {
-		id: run.id,
-		parentRunId: run.parentRunId,
-		rootRunId: run.rootRunId,
-		dirPath: dir,
-		instruction: run.instruction,
-		skill: run.skill,
-		status: stillRunning ? "aborted" : run.status,
-		configSnapshotHash: run.configSnapshotHash,
-		artifactSetId: run.artifactSetId,
-		modelFinal: run.model ? `${run.model.provider}/${run.model.id}` : null,
-		tierFinal: run.model?.role ?? null,
-		escalations: 0,
-		startedAt: run.startedAt,
-		endedAt: run.endedAt,
-		costUsd: run.costUsd,
-		costUnknown: run.costUnknown,
-		tokensIn: run.tokensIn,
-		tokensOut: run.tokensOut,
-		pid: null,
-		error: stillRunning
-			? { code: "INTERNAL", message: "The run was still marked running when the index was rebuilt", retryable: false }
-			: run.error,
-	});
 	result.runs++;
-	for (const span of readTrajectory(dir)) {
-		insertSpan(db, span);
-		result.spans++;
-	}
+	result.spans += counts.spans;
 	const subagents = join(dir, "subagents");
 	if (existsSync(subagents)) {
 		for (const name of readdirSync(subagents).sort()) indexDir(db, join(subagents, name), result);
+	}
+}
+
+/** Inserts one directory's run and spans atomically; returns null (leaving the index untouched) when it cannot be indexed. */
+function indexRun(db: Db, dir: string): { spans: number } | null {
+	db.exec("SAVEPOINT index_dir");
+	try {
+		const run = readRunJson(dir) as RunJson | null;
+		if (typeof run !== "object" || run === null || Array.isArray(run)) throw new Error("run.json is not an object");
+		const stillRunning = run.status === "running";
+		insertRun(db, {
+			id: run.id,
+			parentRunId: run.parentRunId,
+			rootRunId: run.rootRunId,
+			dirPath: dir,
+			instruction: run.instruction,
+			skill: run.skill,
+			status: stillRunning ? "aborted" : run.status,
+			configSnapshotHash: run.configSnapshotHash,
+			artifactSetId: run.artifactSetId,
+			modelFinal: run.model ? `${run.model.provider}/${run.model.id}` : null,
+			tierFinal: run.model?.role ?? null,
+			escalations: 0,
+			startedAt: run.startedAt,
+			endedAt: run.endedAt,
+			costUsd: run.costUsd,
+			costUnknown: run.costUnknown,
+			tokensIn: run.tokensIn,
+			tokensOut: run.tokensOut,
+			pid: null,
+			error: stillRunning
+				? { code: "INTERNAL", message: "The run was still marked running when the index was rebuilt", retryable: false }
+				: run.error,
+		});
+		let spans = 0;
+		for (const span of readTrajectory(dir)) {
+			insertSpan(db, span);
+			spans++;
+		}
+		db.exec("RELEASE index_dir");
+		return { spans };
+	} catch {
+		db.exec("ROLLBACK TO index_dir; RELEASE index_dir");
+		return null;
 	}
 }
