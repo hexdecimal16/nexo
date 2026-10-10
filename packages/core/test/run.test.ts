@@ -348,4 +348,49 @@ describe("engine run", () => {
 		const saved = JSON.parse(readFileSync(join(result.runDir as string, llm?.payloadRef as string), "utf8"));
 		expect(saved).toEqual([{ type: "text", text: "z".repeat(40_000) }]);
 	});
+
+	it("redacts secrets in snapshotted and loaded skill artifacts stored in SQLite", async () => {
+		const secret = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz";
+		const skill = (name: string) => `---\nname: ${name}\ndescription: Uses a key\n---\nCall the API with ${secret}.\n`;
+		const env = makeEnv({ skills: { active: skill("active"), extra: skill("extra") } });
+		env.faux.setResponses([fauxAssistantMessage([fauxToolCall("load_skill", { name: "extra" })]), fauxAssistantMessage("done")]);
+		const result = await createEngine(env.deps).run({ instruction: "use skills", skill: "active" });
+		expect(result.status).toBe("succeeded");
+		const rows = env.deps.db.prepare("SELECT name, content FROM artifacts WHERE kind = 'skill'").all();
+		expect(rows.map((r) => r.name).sort()).toEqual(["active", "extra"]);
+		for (const row of rows) {
+			expect(String(row.content)).not.toContain(secret);
+			expect(String(row.content)).toContain(REDACTED);
+		}
+	});
+
+	it("redacts secrets in offloaded tool_outputs files", async () => {
+		const env = makeEnv({ config: { tools: { policy: { bash: "allow" } } } });
+		const secret = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz";
+		env.faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("bash", { command: `head -c 40000 /dev/zero | tr '\\0' 'b'; echo; echo ${secret}` })]),
+			fauxAssistantMessage("ok"),
+		]);
+		const result = await createEngine(env.deps).run({ instruction: "big secret output" });
+		const tool = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.name === "bash");
+		const saved = readFileSync(join(result.runDir as string, tool?.payloadRef as string), "utf8");
+		expect(saved.length).toBeGreaterThan(40000);
+		expect(saved).not.toContain(secret);
+		expect(saved).toContain(REDACTED);
+	});
+
+	it("ends as aborted without an INTERNAL error when aborted during retry backoff", async () => {
+		const env = makeEnv();
+		const ac = new AbortController();
+		env.deps.sleep = (_ms, signal) => {
+			ac.abort();
+			return Promise.reject(signal?.reason ?? new Error("aborted"));
+		};
+		env.faux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "429 Too Many Requests" }), fauxAssistantMessage("never")]);
+		const result = await createEngine(env.deps).run({ instruction: "backoff" }, ac.signal);
+		expect(result.status).toBe("aborted");
+		expect(result.error).toBeUndefined();
+		expect(readRunJson(result.runDir as string)).toMatchObject({ status: "aborted", error: null });
+		expect(getRun(env.deps.db, result.trajectoryId as string)?.error).toBeNull();
+	});
 });
