@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -105,5 +105,38 @@ describe("reindex", () => {
 			retryable: false,
 		});
 		expect(readRunJson(dir.root).status).toBe("running");
+	});
+
+	it("indexes a run whose trajectory has a truncated last line", () => {
+		const root = mkdtempSync(join(tmpdir(), "nexo-runs-"));
+		const dir = RunDir.create(root, "r1", redact);
+		dir.writeRunJson(runJson("r1"));
+		dir.appendTrajectory(spanRow("r1"));
+		appendFileSync(join(dir.root, "trajectory.jsonl"), '{"id":"cut","runI');
+		const db = openDb(":memory:");
+		expect(reindex(db, root)).toEqual({ runs: 1, spans: 1, skipped: [] });
+		expect(listSpans(db, "r1")).toHaveLength(1);
+	});
+
+	it("isolates corrupt directories so good runs are still indexed", () => {
+		const root = mkdtempSync(join(tmpdir(), "nexo-runs-"));
+		RunDir.create(root, "a-null", redact);
+		writeFileSync(join(root, "a-null", "run.json"), "null");
+		const dup = RunDir.create(root, "z-dup", redact);
+		dup.writeRunJson(runJson("good"));
+		const good = RunDir.create(root, "good", redact);
+		good.writeRunJson(runJson("good"));
+		good.appendTrajectory(spanRow("good"));
+		const orphan = RunDir.create(root, "c-orphan", redact);
+		orphan.writeRunJson(runJson("c-orphan"));
+		orphan.appendTrajectory(spanRow("nonexistent-run"));
+		symlinkSync(join(root, "missing-target"), join(root, "d-broken-link"));
+		const db = openDb(":memory:");
+		const result = reindex(db, root);
+		expect(result.skipped.sort()).toEqual([join(root, "a-null"), join(root, "c-orphan"), join(root, "z-dup")]);
+		expect(getRun(db, "good")?.dirPath).toBe(good.root);
+		expect(listSpans(db, "good")).toHaveLength(1);
+		expect(result.runs).toBe(1);
+		expect(result.spans).toBe(1);
 	});
 });
