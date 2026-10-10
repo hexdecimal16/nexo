@@ -107,3 +107,48 @@ describe("admission", () => {
 		}
 	});
 });
+
+describe("non-finite and negative amounts", () => {
+	const now = new Date("2026-10-10T10:00:00.000Z");
+	const code = (fn: () => unknown): string | undefined => {
+		try {
+			fn();
+		} catch (err) {
+			return (err as NexoError).code;
+		}
+		return undefined;
+	};
+
+	it("flags usage with missing fields as unknown cost", () => {
+		const broken = { input: 10, output: 10, cacheRead: undefined, cacheWrite: 0, totalTokens: 20, cost: { total: 0 } } as unknown as Usage;
+		expect(priceUsage(model({ input: 3, output: 15 }), broken, {})).toEqual({ costUsd: 0, costUnknown: true });
+		const nanReported = usage(10, 10, Number.NaN);
+		expect(priceUsage(model(), nanReported, {})).toEqual({ costUsd: 0, costUnknown: true });
+	});
+
+	it("never returns NaN from estimateCallCostUsd", () => {
+		expect(estimateCallCostUsd(model({ input: 1, output: 1 }), {}, Number.NaN, 10)).toBe(0);
+	});
+
+	it("rejects NaN and negative amounts without changing state, and still exhausts", () => {
+		const b = new RunBudget(1);
+		expect(code(() => b.charge(Number.NaN))).toBe("INTERNAL");
+		expect(code(() => b.charge(-1))).toBe("INTERNAL");
+		expect(code(() => b.tryReserve(Number.NaN))).toBe("INTERNAL");
+		expect(code(() => b.settleReservation(Number.NaN, 0))).toBe("INTERNAL");
+		expect(code(() => b.settleReservation(0, -1))).toBe("INTERNAL");
+		expect(b.spentUsd).toBe(0);
+		expect(b.reservedUsd).toBe(0);
+		b.charge(1);
+		expect(b.isExhausted()).toBe(true);
+	});
+
+	it("rejects bad spend and non-finite limits in admission", () => {
+		const db = openDb(":memory:");
+		expect(code(() => recordSpend(db, "r", Number.NaN, now))).toBe("INTERNAL");
+		expect(code(() => recordSpend(db, "r", -1, now))).toBe("INTERNAL");
+		expect(getSpent(db, dayScope(now))).toBe(0);
+		expect(code(() => checkAdmission(db, { dailyUsd: Number.NaN, monthlyUsd: 100 }, now))).toBe("CONFIG_INVALID");
+		expect(code(() => checkAdmission(db, { dailyUsd: 10, monthlyUsd: Number.NaN }, now))).toBe("CONFIG_INVALID");
+	});
+});
