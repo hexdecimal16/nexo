@@ -7,6 +7,7 @@ import {
 	descendantRunIds,
 	encodeRunCursor,
 	insertRun,
+	insertSpan,
 	isCostDimension,
 	loadSpanTree,
 	normalizeSince,
@@ -15,7 +16,7 @@ import {
 	recordFeedback,
 	type RunPage,
 } from "../src/index.ts";
-import { runRow } from "./fixtures.ts";
+import { runRow, spanRow } from "./fixtures.ts";
 
 const redact = createRedactor();
 
@@ -168,5 +169,13 @@ describe("costReport", () => {
 		expect(codeOf(() => costReport(db, { by: "day", since: "2026-02-30" }))).toBe("INVALID_REQUEST");
 		expect(codeOf(() => costReport(db, { by: "day", since: "10/10/2026" }))).toBe("INVALID_REQUEST");
 		expect(COST_DIMENSIONS.every(isCostDimension)).toBe(true);
+	});
+
+	it("orders equal costs by key so output is deterministic", () => {
+		const db = openDb(":memory:");
+		const run = runRow({ status: "succeeded" });
+		insertRun(db, run);
+		for (const model of ["m-c", "m-a", "m-b"]) insertSpan(db, spanRow(run.id, { model, costUsd: 0.5, startedAt: "2026-10-10T00:00:01.000Z" }));
+		expect(costReport(db, { by: "model", since: "2026-10-01" }).rows.map((r) => r.key)).toEqual(["faux/m-a", "faux/m-b", "faux/m-c"]);
 	});
 });
