@@ -74,4 +74,18 @@ describe("createPolicy", () => {
 		expect(asked).not.toMatch(/[\u0000-\u001f]/);
 		expect(asked).toContain("\\x0a");
 	});
+
+	it("prefixes the question with the asking run's label", async () => {
+		const asked: string[] = [];
+		const spy: Prompter = {
+			interactive: true,
+			confirm: async (q) => {
+				asked.push(q);
+				return true;
+			},
+		};
+		await policy.authorize(spy, "bash", { command: "make" }, undefined, "subagent abc123");
+		await policy.authorize(spy, "bash", { command: "make" });
+		expect(asked).toEqual(["[subagent abc123] Allow bash: make?", "Allow bash: make?"]);
+	});
 });

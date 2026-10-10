@@ -83,6 +83,15 @@ function usageError(message: string): NexoError {
 	return new NexoError({ code: "CONFIG_INVALID", message, hint: USAGE.trim() });
 }
 
+/**
+ * Ctrl-C at a prompt is consumed by readline, so it is re-raised as SIGINT and aborts the run through the same handler
+ * as a Ctrl-C anywhere else.
+ */
+function defaultPrompter(): Prompter {
+	if (!process.stdin.isTTY) return nonInteractivePrompter;
+	return createTtyPrompter(process.stdin, process.stdout, { onInterrupt: () => process.kill(process.pid, "SIGINT") });
+}
+
 async function runCommand(args: string[], io: CliIO, options: CliOptions): Promise<number> {
 	const { values, positionals } = parseArgs({
 		args,
@@ -106,7 +115,7 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 	const runtime = createRuntime({
 		env: options.env ?? process.env,
 		cwd: options.cwd ?? process.cwd(),
-		prompter: options.prompter ?? (process.stdin.isTTY ? createTtyPrompter(process.stdin, process.stdout) : nonInteractivePrompter),
+		prompter: options.prompter ?? defaultPrompter(),
 		models: options.models,
 		onEvent: (event) => {
 			if (event.type === "text_delta" && event.depth === 0) io.stdout.write(event.delta);
