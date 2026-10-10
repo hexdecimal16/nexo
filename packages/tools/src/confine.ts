@@ -1,13 +1,45 @@
-import { existsSync, realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { NexoError } from "@nexo/telemetry";
 
-/** Absolute form of `target` (relative to `base`) with its deepest existing ancestor resolved through realpath. */
+function isMissing(err: unknown): boolean {
+	const code = (err as NodeJS.ErrnoException).code;
+	return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/**
+ * Absolute form of `target` (relative to `base`) with its deepest existing ancestor resolved through realpath.
+ * Ancestors are probed with lstat so a dangling symlink is found rather than walked past; a symlink whose target
+ * cannot be resolved is denied with TOOL_DENIED.
+ */
 export function canonicalPath(target: string, base: string = process.cwd()): string {
 	const absolute = isAbsolute(target) ? resolve(target) : resolve(base, target);
 	let probe = absolute;
-	while (!existsSync(probe)) probe = dirname(probe);
-	return join(realpathSync(probe), relative(probe, absolute));
+	for (;;) {
+		try {
+			lstatSync(probe);
+			break;
+		} catch (err) {
+			if (!isMissing(err)) throw err;
+			const parent = dirname(probe);
+			if (parent === probe) break;
+			probe = parent;
+		}
+	}
+	let resolvedProbe: string;
+	try {
+		resolvedProbe = realpathSync(probe);
+	} catch (cause) {
+		if (!isMissing(cause)) throw cause;
+		throw new NexoError({
+			code: "TOOL_DENIED",
+			message: `Path "${target}" passes through a symlink that cannot be resolved: ${probe}`,
+			hint: "Use a path that does not go through dangling symlinks",
+			context: { target, link: probe },
+			cause,
+		});
+	}
+	return join(resolvedProbe, relative(probe, absolute));
 }
 
 /**

