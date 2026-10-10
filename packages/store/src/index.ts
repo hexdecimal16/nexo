@@ -5,3 +5,5 @@ export * from "./ids.ts";
 export * from "./paths.ts";
 export * from "./runs.ts";
 export * from "./spans.ts";
+export * from "./reindex.ts";
+export * from "./run-dir.ts";
