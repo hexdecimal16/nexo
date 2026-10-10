@@ -6,7 +6,7 @@
   "workspaces": ["packages/*"],
   "scripts": {
     "test": "vitest --run",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p packages/web/public/tsconfig.json",
     "nexo": "node packages/cli/src/bin.ts"
   },
   "devDependencies": {
