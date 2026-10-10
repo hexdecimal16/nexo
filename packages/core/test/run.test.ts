@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { addSpend, dayScope, getRun, getSpent, insertRun, listSpans, readRunJson, readTrajectory } from "@nexo/store";
 import { REDACTED } from "@nexo/telemetry";
 import { runRow } from "../../store/test/fixtures.ts";
-import { createEngine } from "../src/index.ts";
+import { createEngine, registerExtraTools } from "../src/index.ts";
 import { makeEnv } from "./helpers.ts";
 
 const SKILL = "---\nname: summarize\ndescription: Summarize text\nmetadata:\n  nexo-model: faux/slow\n---\nSummarize briefly.\n";
@@ -88,6 +88,10 @@ describe("engine run", () => {
 		expect(result).toMatchObject({ status: "succeeded", output: "Recovered." });
 		const llm = listSpans(env.deps.db, result.trajectoryId as string).filter((s) => s.kind === "llm_call");
 		expect(llm.map((s) => s.status)).toEqual(["error", "ok"]);
+		const spanTotal = llm.reduce((sum, s) => sum + s.costUsd, 0);
+		expect(spanTotal).toBeCloseTo(result.costUsd, 10);
+		expect(getSpent(env.deps.db, `run:${result.trajectoryId}`)).toBeCloseTo(result.costUsd, 10);
+		expect(getRun(env.deps.db, result.trajectoryId as string)?.costUsd).toBeCloseTo(result.costUsd, 10);
 	});
 
 	it("fails with PROVIDER_AUTH on non-retryable auth errors", async () => {
@@ -153,6 +157,78 @@ describe("engine run", () => {
 		const result = await createEngine(env.deps).run({ instruction: "slow" }, ac.signal);
 		expect(result.status).toBe("aborted");
 		expect(readRunJson(result.runDir as string).status).toBe("aborted");
+	});
+
+	it("makes no LLM call when the signal is already aborted", async () => {
+		const env = makeEnv();
+		let calls = 0;
+		env.faux.setResponses([
+			() => {
+				calls++;
+				return fauxAssistantMessage("should not run");
+			},
+		]);
+		const ac = new AbortController();
+		ac.abort();
+		const result = await createEngine(env.deps).run({ instruction: "never" }, ac.signal);
+		expect(calls).toBe(0);
+		expect(result.status).toBe("aborted");
+		expect(readRunJson(result.runDir as string).status).toBe("aborted");
+		expect(getRun(env.deps.db, result.trajectoryId as string)?.status).toBe("aborted");
+	});
+
+	it("rejects a missing workspace without creating a run directory or row", async () => {
+		const env = makeEnv();
+		const result = await createEngine(env.deps).run({ instruction: "x", workspace: join(tmpdir(), "nexo-no-such-dir-xyz") });
+		expect(result).toMatchObject({ status: "failed", trajectoryId: null, runDir: null, error: { code: "CONFIG_INVALID" } });
+		expect(readdirSync(env.deps.paths.runs)).toEqual([]);
+		expect(env.deps.db.prepare("SELECT COUNT(*) AS n FROM runs").get()?.n).toBe(0);
+	});
+
+	it("records a failed terminal status when setup throws after the run row exists", async () => {
+		const env = makeEnv();
+		const unregister = registerExtraTools(() => {
+			throw new Error("factory exploded");
+		});
+		try {
+			const result = await createEngine(env.deps).run({ instruction: "boom" });
+			expect(result).toMatchObject({ status: "failed", error: { code: "INTERNAL", message: "factory exploded" } });
+			expect(getRun(env.deps.db, result.trajectoryId as string)?.status).toBe("failed");
+			expect(readRunJson(result.runDir as string).status).toBe("failed");
+			const runSpan = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.kind === "run");
+			expect(runSpan?.status).toBe("error");
+			expect(runSpan?.endedAt).not.toBeNull();
+		} finally {
+			unregister();
+		}
+	});
+
+	it("stops before an LLM call the budget cannot afford", async () => {
+		const env = makeEnv({ config: { budgets: { perRunUsd: 0.5 } } });
+		let calls = 0;
+		env.faux.setResponses([
+			() => {
+				calls++;
+				return fauxAssistantMessage("plain answer");
+			},
+		]);
+		const result = await createEngine(env.deps).run({ instruction: "too pricey", model: "faux/pricey" });
+		expect(calls).toBe(0);
+		expect(result.status).toBe("budget_exceeded");
+		expect(result.error?.code).toBe("BUDGET_EXCEEDED");
+		expect(result.costUsd).toBe(0);
+	});
+
+	it("redacts secrets in the error result and run_start event", async () => {
+		const secret = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz";
+		const env = makeEnv();
+		const events: unknown[] = [];
+		env.deps.onEvent = (e) => events.push(e);
+		env.faux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: `401 Unauthorized: bad key ${secret}` })]);
+		const result = await createEngine(env.deps).run({ instruction: `use ${secret}` });
+		expect(result.status).toBe("failed");
+		expect(JSON.stringify(result.error)).not.toContain(secret);
+		expect(JSON.stringify(events)).not.toContain(secret);
 	});
 
 	it("flags unpriced models as cost unknown", async () => {
