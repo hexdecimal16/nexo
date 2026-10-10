@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from "node:fs";
+import { mkdirSync, writeFileSync, mkdtempSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -28,6 +28,27 @@ describe("resolveConfined", () => {
 		mkdirSync(join(root, "inner"), { recursive: true });
 		symlinkSync(outside, join(root, "inner", "link"));
 		expect(() => resolveConfined(root, "inner/link/file.txt")).toThrow(/outside the workspace/);
+	});
+
+	it("denies a final-component symlink pointing outside", () => {
+		const outside = mkdtempSync(join(tmpdir(), "nexo-out-"));
+		writeFileSync(join(outside, "f.txt"), "x");
+		symlinkSync(join(outside, "f.txt"), join(root, "filelink"));
+		expect(() => resolveConfined(root, "filelink")).toThrow(/outside the workspace/);
+	});
+
+	it("denies dangling symlinks pointing outside (file and directory)", () => {
+		const outside = mkdtempSync(join(tmpdir(), "nexo-out-"));
+		symlinkSync(join(outside, "pwned.txt"), join(root, "dangling"));
+		symlinkSync(join(outside, "newdir"), join(root, "dangdir"));
+		for (const target of ["dangling", "dangdir/f.txt"]) {
+			try {
+				resolveConfined(root, target);
+				expect.unreachable();
+			} catch (err) {
+				expect((err as NexoError).code).toBe("TOOL_DENIED");
+			}
+		}
 	});
 });
 
