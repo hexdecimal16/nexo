@@ -85,6 +85,8 @@ export interface RunDetailResponse {
 	dirMissing: boolean;
 	children: RunSummary[];
 	feedback: Feedback[];
+	/** Latest verdict of each child run that has one, keyed by child run id. */
+	childFeedback: Record<string, Feedback>;
 }
 
 export interface Span {

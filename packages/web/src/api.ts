@@ -11,6 +11,7 @@ import {
 	getSpan,
 	invalidRequest,
 	isRunStatus,
+	latestFeedback,
 	listChildSummaries,
 	listFeedback,
 	loadSpanTree,
@@ -27,6 +28,7 @@ import { resolveConfined } from "@nexo/tools";
 import type {
 	CostResponse,
 	DirListing,
+	Feedback,
 	FeedbackResponse,
 	FileEntry,
 	MetaResponse,
@@ -104,12 +106,19 @@ export function runDetailResponse(ctx: ApiContext, id: string): RunDetailRespons
 			runJson = null;
 		}
 	}
+	const children = listChildSummaries(ctx.db, id);
+	const childFeedback: Record<string, Feedback> = {};
+	for (const child of children) {
+		const latest = latestFeedback(ctx.db, child.id);
+		if (latest) childFeedback[child.id] = latest;
+	}
 	return {
 		run: { ...summary, instruction: runJson?.instruction ?? run.instruction },
 		runJson,
 		dirMissing,
-		children: listChildSummaries(ctx.db, id),
+		children,
 		feedback: listFeedback(ctx.db, id),
+		childFeedback,
 	};
 }
 

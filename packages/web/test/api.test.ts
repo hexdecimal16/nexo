@@ -220,6 +220,9 @@ describe("POST /api/runs/{id}/feedback", () => {
 		expect(res.status).toBe(201);
 		expect(res.json().feedback).toMatchObject({ runId: fx.root.id, verdict: "not_done", comment: "missed the totals", createdAt: "2026-10-11T00:00:00.000Z" });
 		expect((await post(`/api/runs/${fx.child.id}/feedback`, { verdict: "done" })).status).toBe(201);
+		const detail = (await get(`/api/runs/${fx.root.id}`)).json() as RunDetailResponse;
+		expect(Object.keys(detail.childFeedback)).toEqual([fx.child.id]);
+		expect(detail.childFeedback[fx.child.id]).toMatchObject({ verdict: "done", runId: fx.child.id });
 		expect(JSON.parse(readFileSync(join(fx.root.dirPath, "run.json"), "utf8")).humanVerdict.verdict).toBe("not_done");
 		const reviewed = (await get("/api/runs?reviewed=true")).json() as RunListResponse;
 		expect(reviewed.runs.map((r) => [r.id, r.verdict])).toEqual([[fx.root.id, "not_done"]]);
