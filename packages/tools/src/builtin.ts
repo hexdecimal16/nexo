@@ -13,6 +13,9 @@ const MAX_READ_LINES = 2000;
 const MAX_FETCH_CHARS = 100_000;
 const FETCH_TIMEOUT_MS = 30_000;
 
+/** Paths with this prefix open the run's saved large tool outputs (`tool_outputs/` in the run directory) with `read`. */
+export const TOOL_OUTPUT_PREFIX = "@tool_outputs/";
+
 const liveBashGroups = new Set<number>();
 let exitHandlerRegistered = false;
 
@@ -43,6 +46,8 @@ export interface ToolContext {
 	leases: FileLeases;
 	changeTracker?: ChangeTracker;
 	bashTimeoutMs: number;
+	/** The run's `tool_outputs/` directory, readable through TOOL_OUTPUT_PREFIX paths. */
+	toolOutputsDir?: string;
 	fetch?: typeof fetch;
 }
 
@@ -79,10 +84,13 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 	const read: AgentTool<typeof ReadParams> = {
 		name: "read",
 		label: "Read file",
-		description: "Read a text file from the workspace.",
+		description: `Read a text file from the workspace. Paths starting with ${TOOL_OUTPUT_PREFIX} open saved large tool outputs.`,
 		parameters: ReadParams,
 		execute: async (_id, params) => {
-			const abs = resolveConfined(root, params.path);
+			const outputs = ctx.toolOutputsDir;
+			const savedOutput = outputs !== undefined && params.path.startsWith(TOOL_OUTPUT_PREFIX);
+			if (savedOutput && !existsSync(outputs)) throw new Error(`File not found: ${params.path}`);
+			const abs = savedOutput ? resolveConfined(outputs, params.path.slice(TOOL_OUTPUT_PREFIX.length)) : resolveConfined(root, params.path);
 			if (!existsSync(abs)) throw new Error(`File not found: ${params.path}`);
 			const lines = readFileSync(abs, "utf8").split("\n");
 			const start = (params.offset ?? 1) - 1;

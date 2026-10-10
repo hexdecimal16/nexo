@@ -1,5 +1,5 @@
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
-import { type Api, type AssistantMessage, isRetryableAssistantError, type Model, type Models } from "@earendil-works/pi-ai";
+import { type Api, type AssistantMessage, isContextOverflow, isRetryableAssistantError, type Model, type Models } from "@earendil-works/pi-ai";
 import { createModelRegistry, type Effort, type ModelChoice, type ModelRegistry, type ResolvedModel, resolveModel } from "@nexo/router";
 import { createLoadSkillTool, formatSkillIndex, type SkillCatalog } from "@nexo/skills";
 import {
@@ -26,6 +26,7 @@ import {
 	createPolicy,
 	FileLeases,
 	type Prompter,
+	TOOL_OUTPUT_PREFIX,
 	type ToolPolicy,
 } from "@nexo/tools";
 import { realpathSync, statSync } from "node:fs";
@@ -33,13 +34,21 @@ import type { NexoConfig } from "../config/schema.ts";
 import { checkAdmission, recordSpend } from "../cost/admission.ts";
 import { budgetLine, RunBudget } from "../cost/budget.ts";
 import { estimateCallCostUsd, priceUsage } from "../cost/pricing.ts";
-import { classifyProviderError, retryAfterMs, toolErrorText, withToolErrorCodes } from "./errors.ts";
+import { classifyProviderError, contextOverflowError, retryAfterMs, toolErrorText, withToolErrorCodes } from "./errors.ts";
 import { assistantText, contentText, estimatePromptChars, lastAssistant, withBudgetLine } from "./messages.ts";
 import { DEFAULT_PLANNER_PROMPT, DEFAULT_SYSTEM_PROMPT, renderSystemPrompt } from "./prompts.ts";
 import { createGatedStreamFn } from "./provider-gate.ts";
 import { Recorder } from "./recorder.ts";
 
 const TOOL_RESULT_INLINE_LIMIT = 32_768;
+const TOOL_RESULT_EXCERPT_CHARS = 8_000;
+
+/** The head and tail of a large tool result, with a note pointing at the saved full text. */
+function toolOutputExcerpt(text: string, pointer: string): string {
+	const omitted = text.length - 2 * TOOL_RESULT_EXCERPT_CHARS;
+	const note = `[${omitted} characters omitted. The full output is saved; read it with read({ path: "${pointer}", offset, limit }), where offset and limit count lines.]`;
+	return `${text.slice(0, TOOL_RESULT_EXCERPT_CHARS)}\n\n${note}\n\n${text.slice(-TOOL_RESULT_EXCERPT_CHARS)}`;
+}
 
 export interface EngineDeps {
 	config: NexoConfig;
@@ -356,8 +365,16 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 
 		// Tools.
 		const toolSpans = new Map<string, string>();
+		const toolPayloadRefs = new Map<string, string>();
 		const baseTools: AgentTool<any>[] = [
-			...createBuiltinTools({ workspaceRoot: workspace, holder: runId, leases, changeTracker: changeTracker ?? undefined, bashTimeoutMs: config.tools.bashTimeoutMs }),
+			...createBuiltinTools({
+				workspaceRoot: workspace,
+				holder: runId,
+				leases,
+				changeTracker: changeTracker ?? undefined,
+				bashTimeoutMs: config.tools.bashTimeoutMs,
+				toolOutputsDir: runDir.toolOutputsDir,
+			}),
 			createLoadSkillTool({
 				catalog: deps.skills,
 				onLoad: (s) => {
@@ -425,6 +442,16 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				if (!auth.allowed) return { block: true, reason: toolErrorText(auth.error) };
 				return undefined;
 			},
+			afterToolCall: async ({ toolCall, result }) => {
+				const text = contentText(result.content);
+				const spanId = toolSpans.get(toolCall.id);
+				if (text.length <= TOOL_RESULT_INLINE_LIMIT || !spanId) return undefined;
+				const payloadRef = runDir.writeToolOutput(spanId, text);
+				toolPayloadRefs.set(toolCall.id, payloadRef);
+				const pointer = `${TOOL_OUTPUT_PREFIX}${payloadRef.slice("tool_outputs/".length)}`;
+				const nonText = result.content.filter((block) => block.type !== "text");
+				return { content: [{ type: "text", text: toolOutputExcerpt(text, pointer) }, ...nonText] };
+			},
 		});
 		agent = runAgent;
 
@@ -487,7 +514,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 					const spanId = toolSpans.get(event.toolCallId);
 					if (!spanId) break;
 					const text = contentText((event.result as { content?: unknown } | undefined)?.content);
-					const payloadRef = text.length > TOOL_RESULT_INLINE_LIMIT ? runDir.writeToolOutput(spanId, text) : null;
+					const payloadRef = toolPayloadRefs.get(event.toolCallId) ?? null;
 					recorder.finish(spanId, {
 						status: event.isError ? "error" : "ok",
 						payloadRef,
@@ -514,7 +541,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			const baseDelay = providerCfg.retryBaseDelayMs ?? 1000;
 			for (let attempt = 1; ; attempt++) {
 				const last = lastAssistant(runAgent.state.messages);
-				if (!last || last.stopReason !== "error" || !isRetryableAssistantError(last)) break;
+				if (!last || last.stopReason !== "error" || isContextOverflow(last) || !isRetryableAssistantError(last)) break;
 				if (attempt > maxRetries || input.signal?.aborted || budgetExceeded) break;
 				const delay = Math.max(Math.random() * baseDelay * 2 ** (attempt - 1), retryAfterMs(last.errorMessage ?? "") ?? 0);
 				logger.warn("retrying provider error", { attempt, delay_ms: Math.round(delay), error_message: last.errorMessage });
@@ -536,7 +563,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				status = "aborted";
 			} else if (last?.stopReason === "error") {
 				status = "failed";
-				error = classifyProviderError(last.errorMessage ?? "Provider error").toPayload();
+				const message = last.errorMessage ?? "Provider error";
+				error = (isContextOverflow(last) ? contextOverflowError(message) : classifyProviderError(message)).toPayload();
 			}
 		}
 	} catch (caught) {

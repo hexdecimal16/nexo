@@ -20,6 +20,14 @@ export function classifyProviderError(message: string): NexoError {
 	return new NexoError({ code: "PROVIDER_UNAVAILABLE", message, retryable: true, hint: "The provider returned an error; retry later" });
 }
 
+export function contextOverflowError(message: string): NexoError {
+	return new NexoError({
+		code: "PROVIDER_CONTEXT_OVERFLOW",
+		message,
+		hint: "The conversation no longer fits the model's context window; use a model with a larger window or narrow the task",
+	});
+}
+
 export function retryAfterMs(errorMessage: string): number | undefined {
 	const match = /retry[- ]after[^0-9]{0,5}(\d+(?:\.\d+)?)/i.exec(errorMessage);
 	return match?.[1] ? Math.round(Number(match[1]) * 1000) : undefined;
