@@ -111,3 +111,20 @@ export function updateSpan(db: Db, id: string, patch: Partial<Omit<SpanRow, "id"
 export function listSpans(db: Db, runId: string): SpanRow[] {
 	return db.prepare("SELECT * FROM spans WHERE run_id = ? ORDER BY started_at, rowid").all(runId).map(decode);
 }
+
+export function getSpan(db: Db, id: string): SpanRow | undefined {
+	const row = db.prepare("SELECT * FROM spans WHERE id = ?").get(id);
+	return row ? decode(row) : undefined;
+}
+
+/** Spans of the given runs in start order, at most `limit`, with the total count before the limit. */
+export function listSpansForRuns(db: Db, runIds: readonly string[], limit: number): { spans: SpanRow[]; total: number } {
+	if (runIds.length === 0) return { spans: [], total: 0 };
+	const marks = runIds.map(() => "?").join(", ");
+	const total = Number(db.prepare(`SELECT COUNT(*) AS n FROM spans WHERE run_id IN (${marks})`).get(...runIds)?.n ?? 0);
+	const spans = db
+		.prepare(`SELECT * FROM spans WHERE run_id IN (${marks}) ORDER BY started_at, rowid LIMIT ?`)
+		.all(...runIds, limit)
+		.map(decode);
+	return { spans, total };
+}

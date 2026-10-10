@@ -3,6 +3,8 @@ import { join } from "node:path";
 import type { SQLInputValue } from "node:sqlite";
 import type { ErrorPayload } from "@nexo/telemetry";
 import type { Db } from "./db.ts";
+import { invalidRequest } from "./errors.ts";
+import type { Verdict } from "./feedback.ts";
 import { insertRow, updateById } from "./sql.ts";
 
 export type RunStatus = "running" | "succeeded" | "failed" | "aborted" | "budget_exceeded";
@@ -121,6 +123,185 @@ export function listRuns(db: Db, filter: RunFilter = {}): RunRow[] {
 		.prepare(sql)
 		.all(...args, filter.limit ?? 100)
 		.map(decode);
+}
+
+export const RUN_STATUSES: readonly RunStatus[] = ["running", "succeeded", "failed", "aborted", "budget_exceeded"];
+
+/** Default and maximum page sizes for `queryRuns`. */
+export const DEFAULT_RUN_PAGE = 50;
+export const MAX_RUN_PAGE = 200;
+
+/** Longest instruction kept in a run summary; the full text stays in run.json. */
+export const SUMMARY_INSTRUCTION_CHARS = 500;
+
+export interface RunSummary {
+	id: string;
+	parentRunId: string | null;
+	rootRunId: string;
+	instruction: string;
+	skill: string | null;
+	status: RunStatus;
+	modelFinal: string | null;
+	tierFinal: string | null;
+	startedAt: string;
+	endedAt: string | null;
+	costUsd: number;
+	costUnknown: boolean;
+	tokensIn: number;
+	tokensOut: number;
+	childCount: number;
+	verdict: Verdict | null;
+	error: ErrorPayload | null;
+}
+
+export interface RunQuery {
+	status?: RunStatus;
+	skill?: string;
+	/** true: runs with feedback. false: finished runs without feedback (the review queue). */
+	reviewed?: boolean;
+	/** `YYYY-MM-DD` or a UTC ISO timestamp; normalized by `normalizeSince`, then compared against started_at. */
+	since?: string;
+	limit?: number;
+	cursor?: string;
+	/** Defaults to true: subagent runs appear inside their root run. */
+	rootOnly?: boolean;
+}
+
+export interface RunPage {
+	runs: RunSummary[];
+	nextCursor: string | null;
+}
+
+const SINCE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?Z)?$/;
+
+/**
+ * Canonical `YYYY-MM-DDTHH:MM:SS.mmmZ` form of a `since` filter (`YYYY-MM-DD` or a UTC ISO timestamp), so it compares
+ * correctly as a string against `started_at`. Impossible dates such as 2026-02-30 are rejected rather than rolled over.
+ */
+export function normalizeSince(since: string): string {
+	const ms = SINCE_RE.test(since) ? Date.parse(since) : Number.NaN;
+	const iso = Number.isFinite(ms) ? new Date(ms).toISOString() : "";
+	if (iso.slice(0, 10) !== since.slice(0, 10)) {
+		throw invalidRequest("since must be YYYY-MM-DD or a UTC ISO timestamp such as 2026-10-10T09:30:00Z", { since });
+	}
+	return iso;
+}
+
+export function isRunStatus(value: unknown): value is RunStatus {
+	return typeof value === "string" && (RUN_STATUSES as readonly string[]).includes(value);
+}
+
+/** Opaque keyset cursor for the (started_at DESC, id DESC) order. */
+export function encodeRunCursor(startedAt: string, id: string): string {
+	return Buffer.from(JSON.stringify([startedAt, id])).toString("base64url");
+}
+
+export function decodeRunCursor(cursor: string): { startedAt: string; id: string } {
+	try {
+		const value: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+		if (Array.isArray(value) && value.length === 2 && typeof value[0] === "string" && typeof value[1] === "string") {
+			return { startedAt: value[0], id: value[1] };
+		}
+	} catch {
+		// Falls through to the error below.
+	}
+	throw invalidRequest("cursor is not a cursor returned by this API", { cursor });
+}
+
+const SUMMARY_SELECT = `SELECT r.*,
+	(SELECT COUNT(*) FROM runs c WHERE c.parent_run_id = r.id) AS child_count,
+	(SELECT f.verdict FROM feedback f WHERE f.run_id = r.id ORDER BY f.created_at DESC, f.id DESC LIMIT 1) AS verdict
+	FROM runs r`;
+
+function decodeSummary(row: Record<string, unknown>): RunSummary {
+	const run = decode(row);
+	const instruction =
+		run.instruction.length > SUMMARY_INSTRUCTION_CHARS ? `${run.instruction.slice(0, SUMMARY_INSTRUCTION_CHARS)}…` : run.instruction;
+	return {
+		id: run.id,
+		parentRunId: run.parentRunId,
+		rootRunId: run.rootRunId,
+		instruction,
+		skill: run.skill,
+		status: run.status,
+		modelFinal: run.modelFinal,
+		tierFinal: run.tierFinal,
+		startedAt: run.startedAt,
+		endedAt: run.endedAt,
+		costUsd: run.costUsd,
+		costUnknown: run.costUnknown,
+		tokensIn: run.tokensIn,
+		tokensOut: run.tokensOut,
+		childCount: Number(row.child_count ?? 0),
+		verdict: (row.verdict as Verdict | null) ?? null,
+		error: run.error,
+	};
+}
+
+/** Filtered, keyset-paginated run summaries, newest first. Invalid filters throw INVALID_REQUEST. */
+export function queryRuns(db: Db, query: RunQuery = {}): RunPage {
+	const limit = query.limit ?? DEFAULT_RUN_PAGE;
+	if (!Number.isInteger(limit) || limit < 1 || limit > MAX_RUN_PAGE) {
+		throw invalidRequest(`limit must be an integer from 1 to ${MAX_RUN_PAGE}`, { limit });
+	}
+	if (query.status !== undefined && !isRunStatus(query.status)) {
+		throw invalidRequest(`status must be one of ${RUN_STATUSES.join(", ")}`, { status: query.status });
+	}
+	const since = query.since === undefined ? undefined : normalizeSince(query.since);
+	const where: string[] = [];
+	const args: SQLInputValue[] = [];
+	if (query.rootOnly ?? true) where.push("r.parent_run_id IS NULL");
+	if (query.status) {
+		where.push("r.status = ?");
+		args.push(query.status);
+	}
+	if (query.skill) {
+		where.push("r.skill = ?");
+		args.push(query.skill);
+	}
+	if (since) {
+		where.push("r.started_at >= ?");
+		args.push(since);
+	}
+	if (query.reviewed === true) where.push("EXISTS (SELECT 1 FROM feedback f WHERE f.run_id = r.id)");
+	if (query.reviewed === false) where.push("r.status != 'running' AND NOT EXISTS (SELECT 1 FROM feedback f WHERE f.run_id = r.id)");
+	if (query.cursor !== undefined) {
+		const after = decodeRunCursor(query.cursor);
+		where.push("(r.started_at < ? OR (r.started_at = ? AND r.id < ?))");
+		args.push(after.startedAt, after.startedAt, after.id);
+	}
+	const sql = `${SUMMARY_SELECT} ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY r.started_at DESC, r.id DESC LIMIT ?`;
+	const rows = db.prepare(sql).all(...args, limit + 1);
+	const runs = rows.slice(0, limit).map(decodeSummary);
+	const last = runs.at(-1);
+	return { runs, nextCursor: rows.length > limit && last ? encodeRunCursor(last.startedAt, last.id) : null };
+}
+
+export function getRunSummary(db: Db, id: string): RunSummary | undefined {
+	return getRunWithSummary(db, id)?.summary;
+}
+
+/** The full row (with `dirPath`) and the summary of one run, read with a single query. */
+export function getRunWithSummary(db: Db, id: string): { run: RunRow; summary: RunSummary } | undefined {
+	const row = db.prepare(`${SUMMARY_SELECT} WHERE r.id = ?`).get(id);
+	return row ? { run: decode(row), summary: decodeSummary(row) } : undefined;
+}
+
+export function listChildSummaries(db: Db, parentRunId: string): RunSummary[] {
+	return db.prepare(`${SUMMARY_SELECT} WHERE r.parent_run_id = ? ORDER BY r.started_at, r.id`).all(parentRunId).map(decodeSummary);
+}
+
+/** The run and all of its descendants (subagents at any depth), the run itself first. */
+export function descendantRunIds(db: Db, runId: string): string[] {
+	return db
+		.prepare(
+			`WITH RECURSIVE tree(id, depth) AS (
+				SELECT id, 0 FROM runs WHERE id = ?
+				UNION ALL SELECT r.id, t.depth + 1 FROM runs r JOIN tree t ON r.parent_run_id = t.id
+			) SELECT id FROM tree ORDER BY depth, id`,
+		)
+		.all(runId)
+		.map((row) => String(row.id));
 }
 
 export function listChildRuns(db: Db, parentRunId: string): RunRow[] {

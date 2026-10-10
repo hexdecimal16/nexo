@@ -1,10 +1,9 @@
 import { parseArgs } from "node:util";
 import type { Models } from "@earendil-works/pi-ai";
 import { EFFORTS, type Effort } from "@nexo/router";
-import { reindex, resolveNexoPaths, openDb, ensureNexoDirs } from "@nexo/store";
+import { type CostReport, costReport, ensureNexoDirs, openDb, reindex, resolveNexoPaths } from "@nexo/store";
 import { type ErrorPayload, NexoError, type NexoErrorCode, toErrorPayload } from "@nexo/telemetry";
 import { nonInteractivePrompter, type Prompter } from "@nexo/tools";
-import { type CostDimension, costReport } from "./cost-report.ts";
 import { createTtyPrompter } from "./prompter.ts";
 import { createRuntime } from "./runtime.ts";
 
@@ -147,19 +146,20 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 
 function costCommand(args: string[], io: CliIO, options: CliOptions): number {
 	const { values } = parseArgs({ args, options: { by: { type: "string" }, since: { type: "string" } } });
-	const by = (values.by ?? "model") as CostDimension;
-	if (!["model", "tier", "day", "run", "skill"].includes(by)) throw usageError("--by must be model, tier, day, run or skill");
-	const since = values.since ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
-	if (!/^\d{4}-\d{2}-\d{2}$/.test(since)) throw usageError("--since must be YYYY-MM-DD");
 	const paths = resolveNexoPaths(options.env ?? process.env);
 	ensureNexoDirs(paths);
-	const rows = costReport(openDb(paths.db), { by, since });
-	const total = rows.reduce((s, r) => s + r.costUsd, 0);
-	io.stdout.write(`Cost by ${by} since ${since}\n`);
-	for (const r of rows) {
+	let report: CostReport;
+	try {
+		report = costReport(openDb(paths.db), { by: values.by ?? "model", since: values.since });
+	} catch (error) {
+		if (error instanceof NexoError && error.code === "INVALID_REQUEST") throw usageError(error.message);
+		throw error;
+	}
+	io.stdout.write(`Cost by ${report.by} since ${report.since}\n`);
+	for (const r of report.rows) {
 		io.stdout.write(`  ${r.key.padEnd(40)} $${r.costUsd.toFixed(4).padStart(10)}  ${r.calls} calls${r.unknownCalls ? `  (${r.unknownCalls} unpriced)` : ""}\n`);
 	}
-	io.stdout.write(`  ${"total".padEnd(40)} $${total.toFixed(4).padStart(10)}\n`);
+	io.stdout.write(`  ${"total".padEnd(40)} $${report.totalUsd.toFixed(4).padStart(10)}\n`);
 	return 0;
 }
 
