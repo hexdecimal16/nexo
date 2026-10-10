@@ -7,7 +7,7 @@ import { addSpend, dayScope, getRun, getSpent, insertRun, listSpans, readRunJson
 import { REDACTED } from "@nexo/telemetry";
 import { runRow } from "../../store/test/fixtures.ts";
 import { createEngine, registerExtraTools } from "../src/index.ts";
-import { makeEnv } from "./helpers.ts";
+import { lastToolResultText, makeEnv } from "./helpers.ts";
 
 const SKILL = "---\nname: summarize\ndescription: Summarize text\nmetadata:\n  nexo-model: faux/slow\n---\nSummarize briefly.\n";
 
@@ -55,6 +55,22 @@ describe("engine run", () => {
 		const tool = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.name === "bash");
 		expect(tool?.status).toBe("error");
 		expect(JSON.stringify(tool?.attrs)).toContain("TOOL_DENIED");
+	});
+
+	it("shows the model a tool error's code and hint", async () => {
+		const env = makeEnv();
+		let toolResult = "";
+		env.faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("read", { path: "../../outside.txt" })]),
+			async (ctx) => {
+				toolResult = lastToolResultText(ctx);
+				return fauxAssistantMessage("ok");
+			},
+		]);
+		const result = await createEngine(env.deps).run({ instruction: "Read outside" });
+		expect(result.status).toBe("succeeded");
+		expect(toolResult).toMatch(/^TOOL_DENIED: Path "..\/..\/outside.txt" is outside the workspace/);
+		expect(toolResult).toContain("hint: Use a path inside the workspace");
 	});
 
 	it("ends with budget_exceeded once the first call overspends, keeping the partial trajectory", async () => {

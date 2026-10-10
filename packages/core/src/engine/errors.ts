@@ -1,3 +1,4 @@
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { NexoError } from "@nexo/telemetry";
 
 /** Maps a provider error message (pi encodes failures as text) to a NexoError code and hint. */
@@ -22,4 +23,27 @@ export function classifyProviderError(message: string): NexoError {
 export function retryAfterMs(errorMessage: string): number | undefined {
 	const match = /retry[- ]after[^0-9]{0,5}(\d+(?:\.\d+)?)/i.exec(errorMessage);
 	return match?.[1] ? Math.round(Number(match[1]) * 1000) : undefined;
+}
+
+/** The text the model sees for a failed tool call: code, retryability, message and hint. */
+export function toolErrorText(error: NexoError): string {
+	return `${error.code}${error.retryable ? " (retryable)" : ""}: ${error.message}${error.hint ? `\nhint: ${error.hint}` : ""}`;
+}
+
+/**
+ * pi turns an error thrown by a tool into a result holding only `error.message`, so a NexoError is rethrown with its
+ * code, retryability and hint in the message.
+ */
+export function withToolErrorCodes(tool: AgentTool<any, any>): AgentTool<any, any> {
+	return {
+		...tool,
+		execute: async (toolCallId, params, signal, onUpdate) => {
+			try {
+				return await tool.execute(toolCallId, params, signal, onUpdate);
+			} catch (error) {
+				if (error instanceof NexoError) throw new Error(toolErrorText(error), { cause: error });
+				throw error;
+			}
+		},
+	};
 }
