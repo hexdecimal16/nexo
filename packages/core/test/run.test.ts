@@ -320,4 +320,32 @@ describe("engine run", () => {
 		expect(result.status).toBe("failed");
 		expect(result.error).toMatchObject({ code: "PROVIDER_CONTEXT_OVERFLOW", retryable: false });
 	});
+
+	it("records what the model said, with tool calls and redacted arguments, on the llm_call span", async () => {
+		const env = makeEnv();
+		const secret = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz";
+		env.faux.setResponses([
+			fauxAssistantMessage([fauxText("Writing."), fauxToolCall("write", { path: "a.txt", content: `key=${secret}` })]),
+			fauxAssistantMessage("Wrote it."),
+		]);
+		const result = await createEngine(env.deps).run({ instruction: "Write a file" });
+		const llm = listSpans(env.deps.db, result.trajectoryId as string).filter((s) => s.kind === "llm_call");
+		expect(llm[0]?.attrs.content).toEqual([
+			{ type: "text", text: "Writing." },
+			{ type: "toolCall", id: expect.any(String), name: "write", arguments: { path: "a.txt", content: `key=${REDACTED}` } },
+		]);
+		expect(llm[1]?.attrs.content).toEqual([{ type: "text", text: "Wrote it." }]);
+		expect(readFileSync(join(result.runDir as string, "trajectory.jsonl"), "utf8")).not.toContain(secret);
+	});
+
+	it("offloads assistant content over 32 KB from the llm_call span to tool_outputs", async () => {
+		const env = makeEnv({ config: { budgets: { perRunUsd: 5 } } });
+		env.faux.setResponses([fauxAssistantMessage("z".repeat(40_000))]);
+		const result = await createEngine(env.deps).run({ instruction: "long answer" });
+		const llm = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.kind === "llm_call");
+		expect(llm?.attrs.content).toBeUndefined();
+		expect(llm?.payloadRef).toBe(`tool_outputs/${llm?.id}.txt`);
+		const saved = JSON.parse(readFileSync(join(result.runDir as string, llm?.payloadRef as string), "utf8"));
+		expect(saved).toEqual([{ type: "text", text: "z".repeat(40_000) }]);
+	});
 });

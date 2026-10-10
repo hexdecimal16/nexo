@@ -35,7 +35,7 @@ import { checkAdmission, recordSpend } from "../cost/admission.ts";
 import { budgetLine, RunBudget } from "../cost/budget.ts";
 import { estimateCallCostUsd, priceUsage } from "../cost/pricing.ts";
 import { classifyProviderError, contextOverflowError, retryAfterMs, toolErrorText, withToolErrorCodes } from "./errors.ts";
-import { assistantText, contentText, estimatePromptChars, lastAssistant, withBudgetLine } from "./messages.ts";
+import { assistantText, contentText, estimatePromptChars, lastAssistant, recordedContent, withBudgetLine } from "./messages.ts";
 import { DEFAULT_PLANNER_PROMPT, DEFAULT_SYSTEM_PROMPT, renderSystemPrompt } from "./prompts.ts";
 import { createGatedStreamFn } from "./provider-gate.ts";
 import { Recorder } from "./recorder.ts";
@@ -491,6 +491,9 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 					costUnknown ||= priced.costUnknown;
 					tokensIn += msg.usage.input + msg.usage.cacheRead + msg.usage.cacheWrite;
 					tokensOut += msg.usage.output;
+					const content = deps.redact(recordedContent(msg));
+					const contentJson = JSON.stringify(content);
+					const contentRef = contentJson.length > TOOL_RESULT_INLINE_LIMIT ? runDir.writeToolOutput(llmSpan, contentJson) : null;
 					recorder.finish(llmSpan, {
 						status: msg.stopReason === "error" || msg.stopReason === "aborted" ? "error" : "ok",
 						tokensIn: msg.usage.input,
@@ -499,7 +502,13 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 						cacheWrite: msg.usage.cacheWrite,
 						costUsd: priced.costUsd,
 						costUnknown: priced.costUnknown,
-						attrs: { stopReason: msg.stopReason, errorMessage: msg.errorMessage, responseModel: msg.responseModel },
+						payloadRef: contentRef,
+						attrs: {
+							stopReason: msg.stopReason,
+							errorMessage: msg.errorMessage,
+							responseModel: msg.responseModel,
+							content: contentRef ? undefined : content,
+						},
 					});
 					llmSpan = null;
 					break;

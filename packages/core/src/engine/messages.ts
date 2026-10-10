@@ -9,6 +9,20 @@ export function assistantText(message: AssistantMessage | undefined): string {
 		.join("");
 }
 
+export type RecordedContent =
+	| { type: "text"; text: string }
+	| { type: "thinking"; thinking: string; redacted?: true }
+	| { type: "toolCall"; id: string; name: string; arguments: unknown };
+
+/** What the model said, for the llm_call span: text, thinking and tool calls without provider signatures. */
+export function recordedContent(message: AssistantMessage): RecordedContent[] {
+	return message.content.map((block): RecordedContent => {
+		if (block.type === "text") return { type: "text", text: block.text };
+		if (block.type === "thinking") return block.redacted ? { type: "thinking", thinking: block.thinking, redacted: true } : { type: "thinking", thinking: block.thinking };
+		return { type: "toolCall", id: block.id, name: block.name, arguments: block.arguments };
+	});
+}
+
 export function lastAssistant(messages: readonly AgentMessage[]): AssistantMessage | undefined {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const m = messages[i];
