@@ -249,6 +249,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	const rootRunId = parent?.rootRunId ?? runId;
 	const startedAt = now().toISOString();
 	const leases = parent?.leases ?? new FileLeases();
+	if (parent) leases.link(runId, parent.runId);
 	const logger = deps.logger.child({ run_id: runId, correlation_id: rootRunId });
 	const taskGraphs: TaskGraphRecord[] = [];
 	let ownCost = 0;

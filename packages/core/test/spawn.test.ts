@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall, type JsonValue } from "@earendil-works/pi-ai";
@@ -320,5 +320,29 @@ describe("spawn", () => {
 		const result = await createEngine(env.deps).run({ instruction: "PARENT" });
 		const [child] = listChildRuns(env.deps.db, result.trajectoryId as string);
 		expect(asked).toEqual(["Allow bash: echo parent?", `[subagent ${child?.id.slice(-6)}] Allow bash: echo child?`]);
+	});
+
+	it("lets a child fill a file its parent scaffolded in a shared workspace", async () => {
+		const ws = mkdtempSync(join(tmpdir(), "nexo-shared-"));
+		const env = makeEnv();
+		let childToolResult = "";
+		useDispatcher(env, {
+			PARENT: [
+				fauxAssistantMessage([fauxToolCall("write", { path: "notes.md", content: "# Notes\nTODO\n" })]),
+				spawnCall([{ id: "fill", instruction: "FILLER" }]),
+				fauxAssistantMessage("done"),
+			],
+			FILLER: [
+				fauxAssistantMessage([fauxToolCall("edit", { path: "notes.md", oldText: "TODO", newText: "filled" })]),
+				async (ctx) => {
+					childToolResult = lastToolResultText(ctx);
+					return fauxAssistantMessage("filled");
+				},
+			],
+		});
+		const result = await createEngine(env.deps).run({ instruction: "PARENT", workspace: ws });
+		expect(result.status).toBe("succeeded");
+		expect(childToolResult).toBe("Edited notes.md");
+		expect(readFileSync(join(ws, "notes.md"), "utf8")).toBe("# Notes\nfilled\n");
 	});
 });
