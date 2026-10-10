@@ -8,6 +8,7 @@ import {
 	encodeRunCursor,
 	insertRun,
 	isCostDimension,
+	loadSpanTree,
 	normalizeSince,
 	openDb,
 	queryRuns,
@@ -127,6 +128,19 @@ describe("descendantRunIds", () => {
 		expect(descendantRunIds(db, root.id)).toEqual([root.id, child.id, grandchild.id]);
 		expect(descendantRunIds(db, child.id)).toEqual([child.id, grandchild.id]);
 		expect(descendantRunIds(db, "missing")).toEqual([]);
+	});
+
+	it("terminates on a self-parented run and on a parent loop", () => {
+		const db = openDb(":memory:");
+		db.exec("PRAGMA foreign_keys = OFF");
+		const self = runRow({ id: "self" });
+		self.parentRunId = self.id;
+		const a = runRow({ id: "loop-a", parentRunId: "loop-b" });
+		const b = runRow({ id: "loop-b", parentRunId: "loop-a" });
+		for (const r of [self, a, b]) insertRun(db, r);
+		expect(descendantRunIds(db, "self")).toEqual(["self"]);
+		expect(descendantRunIds(db, "loop-a")).toEqual(["loop-a", "loop-b"]);
+		expect(loadSpanTree(db, "loop-a").roots).toEqual([]);
 	});
 });
 
