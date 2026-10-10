@@ -1,0 +1,189 @@
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
+import { describe, expect, it } from "vitest";
+import { addSpend, dayScope, getRun, getSpent, insertRun, listSpans, readRunJson, readTrajectory } from "@nexo/store";
+import { REDACTED } from "@nexo/telemetry";
+import { runRow } from "../../store/test/fixtures.ts";
+import { createEngine } from "../src/index.ts";
+import { makeEnv } from "./helpers.ts";
+
+const SKILL = "---\nname: summarize\ndescription: Summarize text\nmetadata:\n  nexo-model: faux/slow\n---\nSummarize briefly.\n";
+
+describe("engine run", () => {
+	it("completes a simple run and records run.json, spans, cost and artifacts", async () => {
+		const env = makeEnv();
+		env.faux.setResponses([fauxAssistantMessage("All done.")]);
+		const result = await createEngine(env.deps).run({ instruction: "Say done" });
+
+		expect(result).toMatchObject({ status: "succeeded", output: "All done.", costUnknown: false });
+		expect(result.costUsd).toBeGreaterThan(0);
+		const dir = result.runDir as string;
+		const runJson = readRunJson(dir);
+		expect(runJson).toMatchObject({ status: "succeeded", model: { provider: "faux", id: "fast", source: "default", role: "s1" } });
+		expect(existsSync(join(dir, "artifacts", "system_prompt.md"))).toBe(true);
+		expect(existsSync(join(dir, "artifacts", "config.json"))).toBe(true);
+		const spans = listSpans(env.deps.db, result.trajectoryId as string);
+		expect(spans.map((s) => s.kind)).toEqual(expect.arrayContaining(["run", "turn", "llm_call"]));
+		const llm = spans.find((s) => s.kind === "llm_call");
+		expect(llm).toMatchObject({ model: "fast", tier: "s1", modelSource: "default", status: "ok" });
+		expect(llm?.costUsd).toBeCloseTo(result.costUsd);
+		expect(getRun(env.deps.db, result.trajectoryId as string)?.status).toBe("succeeded");
+		expect(getSpent(env.deps.db, `run:${result.trajectoryId}`)).toBeCloseTo(result.costUsd);
+		expect(readTrajectory(dir).length).toBe(spans.length);
+	});
+
+	it("executes tools inside the isolated run workspace", async () => {
+		const env = makeEnv();
+		env.faux.setResponses([
+			fauxAssistantMessage([fauxText("Writing."), fauxToolCall("write", { path: "out/a.txt", content: "hi" })]),
+			fauxAssistantMessage("Wrote it."),
+		]);
+		const result = await createEngine(env.deps).run({ instruction: "Write a file" });
+		expect(result.status).toBe("succeeded");
+		expect(readFileSync(join(result.runDir as string, "workspace", "out", "a.txt"), "utf8")).toBe("hi");
+		const tool = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.kind === "tool_call");
+		expect(tool).toMatchObject({ name: "write", status: "ok" });
+	});
+
+	it("blocks denied tools without failing the run", async () => {
+		const env = makeEnv({ config: { tools: { policy: { bash: "deny" } } } });
+		env.faux.setResponses([fauxAssistantMessage([fauxToolCall("bash", { command: "echo hi" })]), fauxAssistantMessage("Could not run it.")]);
+		const result = await createEngine(env.deps).run({ instruction: "Run echo" });
+		expect(result.status).toBe("succeeded");
+		const tool = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.name === "bash");
+		expect(tool?.status).toBe("error");
+		expect(JSON.stringify(tool?.attrs)).toContain("TOOL_DENIED");
+	});
+
+	it("ends with budget_exceeded once the first call overspends, keeping the partial trajectory", async () => {
+		const env = makeEnv({ config: { budgets: { perRunUsd: 0.5, estimateOutputTokens: 1 } } });
+		env.faux.setResponses([
+			fauxAssistantMessage([fauxText("x".repeat(4000)), fauxToolCall("read", { path: "missing.txt" })]),
+			fauxAssistantMessage("never reached"),
+		]);
+		const result = await createEngine(env.deps).run({ instruction: "Expensive", model: "faux/pricey" });
+		expect(result.status).toBe("budget_exceeded");
+		expect(result.error?.code).toBe("BUDGET_EXCEEDED");
+		expect(result.costUsd).toBeGreaterThan(0.5);
+		const llmCalls = listSpans(env.deps.db, result.trajectoryId as string).filter((s) => s.kind === "llm_call" && s.costUsd > 0);
+		expect(llmCalls).toHaveLength(1);
+	});
+
+	it("refuses admission when the daily ledger is exhausted", async () => {
+		const env = makeEnv();
+		addSpend(env.deps.db, [dayScope(new Date())], 100, new Date().toISOString());
+		const result = await createEngine(env.deps).run({ instruction: "anything" });
+		expect(result).toMatchObject({ status: "budget_exceeded", trajectoryId: null, error: { code: "BUDGET_EXCEEDED" } });
+	});
+
+	it("retries retryable provider errors and succeeds", async () => {
+		const env = makeEnv();
+		env.faux.setResponses([
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "429 Too Many Requests" }),
+			fauxAssistantMessage("Recovered."),
+		]);
+		const result = await createEngine(env.deps).run({ instruction: "retry me" });
+		expect(result).toMatchObject({ status: "succeeded", output: "Recovered." });
+		const llm = listSpans(env.deps.db, result.trajectoryId as string).filter((s) => s.kind === "llm_call");
+		expect(llm.map((s) => s.status)).toEqual(["error", "ok"]);
+	});
+
+	it("fails with PROVIDER_AUTH on non-retryable auth errors", async () => {
+		const env = makeEnv();
+		env.faux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "401 Unauthorized: invalid x-api-key" })]);
+		const result = await createEngine(env.deps).run({ instruction: "auth" });
+		expect(result.status).toBe("failed");
+		expect(result.error).toMatchObject({ code: "PROVIDER_AUTH" });
+		expect(result.error?.hint).toContain("API key");
+	});
+
+	it("returns SKILL_NOT_FOUND without creating a run directory", async () => {
+		const env = makeEnv();
+		const result = await createEngine(env.deps).run({ instruction: "x", skill: "missing" });
+		expect(result).toMatchObject({ status: "failed", trajectoryId: null, error: { code: "SKILL_NOT_FOUND" } });
+	});
+
+	it("returns CONFIG_INVALID for an invalid budget without creating a run directory", async () => {
+		const env = makeEnv();
+		const result = await createEngine(env.deps).run({ instruction: "x", budgetUsd: -1 });
+		expect(result).toMatchObject({ status: "failed", trajectoryId: null, error: { code: "CONFIG_INVALID" } });
+	});
+
+	it("runs a skill with its default model and records the source", async () => {
+		const env = makeEnv({ skills: { summarize: SKILL } });
+		env.faux.setResponses([fauxAssistantMessage("Summary.")]);
+		const result = await createEngine(env.deps).run({ instruction: "Summarize this", skill: "summarize" });
+		expect(result.status).toBe("succeeded");
+		const llm = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.kind === "llm_call");
+		expect(llm).toMatchObject({ model: "slow", modelSource: "skill", tier: "s2" });
+		expect(existsSync(join(result.runDir as string, "artifacts", "skills", "summarize", "SKILL.md"))).toBe(true);
+	});
+
+	it("records changes made in a --workspace directory", async () => {
+		const ws = mkdtempSync(join(tmpdir(), "nexo-real-ws-"));
+		writeFileSync(join(ws, "a.txt"), "old\n");
+		const env = makeEnv();
+		env.faux.setResponses([fauxAssistantMessage([fauxToolCall("edit", { path: "a.txt", oldText: "old", newText: "new" })]), fauxAssistantMessage("Edited.")]);
+		const result = await createEngine(env.deps).run({ instruction: "Edit", workspace: ws });
+		expect(readFileSync(join(ws, "a.txt"), "utf8")).toBe("new\n");
+		const diff = readFileSync(join(result.runDir as string, "changes", "changes.diff"), "utf8");
+		expect(diff).toContain("-old");
+		expect(diff).toContain("+new");
+	});
+
+	it("marks runs of dead processes as aborted when the engine starts", () => {
+		const env = makeEnv();
+		insertRun(env.deps.db, runRow({ id: "crashed", dirPath: "/x", pid: 2147483646 }));
+		createEngine(env.deps);
+		expect(getRun(env.deps.db, "crashed")?.status).toBe("aborted");
+	});
+
+	it("ends as aborted when the caller aborts", async () => {
+		const env = makeEnv();
+		const ac = new AbortController();
+		env.faux.setResponses([
+			async () => {
+				ac.abort();
+				await new Promise((r) => setTimeout(r, 50));
+				return fauxAssistantMessage("late");
+			},
+		]);
+		const result = await createEngine(env.deps).run({ instruction: "slow" }, ac.signal);
+		expect(result.status).toBe("aborted");
+		expect(readRunJson(result.runDir as string).status).toBe("aborted");
+	});
+
+	it("flags unpriced models as cost unknown", async () => {
+		const env = makeEnv();
+		env.faux.setResponses([fauxAssistantMessage("ok")]);
+		const result = await createEngine(env.deps).run({ instruction: "free", model: "faux/free" });
+		expect(result.costUnknown).toBe(true);
+	});
+
+	it("redacts secrets in the instruction and tool output everywhere", async () => {
+		const env = makeEnv({ config: { tools: { policy: { bash: "allow" } } } });
+		const secret = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz";
+		env.faux.setResponses([fauxAssistantMessage([fauxToolCall("bash", { command: `echo ${secret}` })]), fauxAssistantMessage("done")]);
+		const result = await createEngine(env.deps).run({ instruction: `use ${secret}` });
+		const dir = result.runDir as string;
+		for (const file of ["run.json", "trajectory.jsonl", "artifacts/config.json"]) {
+			const text = readFileSync(join(dir, file), "utf8");
+			expect(text).not.toContain(secret);
+		}
+		expect(readFileSync(join(dir, "run.json"), "utf8")).toContain(REDACTED);
+		const rows = env.deps.db.prepare("SELECT attrs_json FROM spans").all().map((r) => String(r.attrs_json)).join("\n");
+		expect(rows).not.toContain(secret);
+		expect(getRun(env.deps.db, result.trajectoryId as string)?.instruction).not.toContain(secret);
+	});
+
+	it("offloads tool results over 32 KB to tool_outputs", async () => {
+		const env = makeEnv({ config: { tools: { policy: { bash: "allow" } } } });
+		env.faux.setResponses([fauxAssistantMessage([fauxToolCall("bash", { command: "head -c 40000 /dev/zero | tr '\\0' 'b'" })]), fauxAssistantMessage("ok")]);
+		const result = await createEngine(env.deps).run({ instruction: "big output" });
+		const tool = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.name === "bash");
+		expect(tool?.payloadRef).toMatch(/^tool_outputs\/.+\.txt$/);
+		expect(readFileSync(join(result.runDir as string, tool?.payloadRef as string), "utf8").length).toBeGreaterThan(40000);
+	});
+});
