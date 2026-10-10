@@ -334,6 +334,58 @@ describe("poller", () => {
 		expect(h.timers.map((t) => t.ms)).toEqual([POLL_MS, POLL_MS]);
 	});
 
+	it("reruns a refresh that lands right after the loop scheduled its tick", async () => {
+		const timers: { cleared: boolean }[] = [];
+		let runs = 0;
+		let pending: Promise<void> | null = null;
+		const poller = createPoller({
+			task: async () => {
+				runs++;
+				return true;
+			},
+			onError: () => {},
+			setTimer: () => {
+				const timer = { cleared: false };
+				timers.push(timer);
+				// Queued while the loop is still finishing: runs before the loop's promise settles.
+				if (runs === 1) queueMicrotask(() => void (pending = poller.refresh()));
+				return timer;
+			},
+			clearTimer: (handle) => {
+				(handle as { cleared: boolean }).cleared = true;
+			},
+		});
+		await poller.refresh();
+		await new Promise((r) => setTimeout(r, 0));
+		await pending;
+		expect(runs).toBe(2);
+		expect(timers.filter((t) => !t.cleared)).toHaveLength(1);
+	});
+
+	it("keeps polling when onError throws", async () => {
+		const timers: { fire: () => void }[] = [];
+		const results: (boolean | Error)[] = [new Error("a"), true];
+		const poller = createPoller({
+			task: async () => {
+				const next = results.shift() ?? false;
+				if (next instanceof Error) throw next;
+				return next;
+			},
+			onError: () => {
+				throw new Error("render failed");
+			},
+			setTimer: (fire) => {
+				const timer = { fire };
+				timers.push(timer);
+				return timer;
+			},
+			clearTimer: () => {},
+		});
+		await poller.refresh();
+		await poller.refresh();
+		expect(timers).toHaveLength(1);
+	});
+
 	it("stops when the run ends and does not retry a failed first load", async () => {
 		const done = harness([false]);
 		await done.poller.refresh();
