@@ -419,7 +419,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 					budgetExceeded = true;
 					return { block: true, reason: "BUDGET_EXCEEDED: the run budget is exhausted", terminate: true };
 				}
-				const auth = await env.policy.authorize(deps.prompter, toolCall.name, args, signal);
+				const auth = await env.policy.authorize(deps.prompter, toolCall.name, args, signal, depth > 0 ? `subagent ${runId.slice(-6)}` : undefined);
 				if (!auth.allowed) return { block: true, reason: `${auth.error.code}: ${auth.error.message}` };
 				return undefined;
 			},

@@ -31,7 +31,8 @@ export type Authorization = { allowed: true } | { allowed: false; error: NexoErr
 
 export interface ToolPolicy {
 	decide(toolName: string, args: unknown): PolicyDecision;
-	authorize(prompter: Prompter, toolName: string, args: unknown, signal?: AbortSignal): Promise<Authorization>;
+	/** `label` names the asking run (for example a subagent) in the prompt. */
+	authorize(prompter: Prompter, toolName: string, args: unknown, signal?: AbortSignal, label?: string): Promise<Authorization>;
 }
 
 /** Shell metacharacters that chain or redirect commands; an allow rule never vouches for a command containing them. */
@@ -83,7 +84,7 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
 
 	return {
 		decide,
-		async authorize(prompter, toolName, args, signal) {
+		async authorize(prompter, toolName, args, signal, label) {
 			const decision = decide(toolName, args);
 			const ruleText = decision.rule === undefined ? "" : ` (rule #${decision.rule})`;
 			if (decision.action === "allow") return { allowed: true };
@@ -110,7 +111,8 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
 					}),
 				};
 			}
-			const ok = await prompter.confirm(`Allow ${toolName}: ${escapeControl(decision.subject)}?`, signal);
+			const prefix = label ? `[${escapeControl(label)}] ` : "";
+			const ok = await prompter.confirm(`${prefix}Allow ${toolName}: ${escapeControl(decision.subject)}?`, signal);
 			if (ok) return { allowed: true };
 			return {
 				allowed: false,

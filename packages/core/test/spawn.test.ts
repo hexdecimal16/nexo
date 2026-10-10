@@ -301,4 +301,24 @@ describe("spawn", () => {
 		expect(dependentPrompt).toContain("STEP-TWO");
 		expect(dependentPrompt).toContain("Results of tasks this depends on:\n[first]\nalpha-result-42");
 	});
+
+	it("labels a subagent's approval prompt with its run id", async () => {
+		const asked: string[] = [];
+		const env = makeEnv({
+			prompter: {
+				interactive: true,
+				confirm: async (q) => {
+					asked.push(q);
+					return false;
+				},
+			},
+		});
+		useDispatcher(env, {
+			PARENT: [fauxAssistantMessage([fauxToolCall("bash", { command: "echo parent" })]), spawnCall([{ id: "c", instruction: "ASKER" }]), fauxAssistantMessage("done")],
+			ASKER: [fauxAssistantMessage([fauxToolCall("bash", { command: "echo child" })]), fauxAssistantMessage("declined")],
+		});
+		const result = await createEngine(env.deps).run({ instruction: "PARENT" });
+		const [child] = listChildRuns(env.deps.db, result.trajectoryId as string);
+		expect(asked).toEqual(["Allow bash: echo parent?", `[subagent ${child?.id.slice(-6)}] Allow bash: echo child?`]);
+	});
 });
