@@ -1,0 +1,106 @@
+:root {
+	color-scheme: light dark;
+	--bg: #fbfbfa;
+	--fg: #1d1d1f;
+	--muted: #6b6b70;
+	--line: #e2e2e0;
+	--panel: #ffffff;
+	--accent: #2f5bd3;
+	--ok: #1f7a3d;
+	--bad: #b42318;
+	--warn: #9a5b00;
+	--queue: #c9c9c6;
+	--add-bg: #e6f4ea;
+	--del-bg: #fdecea;
+	--mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: #141416;
+		--fg: #e8e8ea;
+		--muted: #9a9aa2;
+		--line: #2c2c31;
+		--panel: #1c1c20;
+		--accent: #8aa8ff;
+		--ok: #5cc27e;
+		--bad: #ff7b6e;
+		--warn: #e3a64a;
+		--queue: #45454c;
+		--add-bg: #15301e;
+		--del-bg: #3a1714;
+	}
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+a, .link { color: var(--accent); }
+.link { background: none; border: 0; padding: 0; font: inherit; cursor: pointer; text-decoration: underline; }
+nav.top { display: flex; gap: 16px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+nav.top .brand { font-weight: 700; color: var(--fg); text-decoration: none; }
+main { max-width: 1280px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 20px; margin: 8px 0 12px; overflow-wrap: anywhere; }
+h2 { font-size: 15px; margin: 20px 0 8px; }
+h3 { font-size: 14px; margin: 4px 0; }
+pre { margin: 4px 0; padding: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; overflow: auto; max-height: 480px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.4 var(--mono); }
+.mono { font-family: var(--mono); font-size: 12px; }
+.muted { color: var(--muted); }
+.warn { color: var(--warn); }
+.num { text-align: right; white-space: nowrap; }
+.empty { text-align: center; color: var(--muted); padding: 24px; }
+.note { color: var(--muted); font-size: 13px; }
+.error { border: 1px solid var(--bad); color: var(--bad); padding: 8px 10px; border-radius: 4px; margin: 8px 0; }
+.error .hint { color: var(--fg); margin-top: 4px; }
+.tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+.tabs button { border: 1px solid var(--line); background: var(--panel); color: var(--fg); padding: 6px 12px; border-radius: 4px 4px 0 0; cursor: pointer; }
+.tabs button[aria-selected="true"] { border-bottom-color: var(--accent); font-weight: 600; }
+.filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 12px; }
+.filters label { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--muted); }
+input, select, textarea, button { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; }
+button[type="submit"], #load-more { cursor: pointer; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; background: var(--panel); }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; color: var(--muted); font-weight: 600; }
+.badge { display: inline-block; padding: 0 6px; border-radius: 10px; font-size: 12px; border: 1px solid currentColor; white-space: nowrap; }
+.status-succeeded, .status-ok, .verdict-done { color: var(--ok); }
+.status-failed, .status-error, .status-aborted, .status-budget_exceeded, .verdict-not_done { color: var(--bad); }
+.status-running { color: var(--accent); }
+.verdict-none, .status-other { color: var(--muted); }
+.run-header .facts, .child .facts { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 4px 0 8px; }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+.tree, .tree ul { list-style: none; margin: 0; padding-left: 16px; }
+.tree { padding-left: 0; }
+.tree summary, .span-leaf { cursor: pointer; padding: 2px 0; }
+.span-leaf { background: none; border: 0; text-align: left; padding: 2px 0 2px 14px; }
+.kind { font: 11px var(--mono); color: var(--muted); }
+.span-detail dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0 0 8px; }
+.span-detail dt { color: var(--muted); }
+.span-detail dd { margin: 0; overflow-wrap: anywhere; }
+.msg { margin: 8px 0; }
+.msg-label { font-size: 12px; color: var(--muted); }
+.msg-error pre { border-color: var(--bad); }
+.timeline { display: flex; flex-direction: column; gap: 4px; }
+.tl-row { display: grid; grid-template-columns: 200px minmax(0, 1fr) 260px; gap: 8px; align-items: center; }
+@media (max-width: 900px) { .tl-row { grid-template-columns: 1fr; } }
+.tl-label { background: none; border: 0; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; }
+.tl-label.depth-1 { padding-left: 12px; } .tl-label.depth-2 { padding-left: 24px; } .tl-label.depth-3 { padding-left: 36px; }
+.tl-label.depth-4, .tl-label.depth-5, .tl-label.depth-6 { padding-left: 48px; }
+.tl-bar { width: 100%; height: 14px; background: var(--panel); border: 1px solid var(--line); }
+.tl-queue { fill: var(--queue); }
+.tl-run { fill: var(--accent); }
+.tl-ok { fill: var(--ok); } .tl-error { fill: var(--bad); } .tl-running { fill: var(--accent); opacity: 0.6; }
+.tl-meta { color: var(--muted); }
+.feedback { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+.feedback fieldset { border: 1px solid var(--line); border-radius: 4px; display: flex; gap: 12px; }
+.feedback .comment { display: flex; flex-direction: column; flex: 1 1 280px; font-size: 12px; color: var(--muted); }
+.child { border: 1px solid var(--line); border-radius: 4px; padding: 8px 12px; margin-bottom: 8px; background: var(--panel); }
+.files { list-style: none; padding: 0; margin: 4px 0; }
+.files li { padding: 2px 0; }
+.diff span { display: block; }
+.diff-add { background: var(--add-bg); }
+.diff-del { background: var(--del-bg); }
+.diff-hunk { color: var(--accent); }
+.diff-meta { color: var(--muted); }
+.cost-bar { width: 160px; height: 8px; }
+.cost-bar rect { fill: var(--accent); }
+tr.warn td:first-child::after { content: " ⚠"; }
