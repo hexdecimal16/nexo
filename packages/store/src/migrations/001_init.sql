@@ -65,6 +65,7 @@ CREATE TABLE artifacts (
   created_at TEXT NOT NULL,
   UNIQUE (kind, name, version)
 );
+CREATE UNIQUE INDEX artifacts_one_active ON artifacts(kind, name) WHERE status = 'active';
 
 CREATE TABLE artifact_sets (
   id TEXT PRIMARY KEY,

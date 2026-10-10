@@ -45,16 +45,16 @@ function decode(row: Record<string, unknown>): ArtifactRow {
 }
 
 export function getActiveArtifact(db: Db, kind: ArtifactKind, name: string): ArtifactRow | undefined {
-	const row = db.prepare("SELECT * FROM artifacts WHERE kind = ? AND name = ? AND status = 'active'").get(kind, name);
+	const row = db.prepare("SELECT * FROM artifacts WHERE kind = ? AND name = ? AND status = 'active' ORDER BY version DESC LIMIT 1").get(kind, name);
 	return row ? decode(row) : undefined;
 }
 
 /** Returns the active version when its content matches; otherwise stores a new active manual version and retires the old one. */
 export function ensureManualArtifact(db: Db, kind: ArtifactKind, name: string, content: string, nowIso: string): ArtifactRow {
 	const hash = sha256(content);
-	const active = getActiveArtifact(db, kind, name);
-	if (active && active.contentHash === hash) return active;
 	return transaction(db, () => {
+		const active = getActiveArtifact(db, kind, name);
+		if (active && active.contentHash === hash) return active;
 		const max = db.prepare("SELECT COALESCE(MAX(version), 0) AS v FROM artifacts WHERE kind = ? AND name = ?").get(kind, name);
 		const row: ArtifactRow = {
 			id: newId(),

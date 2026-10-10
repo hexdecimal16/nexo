@@ -12,8 +12,13 @@ export function openDb(path: string): Db {
 	try {
 		if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
 		const db = new DatabaseSync(path);
-		db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
-		migrate(db);
+		try {
+			db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+			migrate(db);
+		} catch (error) {
+			db.close();
+			throw error;
+		}
 		return db;
 	} catch (cause) {
 		if (cause instanceof NexoError) throw cause;
@@ -32,24 +37,25 @@ export function migrate(db: Db): number[] {
 	db.exec(
 		"CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)",
 	);
-	const current = Number(db.prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_migrations").get()?.v ?? 0);
 	const files = readdirSync(MIGRATIONS_DIR)
 		.filter((f) => /^\d{3}_.+\.sql$/.test(f))
 		.sort();
 	const applied: number[] = [];
 	for (const file of files) {
 		const version = Number(file.slice(0, 3));
-		if (version <= current) continue;
 		const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
-		transaction(db, () => {
+		const ran = transaction(db, () => {
+			const current = Number(db.prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_migrations").get()?.v ?? 0);
+			if (version <= current) return false;
 			db.exec(sql);
 			db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)").run(
 				version,
 				file,
 				new Date().toISOString(),
 			);
+			return true;
 		});
-		applied.push(version);
+		if (ran) applied.push(version);
 	}
 	return applied;
 }
