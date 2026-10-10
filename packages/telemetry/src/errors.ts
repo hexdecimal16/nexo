@@ -16,6 +16,11 @@ export type NexoErrorCode =
 	| "SKILL_INVALID"
 	| "SKILL_NOT_FOUND"
 	| "STORE_IO"
+	| "INVALID_REQUEST"
+	| "FORBIDDEN"
+	| "NOT_FOUND"
+	| "METHOD_NOT_ALLOWED"
+	| "CONFLICT"
 	| "INTERNAL";
 
 export interface ErrorPayload {
