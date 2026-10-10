@@ -1,10 +1,14 @@
-import { createInterface } from "node:readline/promises";
+import { createInterface, type Interface } from "node:readline/promises";
 import { type Db, recordFeedback } from "@nexo/store";
 import type { Redactor } from "@nexo/telemetry";
 
-/** Asks one line on the terminal; resolves null when the user presses Ctrl-C or input ends. */
+/**
+ * Asks one line on the terminal; resolves null when the user presses Ctrl-C, input ends or `signal` aborts.
+ * `close` releases the terminal after the last question.
+ */
 export interface LineAsker {
-	ask(question: string): Promise<string | null>;
+	ask(question: string, signal?: AbortSignal): Promise<string | null>;
+	close?(): void;
 }
 
 export type ReviewChoice = "done" | "not_done" | "skip";
@@ -30,19 +34,60 @@ export function isInteractiveTerminal(stdio: { stdin: { isTTY?: boolean }; stdou
 	return stdio.stdin.isTTY === true && stdio.stdout.isTTY === true && stdio.stderr.isTTY === true;
 }
 
+/** One readline interface serves every question, so input typed ahead of a question is kept for the next one. */
 export function createTtyLineAsker(input: NodeJS.ReadableStream, output: NodeJS.WritableStream): LineAsker {
+	let rl: Interface | null = null;
+	let closed = false;
+	const lines: string[] = [];
+	let waiter: ((line: string | null) => void) | null = null;
+
+	const finish = (line: string | null): void => {
+		const resolve = waiter;
+		waiter = null;
+		resolve?.(line);
+	};
+	const open = (): Interface => {
+		if (rl) return rl;
+		rl = createInterface({ input, output });
+		rl.on("line", (line) => {
+			if (waiter) finish(line);
+			else lines.push(line);
+		});
+		const end = (): void => {
+			closed = true;
+			finish(null);
+		};
+		rl.on("SIGINT", end);
+		rl.on("close", end);
+		return rl;
+	};
+
 	return {
-		async ask(question) {
-			const rl = createInterface({ input, output });
-			try {
-				return await new Promise<string | null>((resolve) => {
-					rl.once("SIGINT", () => resolve(null));
-					rl.once("close", () => resolve(null));
-					rl.question(question).then(resolve, () => resolve(null));
-				});
-			} finally {
-				rl.close();
+		ask(question, signal) {
+			if (signal?.aborted || closed) return Promise.resolve(null);
+			const buffered = lines.shift();
+			const iface = open();
+			if (buffered !== undefined) {
+				output.write(question);
+				return Promise.resolve(buffered);
 			}
+			return new Promise<string | null>((resolve) => {
+				const onAbort = (): void => {
+					finish(null);
+					iface.close();
+				};
+				signal?.addEventListener("abort", onAbort, { once: true });
+				waiter = (line) => {
+					signal?.removeEventListener("abort", onAbort);
+					resolve(line);
+				};
+				iface.setPrompt(question);
+				iface.prompt();
+			});
+		},
+		close() {
+			closed = true;
+			rl?.close();
 		},
 	};
 }
@@ -51,11 +96,19 @@ export function createTtyLineAsker(input: NodeJS.ReadableStream, output: NodeJS.
  * The post-run review prompt (spec §7.1 step 6). A verdict is written through `recordFeedback`; skip, Ctrl-C, end of
  * input or three unrecognised answers leave the run unreviewed, so it appears in the UI review queue.
  */
-export async function promptReview(options: { asker: LineAsker; db: Db; runId: string; redact: Redactor; io: ReviewIO; now?: () => Date }): Promise<ReviewChoice> {
-	const { asker, io } = options;
+export async function promptReview(options: { asker: LineAsker; db: Db; runId: string; redact: Redactor; io: ReviewIO; signal?: AbortSignal; now?: () => Date }): Promise<ReviewChoice> {
+	try {
+		return await askAndRecord(options);
+	} finally {
+		options.asker.close?.();
+	}
+}
+
+async function askAndRecord(options: { asker: LineAsker; db: Db; runId: string; redact: Redactor; io: ReviewIO; signal?: AbortSignal; now?: () => Date }): Promise<ReviewChoice> {
+	const { asker, io, signal } = options;
 	let choice: ReviewChoice | null = null;
 	for (let attempt = 0; attempt < 3 && choice === null; attempt++) {
-		const answer = await asker.ask("Review this run: [d]one / [n]ot done / [s]kip ");
+		const answer = await asker.ask("Review this run: [d]one / [n]ot done / [s]kip ", signal);
 		if (answer === null) {
 			choice = "skip";
 			break;
@@ -67,7 +120,7 @@ export async function promptReview(options: { asker: LineAsker; db: Db; runId: s
 		io.stderr.write("Skipped. The run is waiting in the review queue of `nexo ui`.\n");
 		return "skip";
 	}
-	const comment = choice === "not_done" ? ((await asker.ask("What was missing or wrong? (optional) ")) ?? "") : "";
+	const comment = choice === "not_done" ? ((await asker.ask("What was missing or wrong? (optional) ", signal)) ?? "") : "";
 	recordFeedback(options.db, {
 		runId: options.runId,
 		verdict: choice,

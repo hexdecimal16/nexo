@@ -115,6 +115,32 @@ describe("post-run review", () => {
 		expect(listFeedback(db, run?.id ?? "")[0]?.comment).toBe("wrong greeting");
 	});
 
+	it("does not open the prompt when a signal arrives after the run finished", async () => {
+		const h = home(config);
+		const ac = new AbortController();
+		const t = io();
+		const spy = { ask: vi.fn(async () => "d") };
+		const watched = { ...t, stderr: { write: (s: string) => (s.startsWith("✓") && ac.abort(), t.stderr.write(s)) } };
+		const code = await runCli(["run", "x"], watched, { ...h, models: fauxModels([fauxAssistantMessage("ok")]), reviewAsker: spy, signal: ac.signal });
+		expect(code).toBe(130);
+		expect(spy.ask).not.toHaveBeenCalled();
+	});
+
+	it("ends the prompt and returns the signal code when a signal arrives while it waits", async () => {
+		const h = home(config);
+		const ac = new AbortController();
+		const reviewAsker = {
+			ask: (_q: string, signal?: AbortSignal) =>
+				new Promise<string | null>((resolve) => {
+					signal?.addEventListener("abort", () => resolve(null), { once: true });
+					setTimeout(() => ac.abort(), 5);
+				}),
+		};
+		const code = await runCli(["run", "x"], io(), { ...h, models: fauxModels([fauxAssistantMessage("ok")]), reviewAsker, signal: ac.signal });
+		expect(code).toBe(130);
+		expect(queryRuns(openDb(resolveNexoPaths(h.env).db), { reviewed: false }).runs).toHaveLength(1);
+	});
+
 	it("never asks with --no-review or without a terminal, so the run waits in the review queue", async () => {
 		const h = home(config);
 		const reviewAsker = { ask: vi.fn(async () => "d") };

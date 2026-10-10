@@ -154,12 +154,14 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 	if (result.status === "aborted") return EXIT_SIGINT;
 	const asker = values["no-review"] ? null : options.reviewAsker === undefined ? defaultReviewAsker() : options.reviewAsker;
 	if (asker && result.trajectoryId) {
+		if (options.signal?.aborted) return EXIT_SIGINT;
 		try {
-			await promptReview({ asker, db: runtime.db, runId: result.trajectoryId, redact: runtime.redact, io });
+			await promptReview({ asker, db: runtime.db, runId: result.trajectoryId, redact: runtime.redact, io, signal: options.signal });
 		} catch (error) {
 			if (!(error instanceof NexoError)) throw error;
 			printError(io, error.toPayload());
 		}
+		if (options.signal?.aborted) return EXIT_SIGINT;
 	}
 	if (result.status === "succeeded") return 0;
 	return result.error ? exitCodeFor(result.error.code) : 1;
