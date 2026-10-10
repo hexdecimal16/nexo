@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, relative } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { ChangeTracker } from "./change-tracker.ts";
@@ -83,6 +84,7 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 		description: "Replace one exact, unique occurrence of oldText with newText.",
 		parameters: EditParams,
 		execute: async (_id, params) => {
+			if (params.oldText === "") throw new Error("oldText must not be empty");
 			const abs = resolveConfined(root, params.path);
 			if (!existsSync(abs)) throw new Error(`File not found: ${params.path}`);
 			const content = readFileSync(abs, "utf8");
@@ -101,32 +103,43 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 		parameters: BashParams,
 		execute: (_id, params, signal) =>
 			new Promise((resolvePromise) => {
+				if (signal?.aborted) return resolvePromise(textResult("Command aborted\n", true));
 				const timeoutMs = params.timeoutMs ?? ctx.bashTimeoutMs;
-				const child = spawn("bash", ["-c", params.command], { cwd: root, env: process.env });
-				let output = "";
+				const child = spawn("bash", ["-c", params.command], { cwd: root, env: process.env, detached: true });
+				const killGroup = () => {
+					try {
+						if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+					} catch {
+						// the process group already exited
+					}
+				};
+				const chunks: Buffer[] = [];
+				let captured = 0;
 				let truncated = false;
 				let ended: "timeout" | "aborted" | undefined;
 				const collect = (chunk: Buffer) => {
-					if (output.length >= MAX_BASH_OUTPUT_BYTES) {
-						truncated = true;
-						return;
-					}
-					output += chunk.toString("utf8").slice(0, MAX_BASH_OUTPUT_BYTES - output.length);
+					const room = MAX_BASH_OUTPUT_BYTES - captured;
+					if (chunk.length > room) truncated = true;
+					if (room <= 0) return;
+					const part = chunk.subarray(0, room);
+					chunks.push(part);
+					captured += part.length;
 				};
 				child.stdout.on("data", collect);
 				child.stderr.on("data", collect);
 				const timer = setTimeout(() => {
 					ended = "timeout";
-					child.kill("SIGKILL");
+					killGroup();
 				}, timeoutMs);
 				const onAbort = () => {
 					ended = "aborted";
-					child.kill("SIGKILL");
+					killGroup();
 				};
 				signal?.addEventListener("abort", onAbort, { once: true });
 				child.on("close", (code) => {
 					clearTimeout(timer);
 					signal?.removeEventListener("abort", onAbort);
+					const output = new StringDecoder("utf8").write(Buffer.concat(chunks));
 					const body = `${output}${truncated ? "\n[output truncated]" : ""}`;
 					if (ended === "timeout") return resolvePromise(textResult(`Command timed out after ${timeoutMs}ms\n${body}`, true));
 					if (ended === "aborted") return resolvePromise(textResult(`Command aborted\n${body}`, true));
