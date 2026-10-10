@@ -1,0 +1,67 @@
+import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
+import { NexoError } from "@nexo/telemetry";
+
+export type Db = DatabaseSync;
+
+const MIGRATIONS_DIR = fileURLToPath(new URL("./migrations/", import.meta.url));
+
+export function openDb(path: string): Db {
+	try {
+		if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+		const db = new DatabaseSync(path);
+		db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+		migrate(db);
+		return db;
+	} catch (cause) {
+		if (cause instanceof NexoError) throw cause;
+		throw new NexoError({
+			code: "STORE_IO",
+			message: `Cannot open database at ${path}`,
+			hint: "Check that NEXO_HOME points to a writable directory",
+			context: { path },
+			cause,
+		});
+	}
+}
+
+/** Applies pending `NNN_name.sql` migrations in order, each in its own transaction. Returns applied versions. */
+export function migrate(db: Db): number[] {
+	db.exec(
+		"CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)",
+	);
+	const current = Number(db.prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_migrations").get()?.v ?? 0);
+	const files = readdirSync(MIGRATIONS_DIR)
+		.filter((f) => /^\d{3}_.+\.sql$/.test(f))
+		.sort();
+	const applied: number[] = [];
+	for (const file of files) {
+		const version = Number(file.slice(0, 3));
+		if (version <= current) continue;
+		const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
+		transaction(db, () => {
+			db.exec(sql);
+			db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)").run(
+				version,
+				file,
+				new Date().toISOString(),
+			);
+		});
+		applied.push(version);
+	}
+	return applied;
+}
+
+export function transaction<T>(db: Db, fn: () => T): T {
+	db.exec("BEGIN IMMEDIATE");
+	try {
+		const result = fn();
+		db.exec("COMMIT");
+		return result;
+	} catch (error) {
+		db.exec("ROLLBACK");
+		throw error;
+	}
+}
