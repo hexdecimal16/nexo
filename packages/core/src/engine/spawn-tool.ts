@@ -75,6 +75,7 @@ async function runSpawn(
 					sharedWorkspace: ctx.sharedWorkspace,
 					changeTracker: ctx.changeTracker,
 					parentRemainingFraction,
+					sessionId: ctx.sessionId,
 				},
 			});
 			ctx.addChildCost(result.costUsd, result.costUnknown);

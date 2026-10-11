@@ -50,12 +50,17 @@ export const ConfigSchema = Type.Object(
 		budgets: Type.Object(
 			{
 				perRunUsd: Usd,
+				perSessionUsd: Usd,
 				dailyUsd: Usd,
 				monthlyUsd: Usd,
 				optimDefaultUsd: Usd,
 				escalationCutoff: Type.Number({ minimum: 0, maximum: 1 }),
 				estimateOutputTokens: Type.Integer({ minimum: 1 }),
 			},
+			{ additionalProperties: false },
+		),
+		session: Type.Object(
+			{ compactAt: Type.Number({ exclusiveMinimum: 0, maximum: 1 }) },
 			{ additionalProperties: false },
 		),
 		spawn: Type.Object(
@@ -125,12 +130,14 @@ export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 	router: { policy: "artifact:router_policy", maxEscalations: 1 },
 	budgets: {
 		perRunUsd: 0.5,
+		perSessionUsd: 5,
 		dailyUsd: 10,
 		monthlyUsd: 150,
 		optimDefaultUsd: 5,
 		escalationCutoff: 0.8,
 		estimateOutputTokens: 4096,
 	},
+	session: { compactAt: 0.8 },
 	spawn: { maxParallelSubagents: 4, maxDepth: 4 },
 	skills: { dirs: ["$NEXO_HOME/skills", "./.nexo/skills"], pins: {} },
 	tools: {
