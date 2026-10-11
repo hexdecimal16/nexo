@@ -3,10 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import { insertRun, insertScore, listCalibrations, openDb, recordFeedback, resolveNexoPaths } from "@nexo/store";
+import { insertRun, insertScore, JUDGE_CASE_TARGET, listCalibrations, listEvalCases, openDb, recordFeedback, resolveNexoPaths } from "@nexo/store";
 import { createRedactor } from "@nexo/telemetry";
 import { runRow, scoreRow } from "../../store/test/fixtures.ts";
-import { type CliIO, runCli } from "../src/main.ts";
+import { type CliIO, escalationLine, runCli, scoreLines } from "../src/main.ts";
 
 function io(): CliIO & { out: () => string; err: () => string } {
 	let out = "";
@@ -36,13 +36,13 @@ const ROLES = { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id
 const withJudge = { models: { ...ROLES, judge: [{ provider: "google", id: "gemini-x" }] }, providers: { faux: { retryBaseDelayMs: 0 } } };
 
 /** Judged runs with human verdicts: (judge passed, human verdict) per run. */
-function seed(h: { env: NodeJS.ProcessEnv }, cases: [boolean, "done" | "not_done"][]): void {
+function seed(h: { env: NodeJS.ProcessEnv }, cases: [boolean, "done" | "not_done"][], model = "google/gemini-x", text?: { instruction: string; comment: string }): void {
 	const db = openDb(resolveNexoPaths(h.env).db);
 	for (const [passed, verdict] of cases) {
-		const run = runRow({ status: "succeeded", instruction: `task judged ${passed ? "pass" : "fail"}` });
+		const run = runRow({ status: "succeeded", instruction: text?.instruction ?? `task judged ${passed ? "pass" : "fail"}` });
 		insertRun(db, run);
-		insertScore(db, scoreRow(run.id, { passed, value: passed ? 0.9 : 0.2, model: "google/gemini-x" }));
-		recordFeedback(db, { runId: run.id, verdict, comment: verdict === "not_done" ? "missed it" : "", nowIso: "2026-10-11T00:00:00.000Z", redact: createRedactor() });
+		insertScore(db, scoreRow(run.id, { passed, value: passed ? 0.9 : 0.2, model }));
+		recordFeedback(db, { runId: run.id, verdict, comment: text?.comment ?? (verdict === "not_done" ? "missed it" : ""), nowIso: "2026-10-11T00:00:00.000Z", redact: createRedactor() });
 	}
 	db.close();
 }
@@ -92,11 +92,75 @@ describe("nexo eval judge", () => {
 
 	it("calibrates a judge named with --judge instead of the configured one", async () => {
 		const h = home(withJudge);
-		seed(h, [[true, "done"]]);
+		seed(h, [[true, "done"], [false, "done"]], "openai/gpt-x");
+		seed(h, [[true, "not_done"]], "google/gemini-x");
 		const t = io();
 		expect(await runCli(["eval", "judge", "--judge", "openai/gpt-x"], t, h)).toBe(0);
 		expect(t.out()).toContain("Judge openai/gpt-x vs human verdicts");
-		expect(t.out()).toContain("No run has both");
+		expect(t.out()).toContain("cases        2");
+	});
+
+	it("rejects an empty or malformed --judge and an unknown flag with exit 2", async () => {
+		for (const argv of [["--judge", ""], ["--judge", "nomodel"], ["--judge", "a/b+c"], ["--judge", "/id"], ["--bogus"]]) {
+			const t = io();
+			expect(await runCli(["eval", "judge", ...argv], t, home(withJudge))).toBe(2);
+		}
+	});
+
+	it("prints the one-class text and exits 0 when every verdict is in one class", async () => {
+		const h = home(withJudge);
+		seed(h, [[true, "done"], [true, "done"]]);
+		const t = io();
+		expect(await runCli(["eval", "judge"], t, h)).toBe(0);
+		expect(t.out()).toContain("cases        2");
+		expect(t.out()).toContain("Cohen's κ    – (every verdict is in one class)");
+	});
+
+	it("syncs disagreements into judge_rubric eval cases, also when the judge score came after the feedback", async () => {
+		const h = home(withJudge);
+		const db = openDb(resolveNexoPaths(h.env).db);
+		const run = runRow({ status: "succeeded", instruction: "late judged" });
+		insertRun(db, run);
+		recordFeedback(db, { runId: run.id, verdict: "not_done", comment: "wrong", nowIso: "2026-10-11T00:00:00.000Z", redact: createRedactor() });
+		insertScore(db, scoreRow(run.id, { passed: true, model: "google/gemini-x" }));
+		expect(listEvalCases(db, JUDGE_CASE_TARGET)).toEqual([]);
+		db.close();
+		expect(await runCli(["eval", "judge"], io(), h)).toBe(0);
+		const after = openDb(resolveNexoPaths(h.env).db);
+		expect(listEvalCases(after, JUDGE_CASE_TARGET)).toEqual([expect.objectContaining({ sourceRunId: run.id, expected: "not_done" })]);
+		after.close();
+	});
+
+	it("escapes control and bidi characters in the judge key, instruction and comment", async () => {
+		const h = home(withJudge);
+		const bad = { instruction: "do\u001b[31m it\u202e", comment: "line1\nline2\u001b[2J" };
+		seed(h, [[true, "not_done"]], "google/gemini-x", bad);
+		const t = io();
+		expect(await runCli(["eval", "judge"], t, h)).toBe(0);
+		expect(t.out()).not.toMatch(/[\u001b\u202e]/);
+		expect(t.out()).toContain("\\x1b[31m it\\u202e");
+		expect(t.out()).toContain("line1\\x0aline2\\x1b[2J");
+		const k = io();
+		expect(await runCli(["eval", "judge", "--judge", "a/b\u001b[1m\u202e"], k, h)).toBe(0);
+		expect(k.out()).not.toMatch(/[\u001b\u202e]/);
+		expect(k.out()).toContain("a/b\\x1b[1m\\u202e");
+	});
+});
+
+describe("scoreLines", () => {
+	it("escapes model-produced text and prints failed scores", () => {
+		const base = scoreRow("r");
+		const lines = scoreLines({
+			scores: [
+				{ ...base, scorerName: "n\u001b[1m\u202e", status: "failed", value: null, passed: null, error: { code: "SCORER_FAILED", message: "bad\nline\u001b[2J", retryable: false, hint: "", context: {} } },
+				{ ...base, scorerName: "ok", details: { sameFamily: ["x"] } },
+			],
+			escalations: 2,
+		});
+		expect(lines.join("\n")).not.toMatch(/[\u001b\u202e]/);
+		expect(lines[0]).toBe("  score n\\x1b[1m\\u202e: failed [SCORER_FAILED] bad\\x0aline\\x1b[2J");
+		expect(lines[1]).toBe("  score ok: 0.80 ✓ pass (same-family judge)");
+		expect(lines[2]).toBe("  escalated to s2 2 times");
 	});
 });
 
@@ -112,5 +176,11 @@ describe("nexo run with scorers", () => {
 		expect(t.err()).toContain("↑ escalating to faux/strong (verify_fail: deterministic scorer failed: says-done)");
 		expect(t.err()).toContain("  score says-done: 1.00 ✓ pass");
 		expect(t.err()).toContain("  escalated to s2 once");
+	});
+
+	it("escapes control characters in the escalation line", () => {
+		const line = escalationLine(1, "faux/s\u001b[1m", "verify_fail", "reason\nx\u202e");
+		expect(line).not.toMatch(/[\u001b\u202e]/);
+		expect(line).toBe("\n    ↑ escalating to faux/s\\x1b[1m (verify_fail: reason\\x0ax\\u202e)\n");
 	});
 });

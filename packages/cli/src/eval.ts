@@ -13,6 +13,9 @@ export function evalCommand(args: string[], io: CliIO, options: CliOptions): num
 	const [sub, ...rest] = args;
 	if (sub !== "judge") throw usageError(sub === undefined ? "nexo eval needs a subcommand" : `Unknown eval subcommand "${sub}"`);
 	const { values } = parseArgs({ args: rest, options: { judge: { type: "string" } } });
+	if (values.judge !== undefined && !values.judge.split("+").every((part) => /^[^/+\s]+\/\S+$/.test(part))) {
+		throw usageError("--judge must be provider/id, with several models joined by +");
+	}
 	const env = options.env ?? process.env;
 	const paths = resolveNexoPaths(env);
 	ensureNexoDirs(paths);

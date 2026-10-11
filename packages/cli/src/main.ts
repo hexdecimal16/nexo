@@ -61,6 +61,11 @@ function defaultReviewAsker(): LineAsker | null {
 	return createTtyLineAsker(process.stdin, process.stderr);
 }
 
+/** The line printed when a run escalates to S2; the reason is model-influenced text, so it is control-escaped. */
+export function escalationLine(depth: number, model: string, trigger: string, reason: string): string {
+	return `\n${"  ".repeat(depth)}  ↑ escalating to ${escapeControl(model)} (${trigger}: ${escapeControl(reason)})\n`;
+}
+
 /** One line per scorer of the latest scoring round, then the escalation count. Scorer text is model-produced, so it is control-escaped. */
 export function scoreLines(result: Pick<RunResult, "scores" | "escalations">): string[] {
 	const lines = (result.scores ?? []).map((s) => {
@@ -104,7 +109,7 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 			if (event.type === "text_delta" && event.depth === 0) io.stdout.write(event.delta);
 			if (event.type === "run_start" && event.depth > 0) io.stderr.write(`  ↳ subagent ${event.runId.slice(-6)}: ${event.instruction.split("\n")[0]?.slice(0, 80)}\n`);
 			if (event.type === "tool_start") io.stderr.write(`${"  ".repeat(event.depth)}  · ${event.toolName}\n`);
-			if (event.type === "escalation" && event.applied) io.stderr.write(`\n${"  ".repeat(event.depth)}  ↑ escalating to ${escapeControl(event.model)} (${event.trigger}: ${escapeControl(event.reason)})\n`);
+			if (event.type === "escalation" && event.applied) io.stderr.write(escalationLine(event.depth, event.model, event.trigger, event.reason));
 		},
 	});
 

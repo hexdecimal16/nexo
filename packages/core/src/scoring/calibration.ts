@@ -8,6 +8,7 @@ import {
 	judgeHumanPairs,
 	listDisagreements,
 	recordCalibration,
+	syncJudgeDisagreement,
 } from "@nexo/store";
 import { NexoError } from "@nexo/telemetry";
 import type { NexoConfig } from "../config/schema.ts";
@@ -37,7 +38,10 @@ export function calibrateJudge(db: Db, config: NexoConfig, options: { judgeKey?:
 			hint: 'Set models.judge in your nexo config, for example [{"provider":"google","id":"<model-id>"}], or pass --judge <provider/id>',
 		});
 	}
-	const matrix = confusionMatrix(judgeHumanPairs(db, key));
+	const pairs = judgeHumanPairs(db, key);
+	// Feedback sync only sees verdicts that existed when the human answered; this covers runs judged afterwards or reindexed.
+	for (const pair of pairs) syncJudgeDisagreement(db, pair.runId, options.nowIso);
+	const matrix = confusionMatrix(pairs);
 	const calibration = agreementStats(matrix).cases > 0 ? recordCalibration(db, key, options.nowIso) : null;
 	return {
 		judgeKey: key,
