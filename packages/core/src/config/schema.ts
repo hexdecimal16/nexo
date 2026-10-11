@@ -18,6 +18,11 @@ const ModelSpecSchema = Type.Object(
 );
 const ModelRefSchema = Type.Object({ ref: Type.Union([Type.Literal("s1"), Type.Literal("s2")]) }, { additionalProperties: false });
 const PolicyActionSchema = Type.Union([Type.Literal("allow"), Type.Literal("ask"), Type.Literal("deny")]);
+const ToolRuleSchema = Type.Object(
+	{ tool: Type.String({ minLength: 1 }), match: Type.Optional(Type.String()), action: PolicyActionSchema },
+	{ additionalProperties: false },
+);
+const NonInteractiveAskSchema = Type.Union([Type.Literal("allow"), Type.Literal("deny")]);
 const LooseSection = Type.Object({}, { additionalProperties: true });
 const Usd = Type.Number({ exclusiveMinimum: 0 });
 /** `artifact:<kind>` (the active artifact of that kind, seeded with the built-in default) or `file:<path>`. */
@@ -60,6 +65,17 @@ export const ConfigSchema = Type.Object(
 				subagents: Type.Boolean(),
 				/** Set by loadConfig: "project" when ./.nexo/config.json supplied `scorers`. A value in a config file is ignored. */
 				scorersOrigin: Type.Optional(Type.Union([Type.Literal("user"), Type.Literal("project")])),
+				/**
+				 * Set by loadConfig: the tool policy from the user-level layers only (defaults, ~/.nexo/config.json, CLI
+				 * overrides). Project-level command scorers are checked against it, so ./.nexo/config.json cannot approve its
+				 * own commands. A value in a config file is ignored.
+				 */
+				scorerTools: Type.Optional(
+					Type.Object(
+						{ policy: Type.Record(Type.String(), PolicyActionSchema), rules: Type.Array(ToolRuleSchema), nonInteractiveAsk: NonInteractiveAskSchema },
+						{ additionalProperties: false },
+					),
+				),
 			},
 			{ additionalProperties: false },
 		),
@@ -99,13 +115,8 @@ export const ConfigSchema = Type.Object(
 		tools: Type.Object(
 			{
 				policy: Type.Record(Type.String(), PolicyActionSchema),
-				rules: Type.Array(
-					Type.Object(
-						{ tool: Type.String({ minLength: 1 }), match: Type.Optional(Type.String()), action: PolicyActionSchema },
-						{ additionalProperties: false },
-					),
-				),
-				nonInteractiveAsk: Type.Union([Type.Literal("allow"), Type.Literal("deny")]),
+				rules: Type.Array(ToolRuleSchema),
+				nonInteractiveAsk: NonInteractiveAskSchema,
 				bashTimeoutMs: Type.Integer({ minimum: 1000 }),
 			},
 			{ additionalProperties: false },

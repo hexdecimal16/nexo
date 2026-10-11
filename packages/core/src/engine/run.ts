@@ -373,6 +373,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	const scoreRows: ScoreRow[] = [];
 	let latestScores: ScoreRow[] = [];
 	let rubric = "";
+	// The scorers are fixed before the run starts, so the agent cannot change them by editing a scorer file.
+	const plan = planScoring(env, skill, depth, workspace);
 
 	const recorder = new Recorder({ db, runDir, runId, now, redact: deps.redact });
 	const runJson = (status: RunStatus, output: string, error: ErrorPayload | null): RunJson => ({
@@ -414,10 +416,12 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		snapshot("system_prompt", "default", DEFAULT_SYSTEM_PROMPT, "system_prompt.md");
 		snapshot("planner_prompt", "default", DEFAULT_PLANNER_PROMPT, "planner_prompt.md");
 		if (skill) snapshot("skill", skill.name, skill.content, `skills/${skill.name}/SKILL.md`);
-		const judgeRubric = loadJudgeRubric(db, config, nowIso, deps.redact);
-		rubric = judgeRubric.rubric;
-		members.push({ kind: "judge_rubric", name: judgeRubric.artifact.name, artifactId: judgeRubric.artifact.id, version: judgeRubric.artifact.version });
-		runDir.writeArtifact("judge_rubric.md", judgeRubric.artifact.content);
+		if (plan.specs.some((s) => s.kind === "llm_judge")) {
+			const judgeRubric = loadJudgeRubric(db, config, nowIso, deps.redact);
+			rubric = judgeRubric.rubric;
+			members.push({ kind: "judge_rubric", name: judgeRubric.artifact.name, artifactId: judgeRubric.artifact.id, version: judgeRubric.artifact.version });
+			runDir.writeArtifact("judge_rubric.md", judgeRubric.artifact.content);
+		}
 		artifactSetId = createArtifactSet(db, members, nowIso);
 		runDir.writeArtifact("config.json", JSON.stringify(config, null, 2));
 
@@ -794,8 +798,6 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			}
 		};
 
-		// The scorers are fixed before the loop starts, so the agent cannot change them by editing a scorer file.
-		const plan = planScoring(env, skill, depth);
 		input.signal?.addEventListener("abort", onAbort, { once: true });
 		if (input.signal?.aborted) {
 			status = "aborted";
