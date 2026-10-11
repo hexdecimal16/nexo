@@ -1,6 +1,10 @@
 import { addSpend, type Db, dayScope, getSpent, monthScope } from "@nexo/store";
 import { NexoError } from "@nexo/telemetry";
 
+export function sessionScope(sessionId: string): string {
+	return `session:${sessionId}`;
+}
+
 export function checkAdmission(db: Db, budgets: { dailyUsd: number; monthlyUsd: number }, now: Date): void {
 	const checks = [
 		{ scope: dayScope(now), limit: budgets.dailyUsd, label: "Daily", key: "budgets.dailyUsd", wait: "tomorrow (UTC)" },
@@ -27,9 +31,12 @@ export function checkAdmission(db: Db, budgets: { dailyUsd: number; monthlyUsd: 
 	}
 }
 
-export function recordSpend(db: Db, rootRunId: string, usd: number, now: Date): void {
+/** Adds spend to the day, month and root-run ledger scopes, and to `session:<id>` for a session turn. */
+export function recordSpend(db: Db, rootRunId: string, usd: number, now: Date, sessionId: string | null = null): void {
 	if (!Number.isFinite(usd) || usd < 0) {
 		throw new NexoError({ code: "INTERNAL", message: `recordSpend received an invalid amount: ${usd}`, context: { rootRunId, usd } });
 	}
-	addSpend(db, [dayScope(now), monthScope(now), `run:${rootRunId}`], usd, now.toISOString());
+	const scopes = [dayScope(now), monthScope(now), `run:${rootRunId}`];
+	if (sessionId) scopes.push(sessionScope(sessionId));
+	addSpend(db, scopes, usd, now.toISOString());
 }

@@ -55,6 +55,17 @@ describe("loadConfig", () => {
 		expect(DEFAULT_CONFIG.skills.dirs).toEqual(["$NEXO_HOME/skills", "./.nexo/skills"]);
 	});
 
+	it("defaults the session budget and compaction threshold and validates them", () => {
+		const { paths, cwd } = setup({ models });
+		const { config } = loadConfig({ paths, cwd });
+		expect(config.budgets.perSessionUsd).toBe(5);
+		expect(config.session.compactAt).toBe(0.8);
+		const bad = setup({ models, session: { compactAt: 1.5 }, budgets: { perSessionUsd: 0 } });
+		const err = expectConfigError(() => loadConfig({ paths: bad.paths, cwd: bad.cwd }));
+		expect(err.message).toContain("/session/compactAt");
+		expect(err.message).toContain("/budgets/perSessionUsd");
+	});
+
 	it("EffortSchema accepts exactly the router's efforts", () => {
 		for (const effort of EFFORTS) expect(Value.Check(EffortSchema, effort)).toBe(true);
 		expect(Value.Check(EffortSchema, "extreme")).toBe(false);

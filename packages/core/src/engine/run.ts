@@ -1,5 +1,14 @@
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
-import { type Api, type AssistantMessage, isContextOverflow, isRetryableAssistantError, type Model, type Models } from "@earendil-works/pi-ai";
+import {
+	type Api,
+	type AssistantMessage,
+	isContextOverflow,
+	isRetryableAssistantError,
+	type Message,
+	type Model,
+	type Models,
+	normalizeContext,
+} from "@earendil-works/pi-ai";
 import { createModelRegistry, type Effort, type ModelChoice, type ModelRegistry, type ResolvedModel, resolveModel } from "@nexo/router";
 import { createLoadSkillTool, formatSkillIndex, type SkillCatalog } from "@nexo/skills";
 import {
@@ -65,11 +74,37 @@ export interface EngineDeps {
 	onEvent?: (event: EngineEvent) => void;
 }
 
+/** Longest tool result text carried by a `tool_end` event. */
+export const TOOL_END_PREVIEW_CHARS = 2_000;
+
+/** Live progress of a run tree. Payloads are redacted. `depth` is 0 for the root run and grows by one per subagent level. */
 export type EngineEvent =
 	| { type: "run_start"; runId: string; parentRunId: string | null; instruction: string; depth: number }
 	| { type: "text_delta"; runId: string; depth: number; delta: string }
-	| { type: "tool_start"; runId: string; depth: number; toolName: string }
+	| { type: "tool_start"; runId: string; depth: number; toolName: string; toolCallId: string; args: unknown }
+	| { type: "tool_end"; runId: string; depth: number; toolName: string; toolCallId: string; isError: boolean; durationMs: number; preview: string }
+	| { type: "llm_end"; runId: string; depth: number; costUsd: number; costUnknown: boolean; tokensIn: number; tokensOut: number }
+	| { type: "compaction_start"; runId: string; depth: number }
+	| { type: "compaction_end"; runId: string; depth: number; ok: boolean; costUsd: number }
 	| { type: "run_end"; runId: string; depth: number; status: RunStatus; costUsd: number };
+
+/** What a `prepareHistory` hook can use to shrink the history before the run's first request. */
+export interface HistoryContext {
+	/** `RunRequest.history`, without system messages. */
+	history: Message[];
+	/** The model the run will call. */
+	model: Model<Api>;
+	/** Estimated input tokens of the first request with `messages` as the history: system prompt, tools, messages and the instruction. */
+	estimateTokens(messages: readonly Message[]): number;
+	/**
+	 * One completion by the `s1` model, recorded as a `compaction` span whose cost is charged to this run (its budget,
+	 * its cost and the spend ledger). Throws when the budget cannot cover the estimate, on provider errors and on abort.
+	 */
+	summarize(input: { system: string; text: string }): Promise<string>;
+	signal?: AbortSignal;
+}
+
+export type HistoryPreparer = (ctx: HistoryContext) => Promise<Message[]>;
 
 export interface RunRequest {
 	instruction: string;
@@ -78,6 +113,20 @@ export interface RunRequest {
 	effort?: Effort;
 	workspace?: string;
 	budgetUsd?: number;
+	/** Conversation so far, seeded into the agent before the instruction. System messages are dropped. */
+	history?: Message[];
+	/** Runs before the first request and returns the history to seed instead of `history`. */
+	prepareHistory?: HistoryPreparer;
+	/** Session link, recorded on the run and in its run.json; spend is also charged to the `session:<id>` ledger scope. */
+	sessionId?: string;
+	turnIndex?: number;
+}
+
+export interface RunModelInfo {
+	provider: string;
+	id: string;
+	effort: Effort;
+	contextWindow: number;
 }
 
 export interface RunResult {
@@ -88,6 +137,10 @@ export interface RunResult {
 	costUsd: number;
 	costUnknown: boolean;
 	error?: ErrorPayload;
+	/** The run's new messages in order: the instruction, assistant messages and tool results. Empty when no run started. */
+	messages: Message[];
+	/** The model the run used; null when it failed before resolving one. */
+	model: RunModelInfo | null;
 }
 
 export interface Engine {
@@ -115,6 +168,7 @@ export interface ParentLink {
 	sharedWorkspace: string | null;
 	changeTracker: ChangeTracker | null;
 	parentRemainingFraction: number;
+	sessionId: string | null;
 }
 
 export interface ExecuteInput {
@@ -139,6 +193,7 @@ export interface RunToolContext {
 	toolSpanId: (toolCallId: string) => string | null;
 	recordTaskGraph: (record: TaskGraphRecord) => void;
 	addChildCost: (usd: number, unknown: boolean) => void;
+	sessionId: string | null;
 }
 
 export type ExtraToolsFactory = (ctx: RunToolContext) => AgentTool<any>[];
@@ -166,10 +221,21 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 function failedResult(redact: Redactor, error: unknown, status: RunStatus = "failed"): RunResult {
-	return { trajectoryId: null, runDir: null, status, output: "", costUsd: 0, costUnknown: false, error: redact(toErrorPayload(error)) };
+	return {
+		trajectoryId: null,
+		runDir: null,
+		status,
+		output: "",
+		costUsd: 0,
+		costUnknown: false,
+		error: redact(toErrorPayload(error)),
+		messages: [],
+		model: null,
+	};
 }
 
-export function createEngine(deps: EngineDeps): Engine {
+/** Builds the run-tree-wide services and marks runs of dead processes as aborted. */
+export function createEngineEnv(deps: EngineDeps): EngineEnv {
 	const now = deps.now ?? (() => new Date());
 	const limits: Record<string, number | undefined> = {};
 	for (const [name, p] of Object.entries(deps.config.providers)) limits[name] = p.maxConcurrent;
@@ -183,6 +249,12 @@ export function createEngine(deps: EngineDeps): Engine {
 	};
 	const recovered = recoverCrashedRuns(deps.db, isPidAlive, now().toISOString());
 	if (recovered.length > 0) deps.logger.warn("marked crashed runs as aborted", { run_ids: recovered });
+	return env;
+}
+
+export function createEngine(deps: EngineDeps): Engine {
+	const env = createEngineEnv(deps);
+	const { now } = env;
 
 	return {
 		async run(request, signal) {
@@ -221,6 +293,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	const { config, db } = deps;
 	const { request, budget, parent } = input;
 	const depth = parent ? parent.depth : 0;
+	const sessionId = parent ? parent.sessionId : (request.sessionId ?? null);
 
 	// Resolve skill, model and workspace before creating anything on disk.
 	const skill = request.skill ? deps.skills.skills.get(request.skill) : undefined;
@@ -291,6 +364,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		configSnapshotHash: deps.configHash,
 		workspace,
 		taskGraphs,
+		...(parent ? {} : { sessionId, turnIndex: request.turnIndex ?? null }),
 	});
 
 	// Setup up to and including the DB row. A failure here leaves no row, only a failed run.json.
@@ -332,6 +406,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			tokensOut: 0,
 			pid: process.pid,
 			error: null,
+			sessionId: parent ? null : sessionId,
+			turnIndex: parent ? null : (request.turnIndex ?? null),
 		});
 	} catch (caught) {
 		logger.error("run setup failed", { error: caught });
@@ -339,7 +415,17 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		try {
 			runDir.writeRunJson(runJson("failed", "", payload));
 		} catch {}
-		return { trajectoryId: runId, runDir: runDir.root, status: "failed", output: "", costUsd: 0, costUnknown: false, error: payload };
+		return {
+			trajectoryId: runId,
+			runDir: runDir.root,
+			status: "failed",
+			output: "",
+			costUsd: 0,
+			costUnknown: false,
+			error: payload,
+			messages: [],
+			model: modelInfo(model, resolved),
+		};
 	}
 
 	// From here the DB row exists: every path below ends by writing a terminal status to run.json and the DB.
@@ -351,6 +437,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	let llmSpan: string | null = null;
 	let agent: Agent | null = null;
 	let budgetExceeded = false;
+	let seededCount = 0;
 	const onAbort = () => agent?.abort();
 	try {
 		runSpan = recorder.start({
@@ -400,6 +487,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				childCost += usd;
 				costUnknown ||= unknown;
 			},
+			sessionId,
 		};
 		for (const factory of extraToolFactories) baseTools.push(...factory(toolCtx));
 		const tools = baseTools.map(withToolErrorCodes);
@@ -419,9 +507,95 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			estimatePromptChars(messages.filter((m) => m.role !== "system"));
 
 		const overrides = config.pricingOverrides;
+
+		/** Charges one priced call to this run: its budget, its own cost, its token totals and the spend ledger. */
+		const chargeCall = (callModel: Model<Api>, msg: AssistantMessage) => {
+			const priced = priceUsage(callModel, msg.usage, overrides);
+			budget.charge(priced.costUsd);
+			recordSpend(db, rootRunId, priced.costUsd, now(), sessionId);
+			ownCost += priced.costUsd;
+			costUnknown ||= priced.costUnknown;
+			tokensIn += msg.usage.input + msg.usage.cacheRead + msg.usage.cacheWrite;
+			tokensOut += msg.usage.output;
+			deps.onEvent?.({
+				type: "llm_end",
+				runId,
+				depth,
+				costUsd: priced.costUsd,
+				costUnknown: priced.costUnknown,
+				tokensIn: msg.usage.input + msg.usage.cacheRead + msg.usage.cacheWrite,
+				tokensOut: msg.usage.output,
+			});
+			return priced;
+		};
+
+		const summarize = async (req: { system: string; text: string }): Promise<string> => {
+			const role = config.models.s1;
+			const summaryModel = env.registry.get(role.provider, role.id);
+			const effort = env.registry.clampEffort(summaryModel, role.effort ?? "off");
+			const estimate = estimateCallCostUsd(summaryModel, overrides, req.system.length + req.text.length, config.budgets.estimateOutputTokens);
+			if (!budget.canAfford(estimate)) {
+				throw new NexoError({
+					code: "BUDGET_EXCEEDED",
+					message: `The run budget cannot cover the compaction call (estimated $${estimate.toFixed(4)}, $${budget.remainingUsd().toFixed(4)} left)`,
+					hint: "Raise the session budget with /budget or start a new conversation with /clear",
+				});
+			}
+			const span = recorder.start({
+				kind: "compaction",
+				name: summaryModel.id,
+				parentSpanId: rootSpan,
+				model: summaryModel.id,
+				provider: summaryModel.provider,
+				tier: "s1",
+				effort,
+				modelSource: "default",
+			});
+			deps.onEvent?.({ type: "compaction_start", runId, depth });
+			let costUsd = 0;
+			let ok = false;
+			try {
+				const context = normalizeContext({ systemPrompt: req.system, messages: [{ role: "user", content: req.text, timestamp: now().getTime() }] });
+				const stream = await env.streamFn(summaryModel, context, { reasoning: effort === "off" ? undefined : effort, signal: input.signal });
+				const msg = await stream.result();
+				const priced = chargeCall(summaryModel, msg);
+				costUsd = priced.costUsd;
+				const summary = assistantText(msg);
+				const failed = msg.stopReason === "error" || msg.stopReason === "aborted";
+				recorder.finish(span, {
+					status: failed ? "error" : "ok",
+					tokensIn: msg.usage.input,
+					tokensOut: msg.usage.output,
+					cacheRead: msg.usage.cacheRead,
+					cacheWrite: msg.usage.cacheWrite,
+					costUsd: priced.costUsd,
+					costUnknown: priced.costUnknown,
+					attrs: { stopReason: msg.stopReason, errorMessage: msg.errorMessage, summary: deps.redact(summary) },
+				});
+				if (msg.stopReason === "aborted") throw new NexoError({ code: "INTERNAL", message: "The compaction call was aborted" });
+				if (failed) throw classifyProviderError(msg.errorMessage ?? "Provider error");
+				ok = true;
+				return summary;
+			} catch (caught) {
+				if (recorder.get(span)?.status === "running") recorder.finish(span, { status: "error", attrs: { error: deps.redact(toErrorPayload(caught)) } });
+				throw caught;
+			} finally {
+				deps.onEvent?.({ type: "compaction_end", runId, depth, ok, costUsd });
+			}
+		};
+
+		let history: Message[] = (request.history ?? []).filter((m) => m.role !== "system");
+		if (request.prepareHistory && !input.signal?.aborted) {
+			const tokensFor = (messages: readonly Message[]) =>
+				Math.ceil(requestChars([...messages, { role: "user", content: request.instruction, timestamp: 0 }], tools) / 4);
+			history = (await request.prepareHistory({ history, model, estimateTokens: tokensFor, summarize, signal: input.signal })).filter(
+				(m) => m.role !== "system",
+			);
+		}
+
 		const runAgent: Agent = new Agent({
 			streamFn: env.streamFn,
-			initialState: { systemPrompt, model, thinkingLevel: resolved.effort, tools },
+			initialState: { systemPrompt, model, thinkingLevel: resolved.effort, tools, messages: history },
 			toolExecution: "parallel",
 			prepareRequest: async ({ context, model: requestModel }) => {
 				const chars = requestChars(context.messages, context.tools ?? tools);
@@ -454,6 +628,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			},
 		});
 		agent = runAgent;
+		seededCount = runAgent.state.messages.length;
 
 		let turnIndex = 0;
 		runAgent.subscribe((event: AgentEvent) => {
@@ -484,13 +659,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				case "message_end": {
 					if (event.message.role !== "assistant" || !llmSpan) break;
 					const msg = event.message as AssistantMessage;
-					const priced = priceUsage(model, msg.usage, overrides);
-					budget.charge(priced.costUsd);
-					recordSpend(db, rootRunId, priced.costUsd, now());
-					ownCost += priced.costUsd;
-					costUnknown ||= priced.costUnknown;
-					tokensIn += msg.usage.input + msg.usage.cacheRead + msg.usage.cacheWrite;
-					tokensOut += msg.usage.output;
+					const priced = chargeCall(model, msg);
 					const content = deps.redact(recordedContent(msg));
 					const contentJson = JSON.stringify(content);
 					const contentRef = contentJson.length > TOOL_RESULT_INLINE_LIMIT ? runDir.writeToolOutput(llmSpan, contentJson) : null;
@@ -516,13 +685,23 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				case "tool_execution_start": {
 					const kind = event.toolName === "load_skill" ? "skill_load" : "tool_call";
 					toolSpans.set(event.toolCallId, recorder.start({ kind, name: event.toolName, parentSpanId: turnSpan ?? rootSpan, attrs: { args: deps.redact(event.args) } }));
-					deps.onEvent?.({ type: "tool_start", runId, depth, toolName: event.toolName });
+					deps.onEvent?.({ type: "tool_start", runId, depth, toolName: event.toolName, toolCallId: event.toolCallId, args: deps.redact(event.args) });
 					break;
 				}
 				case "tool_execution_end": {
+					const text = contentText((event.result as { content?: unknown } | undefined)?.content);
+					deps.onEvent?.({
+						type: "tool_end",
+						runId,
+						depth,
+						toolName: event.toolName,
+						toolCallId: event.toolCallId,
+						isError: event.isError,
+						durationMs: event.durationMs ?? 0,
+						preview: deps.redact(text.slice(0, TOOL_END_PREVIEW_CHARS)),
+					});
 					const spanId = toolSpans.get(event.toolCallId);
 					if (!spanId) break;
-					const text = contentText((event.result as { content?: unknown } | undefined)?.content);
 					const payloadRef = toolPayloadRefs.get(event.toolCallId) ?? null;
 					recorder.finish(spanId, {
 						status: event.isError ? "error" : "ok",
@@ -619,5 +798,25 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	);
 	attempt("run_end event", () => deps.onEvent?.({ type: "run_end", runId, depth, status, costUsd: totalCost }));
 	logger.info("run finished", { status, cost_usd: totalCost });
-	return { trajectoryId: runId, runDir: runDir.root, status, output, costUsd: totalCost, costUnknown, ...(safeError ? { error: safeError } : {}) };
+	const messages = agent ? newMessages(agent.state.messages, seededCount) : [];
+	return {
+		trajectoryId: runId,
+		runDir: runDir.root,
+		status,
+		output,
+		costUsd: totalCost,
+		costUnknown,
+		...(safeError ? { error: safeError } : {}),
+		messages,
+		model: modelInfo(model, resolved),
+	};
+}
+
+function modelInfo(model: Model<Api>, resolved: ResolvedModel): RunModelInfo {
+	return { provider: model.provider, id: model.id, effort: resolved.effort, contextWindow: model.contextWindow };
+}
+
+/** The pi messages appended after the seeded system prompt and history, without system messages. */
+function newMessages(messages: readonly AgentMessage[], seededCount: number): Message[] {
+	return messages.slice(seededCount).filter((m): m is Message => m.role === "user" || m.role === "assistant" || m.role === "toolResult");
 }
