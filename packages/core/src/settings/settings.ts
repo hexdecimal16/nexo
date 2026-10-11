@@ -5,7 +5,10 @@ import {
 	createMutableRedactor,
 	createRedactor,
 	createSecretSet,
+	containsSecret,
 	type ErrorPayload,
+	type Logger,
+	MIN_SECRET_LENGTH,
 	type MutableRedactor,
 	NexoError,
 	type Redactor,
@@ -101,10 +104,16 @@ export interface Settings {
 	loadConfig(): LoadedConfig;
 	/** Re-reads `credentials.json` and the config; pass as `SessionDeps.reloadConfig` (`() => settings.reloadConfig()`). */
 	reloadConfig(): ReloadedConfig;
+	/** Sends warnings (keys too short to redact; never their values) to the logger, including ones raised before. */
+	attachLogger(logger: Logger): void;
+	/** INVALID_REQUEST unless the provider is in the registry, the config or the credentials file. */
 	keyStatus(provider: string): KeyStatus;
 	/** Providers of the configured models (s1, s2, judge, reflector, embedding) in that order, then the others in the credentials file. */
 	keyProviders(): KeyStatus[];
-	/** Stores a key (trimmed; at least 8 characters, no whitespace) and redacts it from now on. INVALID_REQUEST on bad input. */
+	/**
+	 * Stores a key (trimmed; at least MIN_SECRET_LENGTH characters, no whitespace) and redacts it from now on. The
+	 * provider must be in the model registry or the config. INVALID_REQUEST on bad input.
+	 */
 	setKey(provider: string, apiKey: string): KeyStatus;
 	/** Deletes the provider's entry from `credentials.json` and returns the resulting status. */
 	removeKey(provider: string): KeyStatus;
@@ -122,8 +131,6 @@ export interface Settings {
 	modelCatalog(): CatalogProvider[];
 }
 
-const MIN_KEY_LENGTH = 8;
-const PROVIDER_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** What pi-ai's `getEnvApiKey` returns for ambient credentials (Google ADC, AWS profiles) instead of a key. */
 const AMBIENT_CREDENTIALS = "<authenticated>";
 
@@ -152,10 +159,11 @@ function modelProviders(merged: Record<string, unknown>): string[] {
 	return out;
 }
 
-function validateProvider(provider: string): void {
-	if (!PROVIDER_NAME.test(provider)) {
-		throw invalidRequest(`Invalid provider name "${provider}"`, "Use the provider id from the model list, e.g. anthropic or openai");
-	}
+/** Configured provider names: providers of the configured models and keys of `providers`. */
+function configuredProviders(merged: Record<string, unknown>): string[] {
+	const out = modelProviders(merged);
+	if (isPlainObject(merged.providers)) for (const name of Object.keys(merged.providers)) if (!out.includes(name)) out.push(name);
+	return out;
 }
 
 export function keyStatusLabel(status: KeyStatus): string {
@@ -171,23 +179,73 @@ export function createSettings(options: SettingsOptions): Settings {
 	let patterns: readonly string[] = [];
 	const redact = createMutableRedactor(createRedactor(patterns, { secrets }));
 	let credentials: CredentialsData = {};
+	let logger: Logger | null = null;
+	const pendingWarnings: { msg: string; fields: Record<string, unknown> }[] = [];
+	const warned = new Set<string>();
+
+	const warnOnce = (id: string, msg: string, fields: Record<string, unknown>): void => {
+		if (warned.has(id)) return;
+		warned.add(id);
+		if (logger) logger.warn(msg, fields);
+		else pendingWarnings.push({ msg, fields });
+	};
+
+	/** Adds a key to the redactor; a key too short to be an exact-match pattern is logged (without its value) instead. */
+	const registerSecret = (provider: string, source: "env" | "file", value: string): void => {
+		if (secrets.add(value)) return;
+		warnOnce(`${source}:${provider}`, "API key too short to redact; it is used but not redacted as an exact match", {
+			provider,
+			source,
+			min_length: MIN_SECRET_LENGTH,
+		});
+	};
 
 	const refreshCredentials = (): void => {
 		credentials = readCredentials(paths.credentials);
-		for (const entry of Object.values(credentials)) if (entry.apiKey) secrets.add(entry.apiKey);
+		for (const [provider, entry] of Object.entries(credentials)) if (entry.apiKey) registerSecret(provider, "file", entry.apiKey);
 	};
 
-	const envKey = (provider: string): string | undefined => getEnvApiKey(provider, env);
+	const envKey = (provider: string): string | undefined => {
+		const value = getEnvApiKey(provider, env)?.trim();
+		return value ? value : undefined;
+	};
 
 	const resolveApiKey: ApiKeyResolver = (provider) => {
 		const fromEnv = envKey(provider);
 		if (fromEnv !== undefined) {
 			if (fromEnv === AMBIENT_CREDENTIALS) return undefined;
-			secrets.add(fromEnv);
+			registerSecret(provider, "env", fromEnv);
 			return fromEnv;
 		}
 		return credentials[provider]?.apiKey;
 	};
+
+	const configured = (): string[] => {
+		try {
+			return configuredProviders(deepMerge(mergedLayers(layers()), options.overrides));
+		} catch {
+			return [];
+		}
+	};
+
+	/**
+	 * Accepts provider ids of the model registry and configured providers (plus, unless `strict`, names already in the
+	 * credentials file). The name is never echoed: it may be a key pasted into the wrong field.
+	 */
+	const validateProvider = (provider: string, strict: boolean): void => {
+		const known =
+			!containsSecret(provider) &&
+			(options.models?.getProvider(provider) !== undefined || configured().includes(provider) || (!strict && provider in credentials));
+		if (!known) {
+			const ids = [...new Set([...(options.models?.getProviders().map((p) => p.id) ?? []), ...configured()])].sort();
+			throw invalidRequest(
+				"Unknown provider: not in the model registry or the nexo config",
+				ids.length > 0 ? `Use a provider id such as ${ids.slice(0, 12).join(", ")}${ids.length > 12 ? ", …" : ""}` : "Configure models.s1/models.s2 first",
+			);
+		}
+	};
+
+	const layers = () => readConfigLayers(paths.config, cwd);
 
 	const keyStatus = (provider: string): KeyStatus => {
 		const stored = credentials[provider];
@@ -197,7 +255,6 @@ export function createSettings(options: SettingsOptions): Settings {
 		return { provider, state: "unset", envVar: null, last4: null, inFile };
 	};
 
-	const layers = () => readConfigLayers(paths.config, cwd);
 
 	const loadEffective = (): LoadedConfig => {
 		const loaded = loadConfig({ paths, cwd, overrides: options.overrides });
@@ -222,6 +279,10 @@ export function createSettings(options: SettingsOptions): Settings {
 		redact,
 		resolveApiKey,
 		loadConfig: loadEffective,
+		attachLogger(next) {
+			logger = next;
+			for (const w of pendingWarnings.splice(0)) next.warn(w.msg, w.fields);
+		},
 		reloadConfig() {
 			refreshCredentials();
 			const { config, hash } = loadEffective();
@@ -229,7 +290,7 @@ export function createSettings(options: SettingsOptions): Settings {
 			return { config, configHash: hash, redact };
 		},
 		keyStatus(provider) {
-			validateProvider(provider);
+			validateProvider(provider, false);
 			return keyStatus(provider);
 		},
 		keyProviders() {
@@ -245,11 +306,11 @@ export function createSettings(options: SettingsOptions): Settings {
 			return [...fromModels, ...fromFile].map(keyStatus);
 		},
 		setKey(provider, apiKey) {
-			validateProvider(provider);
+			validateProvider(provider, true);
 			const key = apiKey.trim();
-			if (key.length < MIN_KEY_LENGTH) throw invalidRequest(`The key for ${provider} is too short`, `Paste the full API key (at least ${MIN_KEY_LENGTH} characters)`);
+			if (key.length < MIN_SECRET_LENGTH) throw invalidRequest(`The key for ${provider} is too short`, `Paste the full API key (at least ${MIN_SECRET_LENGTH} characters)`);
 			if (/\s/.test(key)) throw invalidRequest(`The key for ${provider} contains whitespace`, "Paste the API key without spaces or line breaks");
-			secrets.add(key);
+			registerSecret(provider, "file", key);
 			const next = { ...readCredentials(paths.credentials) };
 			next[provider] = { ...next[provider], apiKey: key };
 			writeCredentials(paths.credentials, next);
@@ -257,7 +318,7 @@ export function createSettings(options: SettingsOptions): Settings {
 			return keyStatus(provider);
 		},
 		removeKey(provider) {
-			validateProvider(provider);
+			validateProvider(provider, false);
 			const next = { ...readCredentials(paths.credentials) };
 			if (provider in next) {
 				delete next[provider];

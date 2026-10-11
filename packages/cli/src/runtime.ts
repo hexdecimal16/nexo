@@ -33,6 +33,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 	const { config, hash } = settings.loadConfig();
 	const redact = settings.redact;
 	const logger = createLogger({ dir: paths.logs, component: "cli", redact });
+	settings.attachLogger(logger);
 	const db = openDb(paths.db);
 	const skills = loadSkills(config.skills.dirs);
 	for (const d of skills.diagnostics) logger.warn("invalid skill skipped", { path: d.path, error: d.error });

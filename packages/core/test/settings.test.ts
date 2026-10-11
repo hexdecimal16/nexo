@@ -1,7 +1,8 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider, type Models } from "@earendil-works/pi-ai";
+import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureNexoDirs, type NexoPaths, openDb, resolveNexoPaths } from "@nexo/store";
 import { createLogger, type NexoError, REDACTED } from "@nexo/telemetry";
@@ -30,7 +31,9 @@ function fixture(): Fixture {
 	const paths = resolveNexoPaths({ NEXO_HOME: join(root, "home") });
 	ensureNexoDirs(paths);
 	const cwd = realpathSync(mkdtempSync(join(tmpdir(), "nexo-cwd-")));
-	return { paths, cwd, options: (extra = {}) => ({ paths, cwd, env: {}, ...extra }) };
+	const models = builtinModels();
+	models.setProvider(fauxProvider({ models: FAUX_MODELS }).provider);
+	return { paths, cwd, options: (extra = {}) => ({ paths, cwd, env: {}, models, ...extra }) };
 }
 
 function mode(file: string): number {
@@ -392,5 +395,101 @@ describe("reloadConfig", () => {
 		writeJson(f.paths.config, { redaction: { patterns: ["acct-[0-9]{6}"] } });
 		settings.reloadConfig();
 		expect(settings.redact("acct-123456")).toBe(REDACTED);
+	});
+});
+
+describe("security hardening", () => {
+	it("does not turn short or dummy keys into redaction patterns, but still passes them to the provider", () => {
+		const f = fixture();
+		writeFileSync(f.paths.credentials, JSON.stringify({ groq: { apiKey: "ab" } }), { mode: 0o600 });
+		const warnings: string[] = [];
+		const settings = createSettings(
+			f.options({ env: { OPENAI_API_KEY: "none" }, overrides: { models: { s1: { provider: "openai", id: "x" }, s2: { provider: "openai", id: "y" } } } }),
+		);
+		settings.attachLogger({
+			debug: () => {},
+			info: () => {},
+			warn: (msg, fields) => warnings.push(JSON.stringify({ msg, fields })),
+			error: () => {},
+			child() {
+				return this;
+			},
+		});
+		expect(settings.redact("there is none here; nonexistent; ab cab")).toBe("there is none here; nonexistent; ab cab");
+		expect(settings.resolveApiKey("openai")).toBe("none");
+		expect(settings.resolveApiKey("groq")).toBe("ab");
+		settings.resolveApiKey("openai");
+		expect(warnings).toHaveLength(2);
+		expect(warnings.join("\n")).toContain("openai");
+		expect(warnings.join("\n")).not.toMatch(/"none"|"ab"/);
+	});
+
+	it("trims keys from the environment and the credentials file before redacting and returning them", () => {
+		const f = fixture();
+		writeFileSync(f.paths.credentials, JSON.stringify({ groq: { apiKey: "\tgroqLEADINGkey999 " } }), { mode: 0o600 });
+		const settings = createSettings(f.options({ env: { OPENAI_API_KEY: " envTRAILINGkey123\n" } }));
+		expect(settings.resolveApiKey("groq")).toBe("groqLEADINGkey999");
+		expect(settings.resolveApiKey("openai")).toBe("envTRAILINGkey123");
+		expect(settings.redact("k=groqLEADINGkey999. k=envTRAILINGkey123.")).toBe(`k=${REDACTED}. k=${REDACTED}.`);
+		expect(settings.keyStatus("groq").last4).toBe("y999");
+	});
+
+	it("refuses a symlinked credentials file", () => {
+		const f = fixture();
+		const target = join(f.paths.home, "elsewhere.json");
+		writeFileSync(target, JSON.stringify({ groq: { apiKey: FILE_KEY } }), { mode: 0o600 });
+		symlinkSync(target, f.paths.credentials);
+		const error = expectCode(() => createSettings(f.options()), "CONFIG_INVALID");
+		expect(error.message).toContain(f.paths.credentials);
+		expect(error.hint).toMatch(/symbolic link/);
+	});
+
+	it("refuses provider names that are not known providers, without echoing them", () => {
+		const settings = createSettings(fixture().options());
+		const pasted = "sk-ant-api03-PASTEDKEYASPROVIDER0000";
+		const error = expectCode(() => settings.setKey(pasted, FILE_KEY), "INVALID_REQUEST");
+		expect(JSON.stringify({ m: error.message, h: error.hint, c: error.context })).not.toContain(pasted);
+		expectCode(() => settings.setKey("not-a-provider-xyz", FILE_KEY), "INVALID_REQUEST");
+		expectCode(() => settings.keyStatus(pasted), "INVALID_REQUEST");
+		expect(settings.setKey("anthropic", FILE_KEY).state).toBe("file");
+		expect(settings.setKey("faux", FILE_KEY).state).toBe("file");
+	});
+
+	it("accepts a provider that is only configured, not in the registry", () => {
+		const f = fixture();
+		writeJson(f.paths.config, { providers: { "my-local": { maxConcurrent: 1 } } });
+		const settings = createSettings(f.options());
+		expect(settings.setKey("my-local", FILE_KEY).state).toBe("file");
+	});
+
+	it("removes stale credential temp files of dead processes on the next write", () => {
+		const f = fixture();
+		const stale = `${f.paths.credentials}.999999.1700000000000.tmp`;
+		writeFileSync(stale, JSON.stringify({ old: { apiKey: FILE_KEY } }), { mode: 0o600 });
+		createSettings(f.options()).setKey("faux", FILE_KEY);
+		expect(readdirSync(f.paths.home).filter((n) => n.endsWith(".tmp"))).toEqual([]);
+	});
+
+	it("validates a write against the user layer and names the project file when it holds the invalid value", () => {
+		const f = fixture();
+		const projectFile = join(f.cwd, ".nexo", "config.json");
+		writeJson(projectFile, { budgets: { perRunUsd: -5 } });
+		const settings = createSettings(f.options());
+		const view = settings.setSetting("budgets.perRunUsd", 2);
+		expect(view).toMatchObject({ userValue: 2, overriddenByProject: true });
+		expect(view.notice).toContain(projectFile);
+		expect(view.notice).toContain("/budgets/perRunUsd");
+		expect(JSON.parse(readFileSync(f.paths.config, "utf8"))).toEqual({ budgets: { perRunUsd: 2 } });
+		expectCode(() => settings.setSetting("budgets.perRunUsd", -1), "INVALID_REQUEST");
+	});
+
+	it("parses numbers as plain decimals only", () => {
+		const f = fixture();
+		const settings = createSettings(f.options());
+		for (const raw of ["0x10", "1e3", "Infinity", "", " ", "1_000", "0b1"]) {
+			expectCode(() => settings.setSettingFromString("spawn.maxParallelSubagents", raw), "INVALID_REQUEST");
+		}
+		expect(settings.setSettingFromString("budgets.perRunUsd", " 1.25 ").value).toBe(1.25);
+		expect(settings.setSettingFromString("spawn.maxParallelSubagents", "16").value).toBe(16);
 	});
 });

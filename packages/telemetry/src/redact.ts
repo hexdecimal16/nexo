@@ -16,10 +16,18 @@ const SENSITIVE_KEY = /^(api[_-]?key|authorization|password|secret|token|access[
 
 export type Redactor = <T>(value: T) => T;
 
+/** Shortest value a SecretSet accepts: shorter values ("none", "ab") would corrupt ordinary text when replaced. */
+export const MIN_SECRET_LENGTH = 8;
+
+/** True when the text contains a match of a built-in secret pattern (an API key or token). */
+export function containsSecret(text: string): boolean {
+	return BUILTIN_PATTERNS.some((re) => new RegExp(re.source).test(text));
+}
+
 /** Exact secret values (such as stored API keys) that every redactor built with this set replaces, including values added later. */
 export interface SecretSet {
-	/** Adds a value; empty strings are ignored. */
-	add(value: string): void;
+	/** Adds a value; returns false (and ignores it) when it is shorter than MIN_SECRET_LENGTH. */
+	add(value: string): boolean;
 	has(value: string): boolean;
 	readonly size: number;
 	/** The values, longest first. */
@@ -29,10 +37,12 @@ export interface SecretSet {
 export function createSecretSet(initial: Iterable<string> = []): SecretSet {
 	const set = new Set<string>();
 	let sorted: string[] = [];
-	const add = (value: string): void => {
-		if (value === "" || set.has(value)) return;
+	const add = (value: string): boolean => {
+		if (value.length < MIN_SECRET_LENGTH) return false;
+		if (set.has(value)) return true;
 		set.add(value);
 		sorted = [...set].sort((a, b) => b.length - a.length);
+		return true;
 	};
 	for (const value of initial) add(value);
 	return {
