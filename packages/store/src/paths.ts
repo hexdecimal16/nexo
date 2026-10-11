@@ -11,6 +11,7 @@ export interface NexoPaths {
 	logs: string;
 	skills: string;
 	config: string;
+	credentials: string;
 }
 
 export function resolveNexoPaths(env: NodeJS.ProcessEnv = process.env): NexoPaths {
@@ -24,6 +25,7 @@ export function resolveNexoPaths(env: NodeJS.ProcessEnv = process.env): NexoPath
 		logs: join(home, "logs"),
 		skills: join(home, "skills"),
 		config: join(home, "config.json"),
+		credentials: join(home, "credentials.json"),
 	};
 }
 

@@ -34,6 +34,6 @@ describe("openDb", () => {
 describe("resolveNexoPaths", () => {
 	it("uses NEXO_HOME when set", () => {
 		const p = resolveNexoPaths({ NEXO_HOME: "/tmp/nx" });
-		expect(p).toMatchObject({ home: "/tmp/nx", db: "/tmp/nx/nexo.db", runs: "/tmp/nx/runs", config: "/tmp/nx/config.json" });
+		expect(p).toMatchObject({ home: "/tmp/nx", db: "/tmp/nx/nexo.db", runs: "/tmp/nx/runs", config: "/tmp/nx/config.json", credentials: "/tmp/nx/credentials.json" });
 	});
 });
