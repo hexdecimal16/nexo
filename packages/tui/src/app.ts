@@ -90,6 +90,16 @@ function textOf(content: unknown): string {
 	return content.map((b) => (b && typeof b === "object" && (b as { type?: string }).type === "text" ? String((b as { text?: unknown }).text ?? "") : "")).join("");
 }
 
+/** `score 0.82 ✓` for the latest scoring round of a turn (mean of the scorers that answered); null when nothing scored it. */
+export function scoreSummary(result: Pick<RunResult, "scores">): string | null {
+	const scores = result.scores ?? [];
+	if (scores.length === 0) return null;
+	const answered = scores.filter((s) => s.status === "ok" && s.value !== null);
+	if (answered.length === 0) return "score failed";
+	const mean = answered.reduce((sum, s) => sum + (s.value ?? 0), 0) / answered.length;
+	return `score ${mean.toFixed(2)} ${answered.every((s) => s.passed) ? "✓" : "✗"}`;
+}
+
 /** Runs the chat UI: the conversation, the editor, the footer, approvals, slash commands and the settings screen. */
 class InteractiveApp {
 	private readonly options: InteractiveOptions;
@@ -113,6 +123,8 @@ class InteractiveApp {
 	private runningShell = false;
 	private turnCost = 0;
 	private lastTurnCost = 0;
+	/** Footer text for the latest turn's scores, e.g. `score 0.82 ✓`; null when nothing scored it. */
+	private lastScore: string | null = null;
 	private currentText: { component: SafeMarkdown; text: string } | null = null;
 	private tools = new Map<string, ToolLine>();
 	private subagents = new Map<string, SubagentLine>();
@@ -315,7 +327,8 @@ class InteractiveApp {
 		const spent = session.costUsd + (this.running ? this.turnCost : 0);
 		const fraction = session.contextFraction;
 		const ctx = fraction === null ? "ctx –" : `ctx ${Math.round(fraction * 100)}%`;
-		const parts = [escapeControl(model), escapeControl(effort), `turn ${usd(turn)}`, `session ${usd(spent)}/${usd(session.budgetUsd)}`, ctx];
+		const score = !this.running && this.lastScore ? [this.lastScore] : [];
+		const parts = [escapeControl(model), escapeControl(effort), `turn ${usd(turn)}`, ...score, `session ${usd(spent)}/${usd(session.budgetUsd)}`, ctx];
 		return style.gray(parts.join(" · ")) + (this.running ? style.cyan(" · running…") : "");
 	}
 
@@ -397,6 +410,7 @@ class InteractiveApp {
 		this.turnAbort = abort;
 		this.running = true;
 		this.turnCost = 0;
+		this.lastScore = null;
 		this.currentText = null;
 		this.tools.clear();
 		this.subagents.clear();
@@ -416,6 +430,7 @@ class InteractiveApp {
 		}
 		if (result) {
 			this.lastTurnCost = result.costUsd;
+			this.lastScore = scoreSummary(result);
 			if (result.status === "aborted") this.say("interrupted");
 			else if (result.error) this.sayError(result.error);
 			else if (result.status !== "succeeded") this.say(`turn ended: ${result.status}`);
@@ -492,6 +507,27 @@ class InteractiveApp {
 			case "llm_end":
 				this.turnCost += event.costUsd;
 				break;
+			case "escalation": {
+				if (event.depth !== 0) return;
+				this.currentText = null;
+				const why = `${event.trigger}: ${escapeControl(oneLine(event.reason, 120))}`;
+				this.chat.addChild(
+					event.applied
+						? new Block(`↑ escalated to ${escapeControl(event.model)} — ${why}`, style.yellow, "  ")
+						: new Block(`escalation suppressed (${escapeControl(event.blockedBy ?? "?")}) — ${why}`, style.gray, "  "),
+				);
+				break;
+			}
+			case "score": {
+				if (event.depth !== 0) return;
+				this.currentText = null;
+				const verdict =
+					event.status === "failed"
+						? style.red("failed")
+						: `${event.value === null ? "–" : event.value.toFixed(2)} ${event.passed ? style.green("✓") : style.red("✗")}`;
+				this.chat.addChild(new Block(`score ${escapeControl(oneLine(event.scorer, 60))}: ${verdict}`, style.gray, "  "));
+				break;
+			}
 			case "compaction_start":
 				this.currentText = null;
 				this.chat.addChild(new Block("compacting earlier turns…", style.gray, "  "));
