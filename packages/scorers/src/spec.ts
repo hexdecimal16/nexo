@@ -48,12 +48,20 @@ const JSON_TYPES = ["string", "number", "integer", "boolean", "object", "array",
 function resolvePointer(root: unknown, ref: string): boolean {
 	let node: unknown = root;
 	for (const part of ref.slice(1).split("/").slice(1)) {
-		const key = decodeURIComponent(part).replaceAll("~1", "/").replaceAll("~0", "~");
-		if (typeof node !== "object" || node === null || !(key in node)) return false;
+		let key: string;
+		try {
+			key = decodeURIComponent(part).replaceAll("~1", "/").replaceAll("~0", "~");
+		} catch {
+			return false;
+		}
+		if (typeof node !== "object" || node === null || !Object.hasOwn(node, key)) return false;
 		node = (node as Record<string, unknown>)[key];
 	}
 	return true;
 }
+
+/** Keywords whose values are data, not subschemas. */
+const DATA_KEYWORDS = new Set(["const", "enum", "default", "examples"]);
 
 /** The first problem that would make a JSON Schema unusable: an unknown `type`, an unresolvable local `$ref`, or a pattern that does not compile. */
 function schemaProblem(schema: object): string | undefined {
@@ -74,6 +82,7 @@ function schemaProblem(schema: object): string | undefined {
 		const ref = obj.$ref;
 		if (typeof ref === "string" && ref.startsWith("#") && !resolvePointer(schema, ref)) return `${path}/$ref ${ref} does not resolve`;
 		for (const [key, value] of Object.entries(obj)) {
+			if (DATA_KEYWORDS.has(key)) continue;
 			const found = walk(value, `${path}/${key}`);
 			if (found) return found;
 		}
