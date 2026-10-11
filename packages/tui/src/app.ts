@@ -4,9 +4,9 @@ import {
 	Container,
 	Editor,
 	Loader,
-	Markdown,
 	matchesKey,
 	ProcessTerminal,
+	setCapabilityOverrides,
 	type Terminal,
 	TuiMainScreen,
 } from "@earendil-works/pi-tui";
@@ -17,7 +17,7 @@ import { type ErrorPayload, toErrorPayload } from "@nexo/telemetry";
 import type { Prompter } from "@nexo/tools";
 import { createOverlayPrompter } from "./approvals.ts";
 import { helpText, parseSlashCommand, SLASH_COMMANDS } from "./commands.ts";
-import { Block, DynamicLine, SubagentLine, Ticker, ToolLine } from "./components.ts";
+import { Block, DynamicLine, SafeContainer, SafeMarkdown, SubagentLine, Ticker, ToolLine } from "./components.ts";
 import { SettingsScreen, type SettingsScreenMode } from "./settings-screen.ts";
 import { escapeControl, escapeControlKeepLines, formatError, oneLine, toolSummary, usd } from "./text.ts";
 import { editorTheme, markdownTheme, style } from "./theme.ts";
@@ -37,11 +37,45 @@ export interface InteractiveOptions {
 	signal?: AbortSignal;
 	/** Run first-run setup when `settings.setupStatus().needed` (default true). */
 	setup?: boolean;
-	/** Clock for the double Ctrl-C window. */
+	/** Clock for the double Ctrl-C window and the approval guard. */
 	now?: () => number;
+	/** How long exit waits for an aborted turn to finish before giving up on it (default 5000 ms). */
+	exitTimeoutMs?: number;
 }
 
 const DOUBLE_CTRL_C_MS = 1000;
+const EXIT_TIMEOUT_MS = 5000;
+
+/** Started TUIs, so `restoreTerminal` can stop them from a crash handler. */
+const activeTuis = new Set<TuiMainScreen>();
+
+function startTui(tui: TuiMainScreen): void {
+	// Links render as "text (url)": an OSC 8 hyperlink would hide the real target behind the text.
+	setCapabilityOverrides({ hyperlinks: false });
+	activeTuis.add(tui);
+	tui.start();
+}
+
+function stopTui(tui: TuiMainScreen): void {
+	if (!activeTuis.delete(tui)) return;
+	tui.stop();
+}
+
+/**
+ * Restores the terminal (raw mode off, cursor shown, keyboard protocol popped) for every TUI this package started.
+ * Synchronous and safe to call more than once; meant for the CLI's `exit`, `uncaughtException` and
+ * `unhandledRejection` handlers. The package installs no process handlers itself.
+ */
+export function restoreTerminal(): void {
+	for (const tui of [...activeTuis]) {
+		activeTuis.delete(tui);
+		try {
+			tui.stop();
+		} catch {
+			// Best effort: the terminal may already be gone.
+		}
+	}
+}
 const TICK_MS = 80;
 
 type Screen = "chat" | "settings";
@@ -73,7 +107,7 @@ class InteractiveApp {
 	private turnPromise: Promise<void> | null = null;
 	private turnCost = 0;
 	private lastTurnCost = 0;
-	private currentText: { component: Markdown; text: string } | null = null;
+	private currentText: { component: SafeMarkdown; text: string } | null = null;
 	private tools = new Map<string, ToolLine>();
 	private subagents = new Map<string, SubagentLine>();
 	private tickTimer: NodeJS.Timeout | null = null;
@@ -83,6 +117,10 @@ class InteractiveApp {
 	private defaultEffort = "";
 
 	private exiting = false;
+	private resolveForce: () => void = () => {};
+	private readonly forced = new Promise<void>((resolve) => {
+		this.resolveForce = resolve;
+	});
 	private resolveExit: () => void = () => {};
 	private readonly exitRequested = new Promise<void>((resolve) => {
 		this.resolveExit = resolve;
@@ -96,18 +134,20 @@ class InteractiveApp {
 		this.tui = new TuiMainScreen(this.terminal);
 		this.editor = new Editor(this.tui, editorTheme);
 		this.editor.onSubmit = (text) => this.onSubmit(text);
-		this.prompter = createOverlayPrompter(this.tui);
-		this.tui.addChild(this.chat);
-		this.tui.addChild(this.status);
-		this.tui.addChild(this.slot);
-		this.tui.addChild(new DynamicLine(() => this.footerText()));
+		this.prompter = createOverlayPrompter(this.tui, { now: this.now });
+		const root = new SafeContainer();
+		root.addChild(this.chat);
+		root.addChild(this.status);
+		root.addChild(this.slot);
+		root.addChild(new DynamicLine(() => this.footerText()));
+		this.tui.addChild(root);
 		this.tui.addInputListener((data) => this.onKey(data));
 	}
 
 	async run(): Promise<number> {
 		const onSignal = () => this.requestExit();
 		this.options.signal?.addEventListener("abort", onSignal, { once: true });
-		this.tui.start();
+		startTui(this.tui);
 		try {
 			if (this.options.signal?.aborted) return await this.shutdown(0);
 			if (this.options.setup !== false && this.settings.setupStatus().needed) {
@@ -143,15 +183,33 @@ class InteractiveApp {
 		this.resolveExit();
 	}
 
+	/**
+	 * Aborts the turn and waits for it to be saved, but at most `exitTimeoutMs`; a Ctrl-C while waiting stops waiting.
+	 * The terminal is always restored. The session is closed unless its turn is still running (its lock is then
+	 * released at process exit).
+	 */
 	private async shutdown(code: number): Promise<number> {
 		this.exiting = true;
 		this.turnAbort?.abort();
-		if (this.turnPromise) await this.turnPromise;
-		this.stopTicker();
-		this.tui.renderNow();
-		await this.terminal.drainInput(1000, 50);
-		this.tui.stop();
-		this.session?.close();
+		let timer: NodeJS.Timeout | undefined;
+		try {
+			if (this.turnPromise) {
+				this.say("stopping the turn… (ctrl-c to quit without waiting)");
+				this.tui.requestRender();
+				const deadline = new Promise<void>((resolve) => {
+					timer = setTimeout(resolve, this.options.exitTimeoutMs ?? EXIT_TIMEOUT_MS);
+				});
+				await Promise.race([this.turnPromise, deadline, this.forced]);
+			}
+			this.stopTicker();
+			this.tui.renderNow();
+			await this.terminal.drainInput(1000, 50);
+		} finally {
+			if (timer) clearTimeout(timer);
+			this.stopTicker();
+			stopTui(this.tui);
+		}
+		if (this.session && !this.session.running) this.session.close();
 		return code;
 	}
 
@@ -201,7 +259,7 @@ class InteractiveApp {
 				this.add(new Block(escapeControlKeepLines(textOf(message.content)), style.dim, "› "));
 			} else if (message.role === "assistant" && Array.isArray(message.content)) {
 				for (const block of message.content as { type?: string; text?: string; name?: string; arguments?: unknown }[]) {
-					if (block.type === "text" && block.text) this.add(new Markdown(escapeControlKeepLines(block.text), 0, 1, markdownTheme));
+					if (block.type === "text" && block.text) this.add(new SafeMarkdown(escapeControlKeepLines(block.text), 0, 1, markdownTheme));
 					else if (block.type === "toolCall") this.add(new Block(`● ${toolSummary(block.name ?? "tool", block.arguments)}`, style.gray));
 				}
 			}
@@ -229,14 +287,17 @@ class InteractiveApp {
 		const spent = session.costUsd + (this.running ? this.turnCost : 0);
 		const fraction = session.contextFraction;
 		const ctx = fraction === null ? "ctx –" : `ctx ${Math.round(fraction * 100)}%`;
-		const parts = [escapeControl(model), effort, `turn ${usd(turn)}`, `session ${usd(spent)}/${usd(session.budgetUsd)}`, ctx];
+		const parts = [escapeControl(model), escapeControl(effort), `turn ${usd(turn)}`, `session ${usd(spent)}/${usd(session.budgetUsd)}`, ctx];
 		return style.gray(parts.join(" · ")) + (this.running ? style.cyan(" · running…") : "");
 	}
 
 	// Input
 
 	private onKey(data: string): { consume: boolean } | undefined {
-		if (this.exiting) return { consume: true };
+		if (this.exiting) {
+			if (matchesKey(data, "ctrl+c")) this.resolveForce();
+			return { consume: true };
+		}
 		if (matchesKey(data, "ctrl+c")) {
 			if (this.running) {
 				this.turnAbort?.abort();
@@ -321,7 +382,7 @@ class InteractiveApp {
 			case "text_delta": {
 				if (event.depth !== 0) return;
 				if (!this.currentText) {
-					const component = new Markdown("", 0, 1, markdownTheme);
+					const component = new SafeMarkdown("", 0, 1, markdownTheme);
 					this.currentText = { component, text: "" };
 					this.chat.addChild(component);
 				}
@@ -425,14 +486,14 @@ class InteractiveApp {
 					break;
 				}
 				case "model":
-					if (!args) this.say(`model: ${session.model ?? `${this.defaultModel} (default)`}`);
+					if (!args) this.say(`model: ${escapeControl(session.model ?? `${this.defaultModel} (default)`)}`);
 					else {
 						session.setModel(args === "default" ? null : args);
-						this.say(session.model ? `model set to ${session.model} for this session` : "model override cleared");
+						this.say(session.model ? `model set to ${escapeControl(session.model)} for this session` : "model override cleared");
 					}
 					break;
 				case "effort":
-					if (!args) this.say(`effort: ${session.effort ?? `${this.defaultEffort || "default"} (default)`}`);
+					if (!args) this.say(`effort: ${escapeControl(session.effort ?? `${this.defaultEffort || "default"} (default)`)}`);
 					else {
 						session.setEffort(args === "default" ? null : (args as Effort));
 						this.say(session.effort ? `effort set to ${session.effort} for this session` : "effort override cleared");
@@ -472,7 +533,7 @@ class InteractiveApp {
 		if (rows.length === 0) return "no sessions yet";
 		const lines = rows.map((r) => {
 			const mark = r.id === current.id ? "*" : " ";
-			const title = r.title ? oneLine(r.title, 40) : "(untitled)";
+			const title = r.title ? escapeControl(oneLine(r.title, 40)) : "(untitled)";
 			return `${mark} ${r.id}  ${title}  ${r.turns} turn${r.turns === 1 ? "" : "s"}  ${usd(r.costUsd)}  ${r.updatedAt.slice(0, 16).replace("T", " ")}`;
 		});
 		lines.push("resume one later with: nexo --resume <id>");
@@ -553,18 +614,23 @@ export async function runSettingsScreen(options: SettingsScreenRunOptions): Prom
 		requestRender: () => tui.requestRender(),
 		onClose: (completed) => resolveDone(completed),
 	});
-	tui.addChild(screen);
+	const root = new SafeContainer();
+	root.addChild(screen);
+	tui.addChild(root);
 	tui.setFocus(screen);
 	const onAbort = () => resolveDone(false);
 	options.signal?.addEventListener("abort", onAbort, { once: true });
-	tui.start();
+	startTui(tui);
 	try {
 		if (options.signal?.aborted) resolveDone(false);
 		const completed = await done;
 		return { completed };
 	} finally {
 		options.signal?.removeEventListener("abort", onAbort);
-		await terminal.drainInput(1000, 50);
-		tui.stop();
+		try {
+			await terminal.drainInput(1000, 50);
+		} finally {
+			stopTui(tui);
+		}
 	}
 }

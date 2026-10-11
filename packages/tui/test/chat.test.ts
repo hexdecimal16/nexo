@@ -1,6 +1,7 @@
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { dispatcher } from "../../core/test/helpers.ts";
+import { restoreTerminal } from "../src/index.ts";
 import { KEY, until } from "./fake-terminal.ts";
 import { makeHarness, startHarness, submit } from "./helpers.ts";
 
@@ -91,11 +92,18 @@ describe("chat screen", () => {
 		// The tool line spins while the approval is pending.
 		expect(h.terminal.output()).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] bash\(echo approved-run\)/);
 		expect(h.terminal.output()).toContain("Deny");
+		// An Enter typed ahead as the overlay appears is ignored (and Deny is preselected anyway).
+		h.terminal.send(KEY.enter);
+		await new Promise((r) => setTimeout(r, 100));
+		expect(h.terminal.output()).not.toMatch(/✓ bash\(echo approved-run\)/);
+		expect(h.terminal.output()).not.toMatch(/✗ bash\(echo approved-run\)/);
+		await new Promise((r) => setTimeout(r, 400));
+		h.terminal.send(KEY.up);
 		h.terminal.send(KEY.enter);
 		await until(() => expect(h.terminal.output()).toMatch(/✓ bash\(echo approved-run\)/));
 		await until(() => expect(h.terminal.output()).toContain("Allow bash: echo denied-run?"));
-		h.terminal.send(KEY.down);
-		h.terminal.send(KEY.enter);
+		await new Promise((r) => setTimeout(r, 450));
+		h.terminal.send(KEY.enter); // Deny is the default
 		await until(() => expect(h.terminal.output()).toMatch(/✗ bash\(echo denied-run\)/));
 		await until(() => !h.session().running);
 		h.terminal.send(KEY.ctrlD);
@@ -282,5 +290,95 @@ describe("chat screen extras", () => {
 		expect(h.session().id).toBe(id);
 		h.terminal.send(KEY.ctrlD);
 		await h.done;
+	});
+});
+
+describe("hostile text", () => {
+	it("escapes control characters in assistant text, result previews and error messages", async () => {
+		const h = await startHarness();
+		const { writeFileSync } = await import("node:fs");
+		writeFileSync(`${h.cwd}/ansi.txt`, "before\x1b]0;pwned\x07after\n");
+		h.faux.setResponses([
+			fauxAssistantMessage([fauxText("clear\x1b[2Jscreen ‮evil "), fauxToolCall("read", { path: "ansi.txt" })]),
+			fauxAssistantMessage("ok", { stopReason: "error", errorMessage: "boom\x1b[31mred" }),
+		]);
+		submit(h.terminal, "be hostile");
+		await until(() => !h.session().running && h.session().turns === 1);
+		await until(() => {
+			const out = h.terminal.output();
+			expect(out).toContain("clear\\x1b[2Jscreen");
+			expect(out).toContain("\\u202eevil");
+			expect(out).toContain("before\\x1b]0;pwned\\x07after");
+			expect(out).toContain("boom\\x1b[31mred");
+		});
+		const raw = h.terminal.raw();
+		expect(raw).not.toContain("\x1b[2J");
+		expect(raw).not.toContain("\x1b]0;pwned");
+		expect(raw).not.toContain("‮");
+		expect(raw).not.toContain("boom\x1b[31m");
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
+	it("escapes bidi and zero-width characters in tool summaries and approval questions", async () => {
+		const h = await startHarness();
+		h.faux.setResponses([fauxAssistantMessage([fauxToolCall("bash", { command: "echo safe‮​hidden" })]), fauxAssistantMessage("ok")]);
+		submit(h.terminal, "run it");
+		await until(() => expect(h.terminal.output()).toContain("Allow bash: echo safe\\u202e\\u200bhidden?"));
+		expect(h.terminal.output()).toContain("bash(echo safe\\u202e\\u200bhidden)");
+		expect(h.terminal.raw()).not.toMatch(/[‮​]/);
+		h.terminal.send(KEY.ctrlC);
+		await until(() => !h.session().running);
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
+	it("shows markdown link targets as text, never as hidden OSC 8 hyperlinks", async () => {
+		const h = await startHarness();
+		h.faux.setResponses([fauxAssistantMessage("see [the docs](https://evil.example/x) now")]);
+		submit(h.terminal, "link please");
+		await until(() => expect(h.terminal.output()).toContain("the docs (https://evil.example/x)"));
+		// pi-tui closes hyperlinks at every line end (an empty OSC 8); none may carry a target.
+		expect(h.terminal.raw()).not.toMatch(/\x1b\]8;[^;\x07\x1b]*;[^\x07\x1b]/);
+		await until(() => !h.session().running);
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+});
+
+describe("exit robustness", () => {
+	/** Makes the session's turns never settle, even when aborted. */
+	const stickTurns = (h: { session: () => { turn: unknown } }) => {
+		h.session().turn = () => new Promise<never>(() => {});
+	};
+
+	it("stops waiting for a turn that ignores the abort on a second Ctrl-C, and still restores the terminal", async () => {
+		const h = await startHarness({ interactive: { exitTimeoutMs: 60_000 } });
+		stickTurns(h);
+		submit(h.terminal, "hang");
+		await until(() => expect(h.terminal.output()).toContain("running…"));
+		submit(h.terminal, "/exit");
+		await until(() => expect(h.terminal.output()).toContain("stopping the turn"));
+		expect(h.terminal.stopped).toBe(false);
+		h.terminal.send(KEY.ctrlC);
+		expect(await h.done).toBe(0);
+		expect(h.terminal.stopped).toBe(true);
+	});
+
+	it("gives up on a stuck turn after the exit deadline", async () => {
+		const h = await startHarness({ interactive: { exitTimeoutMs: 100 } });
+		stickTurns(h);
+		submit(h.terminal, "hang");
+		await until(() => expect(h.terminal.output()).toContain("running…"));
+		submit(h.terminal, "/exit");
+		expect(await h.done).toBe(0);
+		expect(h.terminal.stopped).toBe(true);
+	});
+
+	it("restoreTerminal stops every running TUI (for the CLI's crash handlers)", async () => {
+		const h = await startHarness();
+		restoreTerminal();
+		expect(h.terminal.stopped).toBe(true);
+		restoreTerminal();
 	});
 });
