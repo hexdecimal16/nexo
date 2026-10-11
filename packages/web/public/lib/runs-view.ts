@@ -2,6 +2,7 @@ import type { RunStatus, RunSummary } from "./api-types.ts";
 import { runLink, sessionLink, statusBadge, verdictBadge } from "./common-view.ts";
 import { durationMs, formatDuration, formatTime, formatUsd, truncate } from "./format.ts";
 import { html, type SafeHtml } from "./html.ts";
+import { renderScoreCell } from "./score-view.ts";
 
 export type RunsTab = "all" | "review";
 
@@ -12,6 +13,8 @@ export interface RunFilters {
 	since: string;
 	/** Session id from the page's `?session=` parameter; empty for all runs. */
 	session: string;
+	/** "true" (scored runs), "false" (finished runs without scores) or "" (all). */
+	scored: string;
 }
 
 export const PAGE_SIZE = 50;
@@ -24,6 +27,7 @@ export function runsQuery(filters: RunFilters, cursor: string | null, limit: num
 	if (filters.status) params.set("status", filters.status);
 	if (filters.skill.trim()) params.set("skill", filters.skill.trim());
 	if (filters.since) params.set("since", filters.since);
+	if (filters.scored === "true" || filters.scored === "false") params.set("scored", filters.scored);
 	params.set("limit", String(limit));
 	if (cursor) params.set("cursor", cursor);
 	return `/api/runs?${params.toString()}`;
@@ -39,6 +43,7 @@ export function renderRunRows(runs: RunSummary[], nowMs: number): SafeHtml {
 		<td class="mono">${run.modelFinal ?? "–"}</td>
 		<td class="num">${formatDuration(durationMs(run.startedAt, run.endedAt, nowMs))}</td>
 		<td class="num${run.costUnknown ? " warn" : ""}">${formatUsd(run.costUsd, run.costUnknown)}</td>
+		<td>${renderScoreCell(run.score)}</td>
 		<td>${verdictBadge(run.verdict)}</td>
 	</tr>`,
 	)}`;
@@ -56,5 +61,5 @@ export function renderStatusOptions(statuses: readonly RunStatus[], selected: st
 }
 
 export function renderEmptyRuns(tab: RunsTab): SafeHtml {
-	return html`<tr><td colspan="8" class="empty">${tab === "review" ? "Nothing to review. Finished runs without a verdict appear here." : "No runs match these filters."}</td></tr>`;
+	return html`<tr><td colspan="9" class="empty">${tab === "review" ? "Nothing to review. Finished runs without a verdict appear here." : "No runs match these filters."}</td></tr>`;
 }

@@ -109,11 +109,12 @@ describe("runs view", () => {
 	});
 
 	it("builds list queries; the review tab asks for reviewed=false", () => {
-		expect(runsQuery({ tab: "review", status: "", skill: " ", since: "", session: "" }, null)).toBe("/api/runs?reviewed=false&limit=50");
-		expect(runsQuery({ tab: "all", status: "failed", skill: "a b", since: "2026-10-01", session: "" }, "c&d", 10)).toBe(
+		expect(runsQuery({ tab: "review", status: "", skill: " ", since: "", session: "", scored: "" }, null)).toBe("/api/runs?reviewed=false&limit=50");
+		expect(runsQuery({ tab: "all", status: "failed", skill: "a b", since: "2026-10-01", session: "", scored: "" }, "c&d", 10)).toBe(
 			"/api/runs?status=failed&skill=a+b&since=2026-10-01&limit=10&cursor=c%26d",
 		);
-		expect(runsQuery({ tab: "all", status: "", skill: "", since: "", session: "s&1" }, null)).toBe("/api/runs?session=s%261&limit=50");
+		expect(runsQuery({ tab: "all", status: "", skill: "", since: "", session: "s&1", scored: "" }, null)).toBe("/api/runs?session=s%261&limit=50");
+		expect(runsQuery({ tab: "all", status: "", skill: "", since: "", session: "", scored: "false" }, null)).toBe("/api/runs?scored=false&limit=50");
 	});
 
 	it("shows the session filter with an escaped title and a link that clears it", () => {

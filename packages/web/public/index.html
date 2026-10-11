@@ -9,7 +9,7 @@
 <script type="module" src="/pages/runs.ts"></script>
 </head>
 <body>
-<nav class="top"><a href="/" class="brand">nexo</a><a href="/">Runs</a><a href="/cost.html">Cost</a></nav>
+<nav class="top"><a href="/" class="brand">nexo</a><a href="/">Runs</a><a href="/cost.html">Cost</a><a href="/judge.html">Judge</a></nav>
 <main>
 <h1>Runs</h1>
 <div id="session-filter"></div>
@@ -21,12 +21,13 @@
 <label>Status <select name="status" id="status-filter"><option value="">any</option></select></label>
 <label>Skill <input name="skill" type="text" placeholder="any"></label>
 <label>Since <input name="since" type="date"></label>
+<label>Scored <select name="scored"><option value="">any</option><option value="true">scored</option><option value="false">not scored</option></select></label>
 <button type="submit">Apply</button>
 </form>
 <div id="error"></div>
 <div class="table-wrap">
 <table class="runs">
-<thead><tr><th>Started (UTC)</th><th>Instruction</th><th>Skill</th><th>Status</th><th>Model</th><th class="num">Duration</th><th class="num">Cost</th><th>Verdict</th></tr></thead>
+<thead><tr><th>Started (UTC)</th><th>Instruction</th><th>Skill</th><th>Status</th><th>Model</th><th class="num">Duration</th><th class="num">Cost</th><th>Score</th><th>Verdict</th></tr></thead>
 <tbody id="runs-body"></tbody>
 </table>
 </div>

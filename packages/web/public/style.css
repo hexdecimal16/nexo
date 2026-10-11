@@ -104,3 +104,14 @@ th { font-size: 12px; color: var(--muted); font-weight: 600; }
 .cost-bar { width: 160px; height: 8px; }
 .cost-bar rect { fill: var(--accent); }
 tr.warn td:first-child::after { content: " ⚠"; }
+.score-pass, .crit-pass, .esc-applied strong { color: var(--ok); }
+.score-fail, .score-failed, .crit-fail { color: var(--bad); }
+.badge-warn { color: var(--warn); }
+.scores, .score-round { display: flex; flex-direction: column; gap: 8px; }
+.score { border: 1px solid var(--line); border-radius: 4px; padding: 8px 12px; background: var(--panel); }
+.score .facts { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.criteria, .votes, .escalations, .disagreements { list-style: none; padding: 0; margin: 4px 0; }
+.criteria li, .votes li, .escalations li, .disagreements li { padding: 2px 0; }
+.esc-blocked strong { color: var(--muted); }
+.human-priority { margin: 0 0 8px; }
+table.matrix { width: auto; }
