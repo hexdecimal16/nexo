@@ -66,8 +66,11 @@ export function escalationLine(depth: number, model: string, trigger: string, re
 	return `\n${"  ".repeat(depth)}  ↑ escalating to ${escapeControl(model)} (${trigger}: ${escapeControl(reason)})\n`;
 }
 
-/** One line per scorer of the latest scoring round, then the escalation count. Scorer text is model-produced, so it is control-escaped. */
-export function scoreLines(result: Pick<RunResult, "scores" | "escalations">): string[] {
+/**
+ * One line per scorer of the latest scoring round, then the escalation count and how a failed S2 continuation ended.
+ * Scorer and error text is model-influenced, so it is control-escaped.
+ */
+export function scoreLines(result: Pick<RunResult, "scores" | "escalations" | "continuationError">): string[] {
 	const lines = (result.scores ?? []).map((s) => {
 		const name = escapeControl(s.scorerName);
 		if (s.status === "failed") return `  score ${name}: failed [${s.error?.code ?? "SCORER_FAILED"}] ${escapeControl(s.error?.message ?? "")}`.trimEnd();
@@ -76,6 +79,8 @@ export function scoreLines(result: Pick<RunResult, "scores" | "escalations">): s
 		return `  score ${name}: ${value} ${s.passed ? "✓ pass" : "✗ fail"}${family}`;
 	});
 	if (result.escalations) lines.push(`  escalated to s2 ${result.escalations === 1 ? "once" : `${result.escalations} times`}`);
+	const failed = result.continuationError;
+	if (failed) lines.push(`  ✗ s2 continuation failed [${escapeControl(failed.code)}] ${escapeControl(failed.message)}; kept the previous answer`);
 	return lines;
 }
 

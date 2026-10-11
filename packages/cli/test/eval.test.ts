@@ -162,6 +162,14 @@ describe("scoreLines", () => {
 		expect(lines[1]).toBe("  score ok: 0.80 ✓ pass (same-family judge)");
 		expect(lines[2]).toBe("  escalated to s2 2 times");
 	});
+
+	it("reports a failed S2 continuation after the escalation count", () => {
+		const lines = scoreLines({
+			escalations: 1,
+			continuationError: { code: "PROVIDER_UNAVAILABLE", message: "bad\nrequest\u001b[2J", retryable: false },
+		});
+		expect(lines).toEqual(["  escalated to s2 once", "  ✗ s2 continuation failed [PROVIDER_UNAVAILABLE] bad\\x0arequest\\x1b[2J; kept the previous answer"]);
+	});
 });
 
 describe("nexo ui and the judge", () => {
@@ -194,6 +202,17 @@ describe("nexo run with scorers", () => {
 		expect(t.err()).toContain("↑ escalating to faux/strong (verify_fail: deterministic scorer failed: says-done)");
 		expect(t.err()).toContain("  score says-done: 1.00 ✓ pass");
 		expect(t.err()).toContain("  escalated to s2 once");
+	});
+
+	it("prints how a failed S2 continuation ended", async () => {
+		const h = home({ models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "strong" } }, providers: { faux: { retryBaseDelayMs: 0, maxRetries: 0 } }, scoring: { scorers: [{ kind: "contains", name: "says-done", text: "DONE" }] } });
+		const faux = fauxProvider({ models: [{ id: "fast" }, { id: "strong" }] });
+		faux.setResponses([fauxAssistantMessage("not yet"), fauxAssistantMessage("", { stopReason: "error", errorMessage: "invalid request 400" })]);
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const t = io();
+		expect(await runCli(["run", "finish", "--no-review"], t, { ...h, models })).toBe(0);
+		expect(t.err()).toMatch(/ {2}✗ s2 continuation failed \[[A-Z_]+\] .*invalid request 400.*; kept the previous answer/);
 	});
 
 	it("escapes control characters in the escalation line", () => {

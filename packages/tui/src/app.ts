@@ -518,6 +518,13 @@ class InteractiveApp {
 				);
 				break;
 			}
+			case "escalation_failed": {
+				if (event.depth !== 0) return;
+				this.currentText = null;
+				const error = `[${escapeControl(oneLine(event.error.code, 40))}] ${escapeControl(oneLine(event.error.message, 120))}`;
+				this.chat.addChild(new Block(`✗ s2 continuation failed ${error}; kept the previous answer`, style.red, "  "));
+				break;
+			}
 			case "score": {
 				if (event.depth !== 0) return;
 				this.currentText = null;
