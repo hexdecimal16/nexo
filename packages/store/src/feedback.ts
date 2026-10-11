@@ -4,6 +4,7 @@ import { NexoError, type Redactor } from "@nexo/telemetry";
 import type { Db } from "./db.ts";
 import { invalidRequest, runNotFound } from "./errors.ts";
 import { newId } from "./ids.ts";
+import { syncJudgeDisagreement } from "./judge-calibration.ts";
 import { getRun } from "./runs.ts";
 
 export type Verdict = "done" | "not_done";
@@ -52,7 +53,8 @@ export function isVerdict(value: unknown): value is Verdict {
 
 /**
  * Validates and stores a human verdict for a finished run, then mirrors the latest verdict into the run's run.json
- * (`humanVerdict`) when the directory still exists. Throws INVALID_REQUEST (bad verdict or comment), NOT_FOUND (unknown
+ * (`humanVerdict`) when the directory still exists. A verdict that disagrees with the run's judge verdict stores a
+ * `judge_rubric` eval case (`syncJudgeDisagreement`). Throws INVALID_REQUEST (bad verdict or comment), NOT_FOUND (unknown
  * run) or CONFLICT (run still running).
  */
 export function recordFeedback(db: Db, input: FeedbackInput): FeedbackRow {
@@ -88,6 +90,7 @@ export function recordFeedback(db: Db, input: FeedbackInput): FeedbackRow {
 		row.comment,
 		row.createdAt,
 	);
+	syncJudgeDisagreement(db, run.id, input.nowIso);
 	const latest = latestFeedback(db, run.id) ?? row;
 	writeHumanVerdict(run.dirPath, { verdict: latest.verdict, comment: latest.comment, createdAt: latest.createdAt });
 	return row;
