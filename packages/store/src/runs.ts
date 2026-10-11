@@ -5,6 +5,7 @@ import type { ErrorPayload } from "@nexo/telemetry";
 import type { Db } from "./db.ts";
 import { invalidRequest } from "./errors.ts";
 import type { Verdict } from "./feedback.ts";
+import { decodeRunScore, RUN_SCORE_SQL, type RunScore } from "./scores.ts";
 import { insertRow, updateById } from "./sql.ts";
 
 export type RunStatus = "running" | "succeeded" | "failed" | "aborted" | "budget_exceeded";
@@ -163,6 +164,8 @@ export interface RunSummary {
 	turnIndex: number | null;
 	/** Title of the run's session, when the session is indexed. */
 	sessionTitle: string | null;
+	/** The latest scoring round; null when the run was never scored. */
+	score: RunScore | null;
 }
 
 export interface RunQuery {
@@ -178,6 +181,8 @@ export interface RunQuery {
 	rootOnly?: boolean;
 	/** Only the turns of this session. */
 	sessionId?: string;
+	/** true: runs with at least one score. false: finished runs without scores. */
+	scored?: boolean;
 }
 
 export interface RunPage {
@@ -224,7 +229,8 @@ export function decodeRunCursor(cursor: string): { startedAt: string; id: string
 const SUMMARY_SELECT = `SELECT r.*,
 	(SELECT COUNT(*) FROM runs c WHERE c.parent_run_id = r.id) AS child_count,
 	(SELECT f.verdict FROM feedback f WHERE f.run_id = r.id ORDER BY f.created_at DESC, f.id DESC LIMIT 1) AS verdict,
-	(SELECT s.title FROM sessions s WHERE s.id = r.session_id) AS session_title
+	(SELECT s.title FROM sessions s WHERE s.id = r.session_id) AS session_title,
+	${RUN_SCORE_SQL} AS score_json
 	FROM runs r`;
 
 function decodeSummary(row: Record<string, unknown>): RunSummary {
@@ -252,6 +258,7 @@ function decodeSummary(row: Record<string, unknown>): RunSummary {
 		sessionId: run.sessionId ?? null,
 		turnIndex: run.turnIndex ?? null,
 		sessionTitle: (row.session_title as string | null) ?? null,
+		score: decodeRunScore(row.score_json),
 	};
 }
 
@@ -286,6 +293,8 @@ export function queryRuns(db: Db, query: RunQuery = {}): RunPage {
 	}
 	if (query.reviewed === true) where.push("EXISTS (SELECT 1 FROM feedback f WHERE f.run_id = r.id)");
 	if (query.reviewed === false) where.push("r.status != 'running' AND NOT EXISTS (SELECT 1 FROM feedback f WHERE f.run_id = r.id)");
+	if (query.scored === true) where.push("EXISTS (SELECT 1 FROM scores s WHERE s.run_id = r.id)");
+	if (query.scored === false) where.push("r.status != 'running' AND NOT EXISTS (SELECT 1 FROM scores s WHERE s.run_id = r.id)");
 	if (query.cursor !== undefined) {
 		const after = decodeRunCursor(query.cursor);
 		where.push("(r.started_at < ? OR (r.started_at = ? AND r.id < ?))");

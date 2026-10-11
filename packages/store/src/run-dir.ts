@@ -3,6 +3,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { type ErrorPayload, NexoError, type Redactor } from "@nexo/telemetry";
 import type { HumanVerdict } from "./feedback.ts";
 import type { RunStatus } from "./runs.ts";
+import type { ScoreRow } from "./scores.ts";
 import type { SpanRow } from "./spans.ts";
 
 export interface ResolvedModelInfo {
@@ -44,6 +45,10 @@ export interface RunJson {
 	turnIndex?: number | null;
 	/** The latest human verdict; written by `recordFeedback` after the run ends. */
 	humanVerdict?: HumanVerdict | null;
+	/** Every scorer result of every scoring round; absent when the run was never scored. */
+	scores?: ScoreRow[];
+	/** System 1 → System 2 escalations that took effect. */
+	escalations?: number;
 }
 
 const SUBDIRS = ["artifacts", "context", "workspace", "tool_outputs", "scores", "subagents"] as const;
@@ -113,6 +118,16 @@ export class RunDir {
 
 	writeContext(relPath: string, content: string): string {
 		return this.writeConfined(this.contextDir, relPath, content);
+	}
+
+	get scoresDir(): string {
+		return join(this.root, "scores");
+	}
+
+	/** Writes a scorer output (judge responses, command logs) under `scores/` and returns its path relative to the run directory. */
+	writeScoreFile(relPath: string, content: string): string {
+		this.writeConfined(this.scoresDir, relPath, content);
+		return `scores/${relPath}`;
 	}
 
 	/** Stores a large tool result and returns its path relative to the run directory. */

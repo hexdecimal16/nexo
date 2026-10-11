@@ -11,6 +11,8 @@ export type SpanKind =
 	| "subagent"
 	| "escalation"
 	| "judge_call"
+	| "scorer"
+	| "self_check"
 	| "memory_read"
 	| "memory_write"
 	| "compaction";

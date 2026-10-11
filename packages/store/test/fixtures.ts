@@ -1,4 +1,4 @@
-import { newId, type RunRow, type SpanRow } from "../src/index.ts";
+import { newId, type RunRow, type ScoreRow, type SpanRow } from "../src/index.ts";
 
 /** A complete `runs` row with neutral defaults; tests override only the fields they assert on. */
 export function runRow(overrides: Partial<RunRow> = {}): RunRow {
@@ -53,6 +53,30 @@ export function spanRow(runId: string, overrides: Partial<SpanRow> = {}): SpanRo
 		costUnknown: false,
 		payloadRef: null,
 		attrs: {},
+		...overrides,
+	};
+}
+
+/** A complete `scores` row (a passing llm_judge score) with neutral defaults. */
+export function scoreRow(runId: string, overrides: Partial<ScoreRow> = {}): ScoreRow {
+	return {
+		id: newId(),
+		runId,
+		round: 0,
+		scorerKind: "judge",
+		scorerType: "llm_judge",
+		scorerName: "llm_judge",
+		status: "ok",
+		value: 0.8,
+		passed: true,
+		rationale: "fine",
+		criteria: [{ name: "completes_instruction", passed: true, note: "yes" }],
+		details: { panel: false },
+		error: null,
+		model: "google/gemini-x",
+		costUsd: 0.001,
+		costUnknown: false,
+		createdAt: "2026-10-11T00:00:00.000Z",
 		...overrides,
 	};
 }

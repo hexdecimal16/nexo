@@ -7,6 +7,7 @@ export * from "./feedback.ts";
 export * from "./ids.ts";
 export * from "./paths.ts";
 export * from "./runs.ts";
+export * from "./scores.ts";
 export * from "./sessions.ts";
 export * from "./span-tree.ts";
 export * from "./spans.ts";
