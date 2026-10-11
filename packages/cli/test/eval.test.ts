@@ -171,7 +171,7 @@ describe("nexo ui and the judge", () => {
 		const t = io();
 		const ac = new AbortController();
 		const running = runCli(["ui", "--port", "0"], t, { ...h, signal: ac.signal });
-		for (let i = 0; i < 100 && !t.out().includes("token="); i++) await new Promise((r) => setTimeout(r, 10));
+		for (const deadline = Date.now() + 5000; Date.now() < deadline && !t.out().includes("token=");) await new Promise((r) => setTimeout(r, 10));
 		const url = /nexo UI: (\S+)/.exec(t.out())?.[1] ?? "";
 		const body = (await (await fetch(new URL("/api/judge/calibration", url))).json()) as { judgeKey: string; warnings: string[]; current: { cases: number } };
 		expect(body.judgeKey).toBe("google/gemini-x");

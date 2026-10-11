@@ -31,7 +31,7 @@ beforeAll(async () => {
 	judged = make({ instruction: "judged task", startedAt: "2026-10-10T10:00:00.000Z", escalations: 1 });
 	unscored = make({ instruction: "plain task", startedAt: "2026-10-10T09:00:00.000Z" });
 	insertScore(db, scoreRow(judged.id, { round: 0, value: 0.3, passed: false, model: JUDGE }));
-	insertScore(db, scoreRow(judged.id, { round: 1, value: 0.9, passed: true, model: JUDGE, details: { sameFamily: [{ judge: JUDGE, generator: "google/gemini-y", family: "google" }] } }));
+	insertScore(db, scoreRow(judged.id, { round: 1, value: 0.9, passed: true, model: JUDGE, details: { rubric: "RUBRIC TEXT", sameFamily: [{ judge: JUDGE, generator: "google/gemini-y", family: "google" }] } }));
 	const runSpan = spanRow(judged.id, { kind: "run", name: "run", status: "ok" });
 	insertSpan(db, runSpan);
 	insertSpan(
@@ -45,6 +45,11 @@ beforeAll(async () => {
 			attrs: { trigger: "judge_low", reason: "judge score 0.30 is below 0.6", phase: "end_of_run", applied: true, blockedBy: null, from: "faux/fast", to: "faux/slow" },
 		}),
 	);
+	const spanAt = (name: string, attrs: Record<string, unknown>, startedAt: string) =>
+		insertSpan(db, spanRow(judged.id, { kind: "escalation", name, parentSpanId: runSpan.id, status: "ok", startedAt, attrs }));
+	spanAt("tool_failures", { trigger: "tool_failures", reason: "2 failures", phase: "mid_run", applied: false, blockedBy: "max_escalations", blockedReason: "limit reached", from: null, to: null }, "2026-10-10T10:00:06.000Z");
+	spanAt("verify_fail", { trigger: "verify_fail", reason: "check failed", phase: "end_of_run", applied: true, blockedBy: null, from: "faux/fast", to: "faux/slow", continuationError: { code: "INTERNAL", message: "continuation ended failed" } }, "2026-10-10T10:00:07.000Z");
+	spanAt("stagnation", { trigger: "stagnation", reason: "same", phase: "mid_run", applied: true, blockedBy: null, from: "a", to: "b", continuationError: { code: 5, message: "x" } }, "2026-10-10T10:00:08.000Z");
 	recordFeedback(db, { runId: judged.id, verdict: "not_done", comment: "still wrong", nowIso: "2026-10-11T00:00:00.000Z", redact });
 	recordCalibration(db, JUDGE, "2026-10-11T00:01:00.000Z");
 	server = await startWebServer({ db, redact, port: 0, judge: { key: JUDGE, warnings: ["Judge google/gemini-x is from the same model family"] } });
@@ -75,9 +80,15 @@ describe("scores in the runs API", () => {
 			[0, 0.3, false],
 			[1, 0.9, true],
 		]);
-		expect(detail.escalations).toEqual([
-			expect.objectContaining({ trigger: "judge_low", applied: true, blockedBy: null, from: "faux/fast", to: "faux/slow", phase: "end_of_run" }),
+		const esc = detail.escalations.map(({ spanId: _s, at: _a, ...rest }) => rest);
+		expect(esc).toEqual([
+			{ trigger: "judge_low", reason: "judge score 0.30 is below 0.6", phase: "end_of_run", applied: true, blockedBy: null, blockedReason: null, from: "faux/fast", to: "faux/slow", continuationError: null },
+			{ trigger: "tool_failures", reason: "2 failures", phase: "mid_run", applied: false, blockedBy: "max_escalations", blockedReason: "limit reached", from: null, to: null, continuationError: null },
+			{ trigger: "verify_fail", reason: "check failed", phase: "end_of_run", applied: true, blockedBy: null, blockedReason: null, from: "faux/fast", to: "faux/slow", continuationError: { code: "INTERNAL", message: "continuation ended failed" } },
+			{ trigger: "stagnation", reason: "same", phase: "mid_run", applied: true, blockedBy: null, blockedReason: null, from: "a", to: "b", continuationError: null },
 		]);
+		expect(detail.scores.every((s) => !("rubric" in s.details))).toBe(true);
+		expect(detail.scores[1]?.details).toHaveProperty("sameFamily");
 		expect(detail.judgeDisagrees).toBe(true);
 		const plain = (await raw(server.port, `/api/runs/${unscored.id}`)).json() as RunDetailResponse;
 		expect(plain).toMatchObject({ scores: [], escalations: [], judgeDisagrees: false });

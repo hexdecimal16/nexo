@@ -135,7 +135,7 @@ export function runDetailResponse(ctx: ApiContext, id: string): RunDetailRespons
 		children,
 		feedback: listFeedback(ctx.db, id),
 		childFeedback,
-		scores: listScores(ctx.db, id),
+		scores: listScores(ctx.db, id).map(({ details: { rubric: _rubric, ...details }, ...score }) => ({ ...score, details })),
 		escalations: listEscalations(ctx.db, id),
 		judgeDisagrees: judgeDisagrees(ctx.db, id),
 	};
