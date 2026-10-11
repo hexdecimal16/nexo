@@ -22,6 +22,18 @@ describe("scores and escalations in the chat", () => {
 		await h.done;
 	});
 
+	it("shows a failed S2 continuation in the chat", async () => {
+		const h = await startHarness({
+			overrides: { ...FAUX_ROLES, providers: { faux: { retryBaseDelayMs: 0, maxRetries: 0 } }, scoring: { scorers: [{ kind: "contains", name: "says-done", text: "DONE" }] } },
+		});
+		h.faux.setResponses([fauxAssistantMessage("not yet"), fauxAssistantMessage("", { stopReason: "error", errorMessage: "invalid request 400" })]);
+		submit(h.terminal, "finish it");
+		await until(() => !h.session().running);
+		await until(() => expect(h.terminal.output()).toMatch(/✗ s2 continuation failed \[[A-Z_]+\] .*invalid request 400.*kept the previous answer/));
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
 	it("summarizes a turn's scores for the footer", () => {
 		expect(scoreSummary({})).toBeNull();
 		expect(scoreSummary({ scores: [scoreRow("r", { value: 0.5 }), scoreRow("r", { value: 1 })] })).toBe("score 0.75 ✓");

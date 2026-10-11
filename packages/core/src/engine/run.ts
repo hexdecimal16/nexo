@@ -130,6 +130,14 @@ export type EngineEvent =
 			model: string;
 	  }
 	| {
+			/** An applied end-of-run escalation whose S2 continuation failed or ran out of budget; the previous answer is kept. */
+			type: "escalation_failed";
+			runId: string;
+			depth: number;
+			trigger: EscalationTrigger;
+			error: { code: string; message: string };
+	  }
+	| {
 			type: "score";
 			runId: string;
 			depth: number;
@@ -200,6 +208,8 @@ export interface RunResult {
 	scores?: ScoreRow[];
 	/** Escalations that took effect. */
 	escalations?: number;
+	/** Why the run's S2 continuation failed or ran out of budget (the previous answer was kept); absent otherwise. */
+	continuationError?: ErrorPayload;
 }
 
 export interface Engine {
@@ -407,6 +417,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	/** The model requests go to; replaced by S2 when an escalation takes effect. */
 	let active = { model, resolved };
 	let escalations = 0;
+	let continuationFailure: ErrorPayload | null = null;
 	/** Every model that generated part of the run (S1, and S2 after an escalation), for the judge's same-family check. */
 	const usedModels = new Map<string, { provider: string; id: string }>([[`${model.provider}/${model.id}`, { provider: model.provider, id: model.id }]]);
 	/** Every scorer result of the run, and those of its latest round. */
@@ -1007,6 +1018,14 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 							error = before.error;
 							active = before.active;
 							budgetExceeded = false;
+							continuationFailure = continuationError;
+							deps.onEvent?.({
+								type: "escalation_failed",
+								runId,
+								depth,
+								trigger: combined.trigger,
+								error: { code: continuationError.code, message: continuationError.message },
+							});
 						}
 					} finally {
 						recorder.finish(escalationSpan, { status: "ok", attrs: continuationError ? { continuationError: { code: continuationError.code, message: continuationError.message } } : {} });
@@ -1083,6 +1102,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		model: modelInfo(active.model, active.resolved),
 		...(scoreRows.length > 0 ? { scores: latestScores } : {}),
 		escalations,
+		...(continuationFailure ? { continuationError: continuationFailure } : {}),
 	};
 }
 

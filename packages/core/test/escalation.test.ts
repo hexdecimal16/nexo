@@ -147,10 +147,20 @@ describe("end-of-run continuation outcomes", () => {
 
 	it("keeps the scored answer when the S2 continuation fails with a provider error", async () => {
 		const env = judgeEnv({ config: { ...contains, providers: { faux: { maxRetries: 0 } } } });
+		const events: EngineEvent[] = [];
+		env.deps.onEvent = (e) => events.push(e);
 		route(env, [fauxAssistantMessage("not yet"), fauxAssistantMessage("", { stopReason: "error", errorMessage: "invalid request 400" })]);
 		const result = await createEngine(env.deps).run({ instruction: "Finish" });
 		expect(result).toMatchObject({ status: "succeeded", output: "not yet", escalations: 1 });
 		expect(result.error).toBeUndefined();
+		expect(result.continuationError).toMatchObject({ code: expect.any(String), message: expect.stringContaining("invalid request 400") });
+		expect(events.find((e) => e.type === "escalation_failed")).toEqual({
+			type: "escalation_failed",
+			runId: result.trajectoryId,
+			depth: 0,
+			trigger: "verify_fail",
+			error: { code: result.continuationError?.code, message: expect.stringContaining("invalid request 400") },
+		});
 		expect(result.scores).toEqual([expect.objectContaining({ round: 0, passed: false })]);
 		expect(rowsOf(env, result.trajectoryId as string)).toEqual([[0, false]]);
 		const span = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.kind === "escalation");
@@ -168,6 +178,7 @@ describe("end-of-run continuation outcomes", () => {
 		expect(result.error).toBeUndefined();
 		const span = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.kind === "escalation");
 		expect(span?.attrs).toMatchObject({ applied: true, continuationError: { code: "BUDGET_EXCEEDED" } });
+		expect(result.continuationError).toMatchObject({ code: "BUDGET_EXCEEDED" });
 	});
 
 	it("ends the run aborted when it is aborted during the continuation", async () => {
