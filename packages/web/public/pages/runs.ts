@@ -3,7 +3,7 @@ import { renderError } from "../lib/common-view.ts";
 import { type RunFilters, renderEmptyRuns, renderRunRows, renderSessionFilter, renderStatusOptions, runsQuery } from "../lib/runs-view.ts";
 import { asErrorBody, el, getJson } from "./api.ts";
 
-const filters: RunFilters = { tab: "all", status: "", skill: "", since: "", session: new URLSearchParams(location.search).get("session") ?? "" };
+const filters: RunFilters = { tab: "all", status: "", skill: "", since: "", session: new URLSearchParams(location.search).get("session") ?? "", scored: "" };
 let cursor: string | null = null;
 
 const body = el<HTMLTableSectionElement>("#runs-body");
@@ -51,6 +51,7 @@ form.addEventListener("submit", (event) => {
 	filters.status = String(data.get("status") ?? "");
 	filters.skill = String(data.get("skill") ?? "");
 	filters.since = String(data.get("since") ?? "");
+	filters.scored = String(data.get("scored") ?? "");
 	void load(false);
 });
 

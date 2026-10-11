@@ -13,7 +13,7 @@ afterAll(async () => {
 	await server.close();
 });
 
-const PAGES = ["/", "/run.html", "/cost.html"];
+const PAGES = ["/", "/run.html", "/cost.html", "/judge.html"];
 
 /** Every browser module reachable from the pages, following static `from "./x.ts"` imports. */
 async function reachableModules(): Promise<Map<string, string>> {
@@ -51,7 +51,7 @@ describe("pages", () => {
 	it("serve browser modules that parse as JavaScript", async () => {
 		const modules = await reachableModules();
 		expect([...modules.keys()].sort()).toEqual(
-			expect.arrayContaining(["/lib/html.ts", "/lib/poller.ts", "/lib/run-view.ts", "/lib/span-view.ts", "/lib/timeline.ts", "/pages/api.ts", "/pages/cost.ts", "/pages/run.ts", "/pages/runs.ts"]),
+			expect.arrayContaining(["/lib/html.ts", "/lib/judge-view.ts", "/lib/poller.ts", "/lib/run-view.ts", "/lib/score-view.ts", "/lib/span-view.ts", "/lib/timeline.ts", "/pages/api.ts", "/pages/cost.ts", "/pages/judge.ts", "/pages/run.ts", "/pages/runs.ts"]),
 		);
 		for (const [path, code] of modules) {
 			const check = spawnSync(process.execPath, ["--check", "--input-type=module"], { input: code, encoding: "utf8" });
