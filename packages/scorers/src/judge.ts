@@ -161,7 +161,8 @@ export async function completeStructured<T>(
 	try {
 		second = await caller.complete(model, repair, signal);
 	} catch (error) {
-		if (signal.aborted || !(error instanceof Error)) throw error;
+		if (signal.aborted) throw signal.reason ?? error;
+		if (!(error instanceof Error)) throw error;
 		const base = error instanceof NexoError ? error : undefined;
 		throw new NexoError({
 			code: base?.code ?? "SCORER_FAILED",
@@ -249,6 +250,7 @@ export function judgeScorer(options: JudgeOptions): Scorer {
 			const settled = await Promise.allSettled(
 				options.models.map((m) => completeStructured<JudgeVerdict>(options.caller, m, request, JudgeVerdictSchema, signal)),
 			);
+			if (signal.aborted) throw signal.reason ?? new Error("Scoring was aborted");
 			let costUsd = 0;
 			let costUnknown = false;
 			const votes: MemberVote[] = [];
@@ -358,7 +360,7 @@ export async function comparePairwise(caller: JudgeCaller, models: readonly Mode
 			costUnknown ||= r.costUnknown;
 			return r.value.preferred;
 		} catch (error) {
-			if (signal.aborted) throw error;
+			if (signal.aborted) throw signal.reason ?? error;
 			const ctx = error instanceof NexoError ? error.context : undefined;
 			costUsd += typeof ctx?.costUsd === "number" ? ctx.costUsd : 0;
 			costUnknown ||= ctx?.costUnknown === true;
