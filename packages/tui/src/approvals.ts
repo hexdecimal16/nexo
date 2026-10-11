@@ -44,6 +44,8 @@ export interface OverlayPrompterOptions {
 	/** How long the overlay ignores input after it appears (default 400 ms). */
 	guardMs?: number;
 	now?: () => number;
+	/** Applied to every question before it is shown (the policy builds it from unredacted tool arguments). */
+	redact?: (text: string) => string;
 }
 
 /**
@@ -54,6 +56,7 @@ export interface OverlayPrompterOptions {
 export function createOverlayPrompter(tui: TUI, options: OverlayPrompterOptions = {}): Prompter {
 	const guardMs = options.guardMs ?? 400;
 	const now = options.now ?? Date.now;
+	const redact = options.redact ?? ((text: string) => text);
 	let queue: Promise<unknown> = Promise.resolve();
 
 	const ask = (question: string, signal: AbortSignal | undefined): Promise<boolean> =>
@@ -68,7 +71,7 @@ export function createOverlayPrompter(tui: TUI, options: OverlayPrompterOptions 
 				selectListTheme,
 			);
 			list.setSelectedIndex(1);
-			const box: Component = new ApprovalBox(escapeControl(question), list, guardMs, now);
+			const box: Component = new ApprovalBox(escapeControl(redact(question)), list, guardMs, now);
 			const handle = tui.showOverlay(box, { width: "80%", minWidth: 40, anchor: "center" });
 			tui.requestRender();
 			let settled = false;

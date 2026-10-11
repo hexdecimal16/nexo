@@ -136,7 +136,7 @@ class InteractiveApp {
 		this.tui = new TuiMainScreen(this.terminal);
 		this.editor = new Editor(this.tui, editorTheme);
 		this.editor.onSubmit = (text) => this.onSubmit(text);
-		this.prompter = createOverlayPrompter(this.tui, { now: this.now });
+		this.prompter = createOverlayPrompter(this.tui, { now: this.now, redact: (text) => this.settings.redact(text) });
 		const root = new SafeContainer();
 		root.addChild(this.chat);
 		root.addChild(this.status);
@@ -398,7 +398,7 @@ class InteractiveApp {
 					this.chat.addChild(component);
 				}
 				this.currentText.text += event.delta;
-				this.currentText.component.setText(escapeControlKeepLines(this.currentText.text));
+				this.currentText.component.setText(escapeControlKeepLines(this.settings.redact(this.currentText.text)));
 				break;
 			}
 			case "tool_start": {

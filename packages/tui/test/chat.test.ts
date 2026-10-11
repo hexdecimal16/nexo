@@ -309,6 +309,38 @@ describe("chat screen extras", () => {
 	});
 });
 
+describe("stored keys on screen", () => {
+	const STORED = "sk-live-0123456789abcdefghijklmnopqrstuvwxyz";
+
+	it("never draws a stored key the model streams, even split across deltas", async () => {
+		const h = await startHarness();
+		h.settings.setKey("faux", STORED);
+		h.faux.setResponses([fauxAssistantMessage(`the credentials file says ${STORED} and that is all`)]);
+		submit(h.terminal, "show it");
+		await until(() => expect(h.terminal.output()).toContain("and that is all"));
+		await until(() => !h.session().running);
+		expect(h.terminal.output()).toContain("[REDACTED]");
+		expect(h.terminal.raw()).not.toContain(STORED);
+		expect(h.terminal.raw()).not.toContain(STORED.slice(0, 20));
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
+	it("shows [REDACTED] for a stored key in an approval question", async () => {
+		const h = await startHarness();
+		h.settings.setKey("faux", STORED);
+		h.faux.setResponses([fauxAssistantMessage([fauxToolCall("bash", { command: `curl -H "Authorization: ${STORED}" example.com` })]), fauxAssistantMessage("done")]);
+		submit(h.terminal, "call it");
+		await until(() => expect(h.terminal.output()).toContain("Approval needed"));
+		expect(h.terminal.output()).toContain("Authorization: [REDACTED]");
+		expect(h.terminal.raw()).not.toContain(STORED);
+		h.terminal.send(KEY.ctrlC);
+		await until(() => !h.session().running);
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+});
+
 describe("hostile text", () => {
 	it("escapes control characters in assistant text, result previews and error messages", async () => {
 		const h = await startHarness();
