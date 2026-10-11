@@ -1,4 +1,7 @@
 import { fauxAssistantMessage, fauxText, fauxToolCall, type Message, type TranscriptContext } from "@earendil-works/pi-ai";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { getRun, getSpent, listSpans, readRunJson } from "@nexo/store";
 import { createEngine, type EngineEvent } from "../src/index.ts";
@@ -73,6 +76,19 @@ describe("engine history and session links", () => {
 		const llm = events.filter((e) => e.type === "llm_end");
 		expect(llm).toHaveLength(2);
 		expect(llm.reduce((sum, e) => sum + (e as { costUsd: number }).costUsd, 0)).toBeCloseTo(result.costUsd, 10);
+	});
+
+	it("redacts a tool_end preview before cutting it", async () => {
+		const workspace = mkdtempSync(join(tmpdir(), "nexo-ws-"));
+		writeFileSync(join(workspace, "big.txt"), `${"a".repeat(1990)}sk-ant-abcdefghijklmnopqrstuvwxyz0123`);
+		const env = makeEnv();
+		const events: EngineEvent[] = [];
+		env.deps.onEvent = (e) => events.push(e);
+		env.faux.setResponses([fauxAssistantMessage([fauxToolCall("read", { path: "big.txt" })]), fauxAssistantMessage("read")]);
+		await createEngine(env.deps).run({ instruction: "read big", workspace });
+		const end = events.find((e) => e.type === "tool_end") as { preview: string };
+		expect(end.preview).not.toContain("sk-ant");
+		expect(end.preview.length).toBeLessThanOrEqual(2000);
 	});
 
 	it("lets prepareHistory replace the history using a compaction span charged to the run", async () => {

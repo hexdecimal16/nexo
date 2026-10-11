@@ -48,6 +48,8 @@ export interface ToolContext {
 	bashTimeoutMs: number;
 	/** The run's `tool_outputs/` directory, readable through TOOL_OUTPUT_PREFIX paths. */
 	toolOutputsDir?: string;
+	/** Further `tool_outputs/` directories searched, in order, for a TOOL_OUTPUT_PREFIX path not in `toolOutputsDir` (earlier turns of a session). */
+	earlierToolOutputsDirs?: () => readonly string[];
 	fetch?: typeof fetch;
 }
 
@@ -81,6 +83,17 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 		writeFileSync(abs, content);
 	};
 
+	/** A saved output path in the run's own directory, else in the first earlier directory that has it. */
+	const resolveSavedOutput = (outputs: string, path: string): string => {
+		const name = path.slice(TOOL_OUTPUT_PREFIX.length);
+		for (const dir of [outputs, ...(ctx.earlierToolOutputsDirs?.() ?? [])]) {
+			if (!existsSync(dir)) continue;
+			const abs = resolveConfined(dir, name);
+			if (existsSync(abs)) return abs;
+		}
+		throw new Error(`File not found: ${path}`);
+	};
+
 	const read: AgentTool<typeof ReadParams> = {
 		name: "read",
 		label: "Read file",
@@ -89,8 +102,7 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 		execute: async (_id, params) => {
 			const outputs = ctx.toolOutputsDir;
 			const savedOutput = outputs !== undefined && params.path.startsWith(TOOL_OUTPUT_PREFIX);
-			if (savedOutput && !existsSync(outputs)) throw new Error(`File not found: ${params.path}`);
-			const abs = savedOutput ? resolveConfined(outputs, params.path.slice(TOOL_OUTPUT_PREFIX.length)) : resolveConfined(root, params.path);
+			const abs = savedOutput ? resolveSavedOutput(outputs, params.path) : resolveConfined(root, params.path);
 			if (!existsSync(abs)) throw new Error(`File not found: ${params.path}`);
 			const lines = readFileSync(abs, "utf8").split("\n");
 			const start = (params.offset ?? 1) - 1;
