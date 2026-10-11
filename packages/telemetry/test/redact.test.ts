@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createMutableRedactor, createRedactor, createSecretSet, NexoError, REDACTED } from "../src/index.ts";
+import { containsSecret, createMutableRedactor, createRedactor, createSecretSet, MIN_SECRET_LENGTH, NexoError, REDACTED } from "../src/index.ts";
 
 describe("createRedactor", () => {
 	const redact = createRedactor();
@@ -75,6 +75,19 @@ describe("exact secrets", () => {
 	it("replaces the longest secret first so a shorter overlapping secret leaves no tail", () => {
 		const secrets = createSecretSet(["abcdefgh", "abcdefgh-ijkl"]);
 		expect(createRedactor([], { secrets })("abcdefgh-ijkl")).toBe(REDACTED);
+	});
+
+	it("does not register values shorter than the minimum and reports it", () => {
+		const secrets = createSecretSet();
+		expect(secrets.add("none")).toBe(false);
+		expect(secrets.add("x".repeat(MIN_SECRET_LENGTH))).toBe(true);
+		expect(secrets.size).toBe(1);
+		expect(createRedactor([], { secrets })("there is none here")).toBe("there is none here");
+	});
+
+	it("tells whether text matches a built-in secret pattern", () => {
+		expect(containsSecret("sk-ant-api03-abcdefghijklmnopqrstuvwx")).toBe(true);
+		expect(containsSecret("anthropic")).toBe(false);
 	});
 
 	it("ignores empty values", () => {

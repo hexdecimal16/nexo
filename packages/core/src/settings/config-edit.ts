@@ -32,7 +32,10 @@ export interface SettingView extends SettingDefinition {
 	userValue: SettingValue;
 	/** The project config sets this key, so it wins over the user config. */
 	overriddenByProject: boolean;
-	/** `overridden by project config` when `overriddenByProject`, else null. */
+	/**
+	 * `overridden by project config` when `overriddenByProject` (followed by `; <project file> has an invalid value: …`
+	 * when the project value fails the schema), else null.
+	 */
 	notice: string | null;
 }
 
@@ -194,6 +197,16 @@ export function mergedLayers(layers: ConfigLayers): Record<string, unknown> {
 	return deepMerge(DEFAULT_CONFIG, layers.user, layers.project);
 }
 
+function errorsUnder(config: unknown, pointer: string): { path: string; message: string }[] {
+	return configErrors(config).filter((e) => e.path === pointer || e.path.startsWith(`${pointer}/`));
+}
+
+function overrideNotice(def: SettingDefinition, layers: ConfigLayers): string {
+	const errors = errorsUnder(mergedLayers(layers), `/${segments(def.key).join("/")}`);
+	if (errors.length === 0) return PROJECT_OVERRIDE_NOTICE;
+	return `${PROJECT_OVERRIDE_NOTICE}; ${layers.projectFile} has an invalid value: ${errors.map((e) => `${e.path} ${e.message}`).join("; ")}`;
+}
+
 export function settingView(def: SettingDefinition, layers: ConfigLayers): SettingView {
 	const overriddenByProject = definedIn(layers.project, def);
 	const source: SettingSource = overriddenByProject
@@ -209,7 +222,7 @@ export function settingView(def: SettingDefinition, layers: ConfigLayers): Setti
 		source,
 		userValue: definedIn(layers.user, def) ? displayValue(def, layers.user) : null,
 		overriddenByProject,
-		notice: overriddenByProject ? PROJECT_OVERRIDE_NOTICE : null,
+		notice: overriddenByProject ? overrideNotice(def, layers) : null,
 	};
 }
 
@@ -223,11 +236,14 @@ function parseModel(key: string, value: unknown): { provider: string; id: string
 	throw invalidRequest(`Invalid value for ${key}: expected "provider/model-id"`, 'Pick a model from the list or type "provider/model-id"', { key });
 }
 
+/** Plain decimal numbers only: no hex, binary, exponent, separators or Infinity. */
+const DECIMAL = /^-?(\d+(\.\d+)?|\.\d+)$/;
+
 /** Converts text typed on the command line into the value type of a setting. */
 export function parseSettingInput(def: SettingDefinition, raw: string): unknown {
 	const text = raw.trim();
 	if (def.type.kind !== "number") return text;
-	const value = text === "" ? Number.NaN : Number(text);
+	const value = DECIMAL.test(text) ? Number(text) : Number.NaN;
 	if (!Number.isFinite(value)) {
 		throw invalidRequest(`Invalid value for ${def.key}: "${text}" is not a number`, undefined, { key: def.key, errors: [{ path: `/${segments(def.key).join("/")}`, message: "must be a number" }] });
 	}
@@ -252,9 +268,10 @@ function writeJsonAtomic(file: string, data: unknown): void {
 }
 
 /**
- * Sets one key in the user config. The result is validated against the config schema together with the defaults and
- * the project config; schema errors at or below the key's path reject the change (INVALID_REQUEST naming each path)
- * and the file is left untouched. Errors elsewhere, such as a model not chosen yet on a first run, do not block it.
+ * Sets one key in the user config. The candidate user config is validated against the config schema on top of the
+ * defaults; schema errors at or below the key's path reject the change (INVALID_REQUEST naming each path) and the file
+ * is left untouched. Errors elsewhere, such as a model not chosen yet on a first run, do not block it. The project
+ * config is not part of the check: when it holds an invalid value for the key, the returned view's notice names it.
  * Every other key of the user config is kept.
  */
 export function writeSetting(userFile: string, cwd: string, key: string, value: unknown): SettingView {
@@ -274,9 +291,7 @@ export function writeSetting(userFile: string, cwd: string, key: string, value: 
 		}
 		setPath(user, path, value);
 	}
-	const errors = configErrors(deepMerge(DEFAULT_CONFIG, user, layers.project)).filter(
-		(e) => e.path === pointer || e.path.startsWith(`${pointer}/`),
-	);
+	const errors = errorsUnder(deepMerge(DEFAULT_CONFIG, user), pointer);
 	if (errors.length > 0) {
 		throw invalidRequest(`Invalid value for ${key}: ${errors.map((e) => `${e.path} ${e.message}`).join("; ")}`, undefined, { key, errors });
 	}
