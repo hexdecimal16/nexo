@@ -81,7 +81,9 @@ export interface EngineDeps {
 /** Longest tool result text carried by a `tool_end` event. */
 export const TOOL_END_PREVIEW_CHARS = 2_000;
 
-/** Live progress of a run tree. Payloads are redacted. `depth` is 0 for the root run and grows by one per subagent level. */
+/**
+ * Live progress of a run tree. Payloads are redacted except `text_delta.delta`, which is raw: a secret can be split across
+ * deltas, so a consumer redacts the accumulated text. `depth` is 0 for the root run and grows by one per subagent level. */
 export type EngineEvent =
 	| { type: "run_start"; runId: string; parentRunId: string | null; instruction: string; depth: number }
 	| { type: "text_delta"; runId: string; depth: number; delta: string }
