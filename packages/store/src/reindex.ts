@@ -5,6 +5,7 @@ import { transaction } from "./db.ts";
 import { restoreFeedback } from "./feedback.ts";
 import { readRunJson, readTrajectory, type RunJson } from "./run-dir.ts";
 import { insertRun } from "./runs.ts";
+import { restoreScores } from "./scores.ts";
 import { type SessionJson, sessionRowFromJson, upsertSessionRow } from "./sessions.ts";
 import { insertSpan } from "./spans.ts";
 
@@ -18,7 +19,8 @@ export interface ReindexResult {
 /**
  * Rebuilds the `runs` and `spans` tables from run directories, and the `sessions` table from session directories when
  * `sessionsRoot` is given. Directories are the source of truth; a run's session link comes from its run.json.
- * The feedback table is kept; a run with no feedback rows gets one back from its run.json `humanVerdict`.
+ * The feedback and scores tables are kept; a run with no feedback rows gets one back from its run.json `humanVerdict`,
+ * and a run with no score rows gets its run.json `scores` back.
  * A run.json still marked running is indexed as aborted, because a reindexed row has no pid for crash recovery to check.
  */
 export function reindex(db: Db, runsRoot: string, sessionsRoot?: string): ReindexResult {
@@ -86,7 +88,7 @@ function indexRun(db: Db, dir: string): { spans: number } | null {
 			artifactSetId: run.artifactSetId,
 			modelFinal: run.model ? `${run.model.provider}/${run.model.id}` : null,
 			tierFinal: run.model?.role ?? null,
-			escalations: 0,
+			escalations: typeof run.escalations === "number" ? run.escalations : 0,
 			startedAt: run.startedAt,
 			endedAt: run.endedAt,
 			costUsd: run.costUsd,
@@ -101,6 +103,7 @@ function indexRun(db: Db, dir: string): { spans: number } | null {
 				: run.error,
 		});
 		if (run.humanVerdict) restoreFeedback(db, run.id, run.humanVerdict);
+		if (Array.isArray(run.scores)) restoreScores(db, run.id, run.scores);
 		let spans = 0;
 		for (const span of readTrajectory(dir)) {
 			insertSpan(db, span);

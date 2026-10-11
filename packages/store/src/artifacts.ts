@@ -76,6 +76,16 @@ export function ensureManualArtifact(db: Db, kind: ArtifactKind, name: string, c
 	});
 }
 
+/**
+ * Returns the active version of a learnable artifact (router policy, judge rubric), creating version 1 from `seed` when
+ * none exists. Unlike `ensureManualArtifact` it never replaces an active version, so a promoted version stays active.
+ */
+export function ensureSeedArtifact(db: Db, kind: ArtifactKind, name: string, seed: string, nowIso: string): ArtifactRow {
+	const active = getActiveArtifact(db, kind, name);
+	if (active) return active;
+	return ensureManualArtifact(db, kind, name, seed, nowIso);
+}
+
 /** Stores an artifact set keyed by the hash of its sorted members, so identical sets share one id. */
 export function createArtifactSet(db: Db, members: readonly ArtifactSetMember[], nowIso: string): string {
 	const sorted = [...members].sort((a, b) => `${a.kind}/${a.name}`.localeCompare(`${b.kind}/${b.name}`));
