@@ -6,7 +6,9 @@ import {
 	type Db,
 	type FeedbackRow,
 	getSpent,
+	latestSessionRunId,
 	listSessionRows,
+	maxSessionTurn,
 	newId,
 	recordFeedback,
 	SessionDir,
@@ -18,7 +20,7 @@ import {
 	upsertSessionRow,
 	type Verdict,
 } from "@nexo/store";
-import { type ErrorPayload, NexoError, toErrorPayload } from "@nexo/telemetry";
+import { createRedactor, type ErrorPayload, NexoError, type Redactor, toErrorPayload } from "@nexo/telemetry";
 import type { NexoConfig } from "../config/schema.ts";
 import { checkAdmission, sessionScope } from "../cost/admission.ts";
 import { RunBudget } from "../cost/budget.ts";
@@ -41,13 +43,23 @@ import {
 	renderForSummary,
 	titleFrom,
 } from "./transcript.ts";
+import { SessionLock } from "./lock.ts";
 
 const EPSILON = 1e-9;
 
+/** Share of the s1 model's context window the compaction input may fill (at about 4 characters per token). */
+const COMPACTION_INPUT_WINDOW_SHARE = 0.5;
+
+/** Constructor guard: only this module's factories can build a Session. */
+const INIT: unique symbol = Symbol("Session.init");
+
 /** What a session needs: the engine's dependencies (with the caller's prompter) minus the event sink, which is per turn. */
 export interface SessionDeps extends Omit<EngineDeps, "onEvent"> {
-	/** Called before each turn; a config with a different hash takes effect from that turn. */
-	reloadConfig?: () => { config: NexoConfig; configHash: string };
+	/**
+	 * Called before each turn; a config with a different hash takes effect from that turn, together with its redactor
+	 * (`redact`, or one built from `config.redaction.patterns`).
+	 */
+	reloadConfig?: () => { config: NexoConfig; configHash: string; redact?: Redactor };
 }
 
 export interface CreateSessionOptions {
@@ -114,8 +126,9 @@ function contextTokens(messages: readonly Message[]): number | null {
  */
 export class Session {
 	readonly id: string;
-	private readonly deps: SessionDeps;
-	private readonly dir: SessionDir;
+	private deps: SessionDeps;
+	private dir: SessionDir;
+	private readonly lock: SessionLock;
 	private env: EngineEnv;
 	private configHash: string;
 	private state: SessionJson;
@@ -125,14 +138,18 @@ export class Session {
 	private compactRequested = false;
 	private onEvent: ((event: EngineEvent) => void) | undefined;
 
-	constructor(deps: SessionDeps, dir: SessionDir, state: SessionJson, lines: TranscriptLine[]) {
+	/** Use `createSession` or `resumeSession`. Saves the state and takes ownership of `lock`. */
+	constructor(init: typeof INIT, deps: SessionDeps, dir: SessionDir, state: SessionJson, lines: TranscriptLine[], lock: SessionLock) {
+		if (init !== INIT) throw new NexoError({ code: "INTERNAL", message: "Use createSession or resumeSession" });
 		this.id = state.id;
 		this.deps = deps;
 		this.dir = dir;
 		this.state = state;
 		this.lines = lines;
+		this.lock = lock;
 		this.configHash = deps.configHash;
 		this.env = this.buildEnv(deps);
+		this.save();
 	}
 
 	get dirPath(): string {
@@ -156,11 +173,16 @@ export class Session {
 	get costUsd(): number {
 		return this.state.costUsd;
 	}
+	/** The session cap: the `/budget` override, else `budgets.perSessionUsd` of the current config. */
 	get budgetUsd(): number {
-		return this.state.budgetUsd;
+		return this.state.budgetOverrideUsd ?? this.env.deps.config.budgets.perSessionUsd;
+	}
+	/** The `/budget` override, or null when the cap follows the config. */
+	get budgetOverrideUsd(): number | null {
+		return this.state.budgetOverrideUsd ?? null;
 	}
 	get remainingUsd(): number {
-		return Math.max(0, this.state.budgetUsd - this.state.costUsd);
+		return Math.max(0, this.budgetUsd - this.state.costUsd);
 	}
 	/** The `/model` override, or null. */
 	get model(): string | null {
@@ -212,16 +234,16 @@ export class Session {
 				return refusedResult(
 					new NexoError({
 						code: "BUDGET_EXCEEDED",
-						message: `Session budget of $${this.state.budgetUsd.toFixed(2)} is exhausted ($${this.state.costUsd.toFixed(4)} spent)`,
+						message: `Session budget of $${this.budgetUsd.toFixed(2)} is exhausted ($${this.state.costUsd.toFixed(4)} spent)`,
 						hint: "Raise it for this session with /budget <usd>, or raise budgets.perSessionUsd in your nexo config",
-						context: { sessionId: this.id, limitUsd: this.state.budgetUsd, spentUsd: this.state.costUsd },
+						context: { sessionId: this.id, limitUsd: this.budgetUsd, spentUsd: this.state.costUsd },
 					}).toPayload(),
 				);
 			}
 			try {
 				checkAdmission(this.deps.db, config.budgets, this.env.now());
 			} catch (error) {
-				return refusedResult(this.deps.redact(toErrorPayload(error)));
+				return refusedResult(this.env.deps.redact(toErrorPayload(error)));
 			}
 			const turnIndex = this.state.turns + 1;
 			this.onEvent = options.onEvent;
@@ -250,7 +272,7 @@ export class Session {
 	/** Sets this session's cap in USD (overrides `budgets.perSessionUsd`). */
 	setBudget(usd: number): void {
 		if (!Number.isFinite(usd) || usd <= 0) throw invalid(`Budget must be a positive number of USD, got ${usd}`, "Example: /budget 10");
-		this.state.budgetUsd = usd;
+		this.state.budgetOverrideUsd = usd;
 		this.save();
 	}
 
@@ -302,14 +324,18 @@ export class Session {
 	review(verdict: Verdict, comment?: string): FeedbackRow {
 		const runId = this.state.lastRunId;
 		if (!runId) throw invalid("There is no turn to review yet");
-		return recordFeedback(this.deps.db, { runId, verdict, comment, nowIso: this.env.now().toISOString(), redact: this.deps.redact });
+		return recordFeedback(this.deps.db, { runId, verdict, comment, nowIso: this.env.now().toISOString(), redact: this.env.deps.redact });
 	}
 
-	/** Marks the session closed; `resumeSession` reopens it. */
+	/** Marks the session closed and releases its lock; `resumeSession` reopens it. Throws CONFLICT while a turn runs. */
 	close(): void {
+		if (this.busy) {
+			throw new NexoError({ code: "CONFLICT", message: "A turn is running", hint: "Abort the turn (its signal) and wait for it to finish before closing" });
+		}
 		if (this.state.status === "closed") return;
 		this.state.status = "closed";
 		this.save();
+		this.lock.release();
 	}
 
 	private assertIdle(): void {
@@ -326,7 +352,10 @@ export class Session {
 		const next = this.deps.reloadConfig();
 		if (next.configHash === this.configHash) return;
 		this.configHash = next.configHash;
-		this.env = this.buildEnv({ ...this.deps, config: next.config, configHash: next.configHash });
+		const redact = next.redact ?? createRedactor(next.config.redaction.patterns);
+		this.deps = { ...this.deps, config: next.config, configHash: next.configHash, redact };
+		this.dir = new SessionDir(this.dir.root, this.id, redact);
+		this.env = this.buildEnv(this.deps);
 	}
 
 	/** Compacts before the turn's first request when forced or when the request would pass `session.compactAt`. */
@@ -337,10 +366,15 @@ export class Session {
 			const active = activeMessageLines(this.lines);
 			const turnIndexes = [...new Set(active.map((l) => l.turnIndex))].sort((a, b) => a - b);
 			const replacedThroughTurn = turnIndexes[turnIndexes.length - KEEP_VERBATIM_TURNS - 1];
-			this.compactRequested = false;
-			if (replacedThroughTurn === undefined) return ctx.history;
+			if (replacedThroughTurn === undefined) {
+				this.compactRequested = false;
+				return ctx.history;
+			}
 			const old = active.filter((l) => l.turnIndex <= replacedThroughTurn).map((l) => l.message as Message);
-			const text = renderForSummary(latestCompaction(this.lines)?.summary ?? "", old);
+			const { config } = this.env.deps;
+			const s1 = this.env.registry.get(config.models.s1.provider, config.models.s1.id);
+			const maxChars = Math.floor(s1.contextWindow * COMPACTION_INPUT_WINDOW_SHARE * 4) - COMPACTION_SYSTEM_PROMPT.length;
+			const text = renderForSummary(latestCompaction(this.lines)?.summary ?? "", old, maxChars);
 			let summary: string;
 			try {
 				summary = await ctx.summarize({ system: COMPACTION_SYSTEM_PROMPT, text });
@@ -349,17 +383,21 @@ export class Session {
 				this.deps.logger.warn("compaction failed; continuing with the full history", { session_id: this.id, error });
 				return ctx.history;
 			}
+			this.compactRequested = false;
 			this.appendLines([{ type: "compaction", turnIndex, summary, replacedThroughTurn }]);
 			return buildHistory(this.lines, this.env.now().getTime());
 		};
 	}
 
 	private recordTurn(turnIndex: number, instruction: string, result: RunResult): void {
-		this.appendLines(result.messages.map((message) => ({ type: "message", turnIndex, message })));
+		// A run that ended before its first request returns no messages; the instruction is kept so it is not lost.
+		const messages: Message[] =
+			result.messages.length > 0 ? result.messages : [{ role: "user", content: [{ type: "text", text: instruction }], timestamp: this.env.now().getTime() }];
+		this.appendLines(messages.map((message) => ({ type: "message", turnIndex, message })));
 		this.state.turns = turnIndex;
 		this.state.costUsd += result.costUsd;
 		this.state.lastRunId = result.trajectoryId;
-		if (!this.state.title) this.state.title = titleFrom(this.deps.redact(instruction));
+		if (!this.state.title) this.state.title = titleFrom(this.env.deps.redact(instruction));
 		if (result.model) {
 			this.lastModelInfo = result.model;
 			const tokens = contextTokens(result.messages);
@@ -375,13 +413,20 @@ export class Session {
 
 	private save(): void {
 		this.state.updatedAt = this.env.now().toISOString();
+		this.state.budgetUsd = this.budgetUsd;
+		this.state.budgetOverrideUsd = this.state.budgetOverrideUsd ?? null;
 		this.dir.writeSessionJson(this.state);
-		upsertSessionRow(this.deps.db, sessionRowFromJson(this.deps.redact(this.state), this.dir.root));
+		upsertSessionRow(this.deps.db, sessionRowFromJson(this.env.deps.redact(this.state), this.dir.root));
 	}
+}
 
-	/** @internal Writes the state; used by create and resume. */
-	persist(): void {
-		this.save();
+/** Builds a session under `lock`, releasing the lock if construction fails. */
+function openSession(deps: SessionDeps, dir: SessionDir, state: SessionJson, lines: TranscriptLine[], lock: SessionLock): Session {
+	try {
+		return new Session(INIT, deps, dir, state, lines, lock);
+	} catch (error) {
+		lock.release();
+		throw error;
 	}
 }
 
@@ -398,6 +443,7 @@ export function createSession(deps: SessionDeps, options: CreateSessionOptions):
 		model: null,
 		effort: null,
 		budgetUsd: deps.config.budgets.perSessionUsd,
+		budgetOverrideUsd: null,
 		costUsd: 0,
 		turns: 0,
 		status: "active",
@@ -406,26 +452,41 @@ export function createSession(deps: SessionDeps, options: CreateSessionOptions):
 		lastRunId: null,
 		context: null,
 	};
-	const session = new Session(deps, SessionDir.create(deps.paths.sessions, id, deps.redact), state, []);
-	if (options.model !== undefined) session.setModel(options.model);
-	if (options.effort !== undefined) session.setEffort(options.effort);
-	session.persist();
+	const dir = SessionDir.create(deps.paths.sessions, id, deps.redact);
+	const session = openSession(deps, dir, state, [], SessionLock.acquire(dir.root, id));
+	try {
+		if (options.model !== undefined) session.setModel(options.model);
+		if (options.effort !== undefined) session.setEffort(options.effort);
+	} catch (error) {
+		session.close();
+		throw error;
+	}
 	return session;
 }
 
 /**
  * Reopens a session from its directory as `active`, rebuilding the history from the transcript. Throws NOT_FOUND for an
- * unknown id and STORE_IO for an unreadable session.json.
+ * unknown id, CONFLICT when another live process has it open, and STORE_IO for an unreadable session.json.
  */
 export function resumeSession(deps: SessionDeps, id: string): Session {
 	const dir = SessionDir.open(deps.paths.sessions, id, deps.redact);
-	const state = dir.readSessionJson();
-	// The ledger also holds spend of a turn that crashed before session.json was saved.
-	state.costUsd = Math.max(state.costUsd, getSpent(deps.db, sessionScope(id)));
-	state.status = "active";
-	const session = new Session(deps, dir, state, dir.readTranscript());
-	session.persist();
-	return session;
+	const lock = SessionLock.acquire(dir.root, id);
+	let state: SessionJson;
+	try {
+		state = dir.readSessionJson();
+		// A turn that crashed before session.json was saved still has its spend in the ledger and its run in the index.
+		state.costUsd = Math.max(state.costUsd, getSpent(deps.db, sessionScope(id)));
+		const indexedTurns = maxSessionTurn(deps.db, id);
+		if (indexedTurns > state.turns) {
+			state.turns = indexedTurns;
+			state.lastRunId = latestSessionRunId(deps.db, id) ?? state.lastRunId;
+		}
+		state.status = "active";
+	} catch (error) {
+		lock.release();
+		throw error;
+	}
+	return openSession(deps, dir, state, dir.readTranscript(), lock);
 }
 
 /** Indexed sessions, most recently updated first. Throws INVALID_REQUEST for a limit outside 1..1000. */
