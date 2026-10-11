@@ -1,7 +1,7 @@
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { scoreRow } from "../../store/test/fixtures.ts";
-import { scoreSummary } from "../src/app.ts";
+import { scoreSummary, scoreVerdict } from "../src/app.ts";
 import { KEY, until } from "./fake-terminal.ts";
 import { FAUX_ROLES, startHarness, submit } from "./helpers.ts";
 
@@ -39,6 +39,20 @@ describe("scores and escalations in the chat", () => {
 		expect(scoreSummary({ scores: [scoreRow("r", { value: 0.5 }), scoreRow("r", { value: 1 })] })).toBe("score 0.75 ✓");
 		expect(scoreSummary({ scores: [scoreRow("r", { value: 0.5, passed: false })] })).toBe("score 0.50 ✗");
 		expect(scoreSummary({ scores: [scoreRow("r", { status: "failed", value: null, passed: null })] })).toBe("score failed");
+	});
+
+	it("shows a neutral mark when no scorer gave a pass/fail verdict", () => {
+		expect(scoreSummary({ scores: [scoreRow("r", { value: 0.5, passed: null })] })).toBe("score 0.50 –");
+		expect(scoreSummary({ scores: [scoreRow("r", { value: 0.5, passed: null }), scoreRow("r", { value: 1, passed: true })] })).toBe("score 0.75 ✓");
+		expect(scoreSummary({ scores: [scoreRow("r", { value: 0.5, passed: null }), scoreRow("r", { value: 0, passed: false })] })).toBe("score 0.25 ✗");
+	});
+
+	it("marks each chat score line pass, fail, neutral or failed", () => {
+		const plain = (s: string) => s.replace(/\u001b\[[0-9;]*m/g, "");
+		expect(plain(scoreVerdict({ status: "ok", value: 0.8, passed: true }))).toBe("0.80 ✓");
+		expect(plain(scoreVerdict({ status: "ok", value: 0.4, passed: false }))).toBe("0.40 ✗");
+		expect(plain(scoreVerdict({ status: "ok", value: 0.5, passed: null }))).toBe("0.50 –");
+		expect(plain(scoreVerdict({ status: "failed", value: null, passed: null }))).toBe("failed");
 	});
 
 	it("counts failed scorers next to the mean of those that answered", () => {

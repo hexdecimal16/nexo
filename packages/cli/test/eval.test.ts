@@ -163,6 +163,10 @@ describe("scoreLines", () => {
 		expect(lines[2]).toBe("  escalated to s2 2 times");
 	});
 
+	it("shows a neutral mark for a score with no pass/fail verdict", () => {
+		expect(scoreLines({ scores: [{ ...scoreRow("r"), scorerName: "len", value: 0.5, passed: null }] })).toEqual(["  score len: 0.50 –"]);
+	});
+
 	it("reports a failed S2 continuation after the escalation count", () => {
 		const lines = scoreLines({
 			escalations: 1,
