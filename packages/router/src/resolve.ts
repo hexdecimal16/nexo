@@ -58,10 +58,31 @@ export function parseModelRef(ref: string, roles: Record<Role, RoleModel>): { pr
 	return { provider, id, role };
 }
 
-function assertAllowed(ref: string, allowed: readonly string[], roles: Record<Role, RoleModel>): void {
+/**
+ * True when `ref` ("s1", "s2" or "provider/model-id") is in a skill's `nexo-model-allowed` list (spec §7.3): an entry
+ * matches by its text or by the model it names. Malformed refs and entries never match.
+ */
+export function isModelAllowed(ref: string, allowed: readonly string[], roles: Record<Role, RoleModel>): boolean {
 	let wanted: { provider: string; id: string };
 	try {
 		wanted = parseModelRef(ref, roles);
+	} catch {
+		return false;
+	}
+	return allowed.some((entry) => {
+		if (entry === ref) return true;
+		try {
+			const p = parseModelRef(entry, roles);
+			return p.provider === wanted.provider && p.id === wanted.id;
+		} catch {
+			return false;
+		}
+	});
+}
+
+function assertAllowed(ref: string, allowed: readonly string[], roles: Record<Role, RoleModel>): void {
+	try {
+		parseModelRef(ref, roles);
 	} catch (cause) {
 		throw new NexoError({
 			code: "MODEL_NOT_ALLOWED",
@@ -71,15 +92,7 @@ function assertAllowed(ref: string, allowed: readonly string[], roles: Record<Ro
 			cause,
 		});
 	}
-	const ok = allowed.some((entry) => {
-		if (entry === ref) return true;
-		try {
-			const p = parseModelRef(entry, roles);
-			return p.provider === wanted.provider && p.id === wanted.id;
-		} catch {
-			return false;
-		}
-	});
+	const ok = isModelAllowed(ref, allowed, roles);
 	if (!ok) {
 		throw new NexoError({
 			code: "MODEL_NOT_ALLOWED",
