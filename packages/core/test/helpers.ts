@@ -31,7 +31,14 @@ export interface TestEnv {
 }
 
 export function makeEnv(
-	options: { config?: DeepPartial<NexoConfig>; skills?: Record<string, string>; prompter?: Prompter; cwd?: string } = {},
+	options: {
+		config?: DeepPartial<NexoConfig>;
+		skills?: Record<string, string>;
+		prompter?: Prompter;
+		cwd?: string;
+		/** Faux models added to FAUX_MODELS (judge models in scoring tests). */
+		extraModels?: FauxModelDefinition[];
+	} = {},
 ): TestEnv {
 	const root = mkdtempSync(join(tmpdir(), "nexo-engine-"));
 	const paths = resolveNexoPaths({ NEXO_HOME: join(root, "home") });
@@ -40,7 +47,7 @@ export function makeEnv(
 		mkdirSync(join(paths.skills, name), { recursive: true });
 		writeFileSync(join(paths.skills, name, "SKILL.md"), content);
 	}
-	const faux = fauxProvider({ models: FAUX_MODELS });
+	const faux = fauxProvider({ models: [...FAUX_MODELS, ...(options.extraModels ?? [])] });
 	const models = createModels();
 	models.setProvider(faux.provider);
 	const { config, hash } = loadConfig({

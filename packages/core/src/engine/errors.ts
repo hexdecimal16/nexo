@@ -33,6 +33,11 @@ export function retryAfterMs(errorMessage: string): number | undefined {
 	return match?.[1] ? Math.round(Number(match[1]) * 1000) : undefined;
 }
 
+/** Backoff before retry `attempt` (1-based) of a retryable provider error: full jitter on an exponential base, at least the provider's retry-after. */
+export function retryDelayMs(attempt: number, baseDelayMs: number, errorMessage: string): number {
+	return Math.max(Math.random() * baseDelayMs * 2 ** (attempt - 1), retryAfterMs(errorMessage) ?? 0);
+}
+
 /** The text the model sees for a failed tool call: code, retryability, message and hint. */
 export function toolErrorText(error: NexoError): string {
 	return `${error.code}${error.retryable ? " (retryable)" : ""}: ${error.message}${error.hint ? `\nhint: ${error.hint}` : ""}`;
