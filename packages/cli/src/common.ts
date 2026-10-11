@@ -1,0 +1,96 @@
+import type { Models } from "@earendil-works/pi-ai";
+import { type ErrorPayload, NexoError, type NexoErrorCode } from "@nexo/telemetry";
+import type { Prompter } from "@nexo/tools";
+import type { InteractiveOptions } from "@nexo/tui";
+import type { LineAsker } from "./review.ts";
+
+export interface CliIO {
+	stdout: { write(text: string): boolean };
+	stderr: { write(text: string): boolean };
+}
+
+/** The process streams a command looks at: terminal detection and the key prompt. Tests pass fakes. */
+export interface CliStdio {
+	stdin: NodeJS.ReadableStream & { isTTY?: boolean; setRawMode?: (mode: boolean) => unknown };
+	stdout: { isTTY?: boolean };
+	stderr: { isTTY?: boolean };
+}
+
+/** The slice of `process` that interactive mode installs crash handlers on. */
+export type ProcessLike = Pick<NodeJS.Process, "on" | "off">;
+
+export interface CliOptions {
+	env?: NodeJS.ProcessEnv;
+	cwd?: string;
+	models?: Models;
+	prompter?: Prompter;
+	/** Asks the post-run review question. Undefined: a terminal asker when stdin, stdout and stderr are TTYs. Null: never ask. */
+	reviewAsker?: LineAsker | null;
+	signal?: AbortSignal;
+	/** Default: the process streams. */
+	stdio?: CliStdio;
+	/** Terminal for the chat and settings screens. Default: pi-tui's ProcessTerminal. */
+	terminal?: InteractiveOptions["terminal"];
+	/** Asks the `--resume` picker question. Default: a readline asker on stdin and stderr. */
+	lineAsker?: LineAsker;
+	/** Receives the crash handlers of interactive mode. Default: `process`. */
+	proc?: ProcessLike;
+	/** Called with the exit code when interactive mode ends, so a stuck turn cannot keep the process alive. bin.ts passes process.exit. */
+	exit?: (code: number) => void;
+}
+
+export const USAGE = `Usage:
+  nexo                                     start an interactive session (needs a terminal)
+  nexo --resume [id]                       resume a session (a picker when no id is given)
+  nexo [--workspace <dir>] [--model <s1|s2|provider/id>] [--effort <level>]   options for a new session
+  nexo sessions [--limit <n>]
+  nexo settings                            open the settings screen (needs a terminal)
+  nexo settings get <key>
+  nexo settings set <key> <value>
+  nexo settings set-key <provider>         reads the key from a hidden prompt, or from stdin when piped
+  nexo run <instruction...> [--skill <name>] [--model <s1|s2|provider/id>] [--effort <level>] [--workspace <dir>] [--budget <usd>] [--no-review]
+  nexo cost [--by model|tier|day|run|skill] [--since YYYY-MM-DD]
+  nexo reindex
+  nexo ui [--port <n>]
+`;
+
+export const EXIT_SIGINT = 130;
+export const EXIT_SIGTERM = 143;
+
+export function exitCodeFor(code: NexoErrorCode | undefined): number {
+	switch (code) {
+		case undefined:
+			return 0;
+		case "CONFIG_INVALID":
+			return 2;
+		case "BUDGET_EXCEEDED":
+			return 3;
+		case "PROVIDER_AUTH":
+			return 4;
+		default:
+			return 1;
+	}
+}
+
+export function printError(io: CliIO, error: ErrorPayload): void {
+	io.stderr.write(`error [${error.code}]: ${error.message}\n`);
+	if (error.hint) io.stderr.write(`hint: ${error.hint}\n`);
+}
+
+export function usageError(message: string): NexoError {
+	return new NexoError({ code: "CONFIG_INVALID", message, hint: USAGE.trim() });
+}
+
+export function isTerminalStdio(stdio: CliStdio): boolean {
+	return stdio.stdin.isTTY === true && stdio.stdout.isTTY === true && stdio.stderr.isTTY === true;
+}
+
+export function requireTerminal(stdio: CliStdio, what: string): void {
+	if (!isTerminalStdio(stdio)) {
+		throw new NexoError({
+			code: "CONFIG_INVALID",
+			message: `${what} needs an interactive terminal (stdin, stdout and stderr must all be TTYs)`,
+			hint: `For scripts use \`nexo run "<instruction>"\`, \`nexo settings get|set|set-key\` or \`nexo sessions\`.\n${USAGE.trim()}`,
+		});
+	}
+}

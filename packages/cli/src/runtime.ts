@@ -3,8 +3,15 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { createEngine, createSettings, type DeepPartial, type Engine, type EngineEvent, type NexoConfig, type Settings } from "@nexo/core";
 import { loadSkills, type SkillCatalog } from "@nexo/skills";
 import { type Db, ensureNexoDirs, type NexoPaths, openDb, resolveNexoPaths } from "@nexo/store";
-import { createLogger, type Redactor } from "@nexo/telemetry";
+import { createLogger, type Logger, type Redactor } from "@nexo/telemetry";
 import type { Prompter } from "@nexo/tools";
+
+/** The logger writes through the settings' live redactor, so keys set later in the process are redacted at once. */
+export function openLogger(settings: Settings, paths: NexoPaths, component: string): Logger {
+	const logger = createLogger({ dir: paths.logs, component, redact: settings.redact });
+	settings.attachLogger(logger);
+	return logger;
+}
 
 export interface Runtime {
 	paths: NexoPaths;
@@ -13,6 +20,7 @@ export interface Runtime {
 	skills: SkillCatalog;
 	engine: Engine;
 	redact: Redactor;
+	logger: Logger;
 	settings: Settings;
 }
 
@@ -32,8 +40,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 	const settings = createSettings({ paths, cwd: options.cwd, env: options.env, models, overrides: options.overrides });
 	const { config, hash } = settings.loadConfig();
 	const redact = settings.redact;
-	const logger = createLogger({ dir: paths.logs, component: "cli", redact });
-	settings.attachLogger(logger);
+	const logger = openLogger(settings, paths, "cli");
 	const db = openDb(paths.db);
 	const skills = loadSkills(config.skills.dirs);
 	for (const d of skills.diagnostics) logger.warn("invalid skill skipped", { path: d.path, error: d.error });
@@ -50,5 +57,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 		onEvent: options.onEvent,
 		resolveApiKey: settings.resolveApiKey,
 	});
-	return { paths, config, db, skills, engine, redact, settings };
+	return { paths, config, db, skills, engine, redact, logger, settings };
 }
