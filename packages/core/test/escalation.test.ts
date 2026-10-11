@@ -155,7 +155,9 @@ describe("end-of-run continuation outcomes", () => {
 		expect(rowsOf(env, result.trajectoryId as string)).toEqual([[0, false]]);
 		const span = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.kind === "escalation");
 		expect(span).toMatchObject({ status: "ok", attrs: { applied: true, continuationError: { code: expect.any(String), message: expect.stringContaining("invalid request 400") } } });
-		expect(getRun(env.deps.db, result.trajectoryId as string)).toMatchObject({ status: "succeeded", escalations: 1 });
+		expect(getRun(env.deps.db, result.trajectoryId as string)).toMatchObject({ status: "succeeded", escalations: 1, modelFinal: "faux/fast", tierFinal: "s1" });
+		expect(readRunJson(result.runDir as string)).toMatchObject({ escalations: 1, model: { id: "fast", role: "s1" } });
+		expect(result.model).toMatchObject({ provider: "faux", id: "fast" });
 	});
 
 	it("keeps the scored answer when the S2 continuation exceeds the run budget", async () => {
