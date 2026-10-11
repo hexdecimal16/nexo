@@ -9,6 +9,7 @@ import {
 	type ApiContext,
 	costResponse,
 	feedbackResponse,
+	judgeCalibrationResponse,
 	listRunsResponse,
 	metaResponse,
 	runDetailResponse,
@@ -38,6 +39,8 @@ export interface WebServerOptions {
 	now?: () => Date;
 	/** Refuse every mutating route with CONFIG_INVALID (used when the nexo config, and so its redaction patterns, failed to load). */
 	readOnly?: ReadOnlyInfo | null;
+	/** The configured judge key (`models.judge` joined with `+`) and its same-family warnings, for the calibration view. */
+	judge?: { key: string | null; warnings: string[] };
 }
 
 export interface WebServer {
@@ -56,6 +59,7 @@ const ROUTES = {
 	files: new RegExp(`^/api/runs/${RUN_ID}/files(?:/(.*))?$`),
 	feedback: new RegExp(`^/api/runs/${RUN_ID}/feedback$`),
 	costs: /^\/api\/costs$/,
+	calibration: /^\/api\/judge\/calibration$/,
 	meta: /^\/api\/meta$/,
 };
 
@@ -112,7 +116,13 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 	const host = options.host ?? "127.0.0.1";
 	if (host !== "127.0.0.1") throw new NexoError({ code: "CONFIG_INVALID", message: "The web UI binds to 127.0.0.1 only", context: { host } });
 	const token = options.token ?? randomBytes(24).toString("base64url");
-	const ctx: ApiContext = { db: options.db, redact: options.redact, now: options.now ?? (() => new Date()), readOnly: options.readOnly ?? null };
+	const ctx: ApiContext = {
+		db: options.db,
+		redact: options.redact,
+		now: options.now ?? (() => new Date()),
+		readOnly: options.readOnly ?? null,
+		judge: options.judge ?? { key: null, warnings: [] },
+	};
 	const assertWritable = (): void => {
 		if (!ctx.readOnly) return;
 		throw new NexoError({
@@ -174,6 +184,10 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 		if (ROUTES.costs.test(path)) {
 			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
 			return sendJson(res, 200, costResponse(ctx, url.searchParams));
+		}
+		if (ROUTES.calibration.test(path)) {
+			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
+			return sendJson(res, 200, judgeCalibrationResponse(ctx));
 		}
 		throw new NexoError({ code: "NOT_FOUND", message: `No API route ${path}`, context: { path } });
 	};

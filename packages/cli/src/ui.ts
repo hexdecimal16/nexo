@@ -1,4 +1,4 @@
-import { loadConfig, type NexoConfig } from "@nexo/core";
+import { judgeFamilyWarnings, judgeKey, loadConfig, type NexoConfig } from "@nexo/core";
 import { ensureNexoDirs, isPidAlive, openDb, recoverCrashedRuns, resolveNexoPaths } from "@nexo/store";
 import { createRedactor, NexoError } from "@nexo/telemetry";
 import { type ReadOnlyInfo, startWebServer } from "@nexo/web";
@@ -59,7 +59,8 @@ export async function runUi(options: { env: NodeJS.ProcessEnv; cwd: string; port
 	if (recovered.length > 0) options.io.stderr.write(`Marked ${recovered.length} run(s) left by a crashed process as aborted\n`);
 	let server: Awaited<ReturnType<typeof startWebServer>>;
 	try {
-		server = await startWebServer({ db, redact: createRedactor(patterns), port, readOnly });
+		const judge = config ? { key: judgeKey(config), warnings: judgeFamilyWarnings(config) } : undefined;
+		server = await startWebServer({ db, redact: createRedactor(patterns), port, readOnly, judge });
 	} catch (error) {
 		db.close();
 		throw error;

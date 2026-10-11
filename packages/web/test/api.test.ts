@@ -69,12 +69,11 @@ describe("GET /api/runs", () => {
 	});
 
 	it("rejects bad parameters with 400 INVALID_REQUEST", async () => {
-		for (const q of ["limit=0", "limit=abc", "limit=201", "status=done", "reviewed=yes", "since=last-week", "cursor=%%%", "scored=true"]) {
+		for (const q of ["limit=0", "limit=abc", "limit=201", "status=done", "reviewed=yes", "since=last-week", "cursor=%%%", "scored=yes"]) {
 			const res = await get(`/api/runs?${q}`);
 			expect(res.status, q).toBe(400);
 			expect(res.json().error.code, q).toBe("INVALID_REQUEST");
 		}
-		expect((await get("/api/runs?scored=true")).json().error.hint).toContain("scoring phase");
 	});
 });
 

@@ -2,6 +2,8 @@ import { closeSync, constants, createReadStream, existsSync, fstatSync, lstatSyn
 import type { ServerResponse } from "node:http";
 import { relative, sep } from "node:path";
 import {
+	agreementStats,
+	confusionMatrix,
 	COST_DIMENSIONS,
 	costReport,
 	type Db,
@@ -11,9 +13,15 @@ import {
 	getSpan,
 	invalidRequest,
 	isRunStatus,
+	judgeDisagrees,
+	judgeHumanPairs,
 	latestFeedback,
+	listCalibrations,
 	listChildSummaries,
+	listDisagreements,
 	listFeedback,
+	listScores,
+	listSpans,
 	loadSpanTree,
 	queryRuns,
 	RUN_STATUSES,
@@ -28,9 +36,11 @@ import { resolveConfined } from "@nexo/tools";
 import type {
 	CostResponse,
 	DirListing,
+	Escalation,
 	Feedback,
 	FeedbackResponse,
 	FileEntry,
+	JudgeCalibrationResponse,
 	MetaResponse,
 	ReadOnlyInfo,
 	RunDetailResponse,
@@ -49,6 +59,8 @@ export interface ApiContext {
 	now: () => Date;
 	/** Set when writes are refused because the nexo config could not be loaded. */
 	readOnly: ReadOnlyInfo | null;
+	/** The configured judge and its same-family warnings; key null without a judge. */
+	judge: { key: string | null; warnings: string[] };
 }
 
 function requireRun(db: Db, id: string): RunRow {
@@ -68,10 +80,12 @@ export function metaResponse(ctx: ApiContext): MetaResponse {
 }
 
 export function listRunsResponse(ctx: ApiContext, params: URLSearchParams): RunListResponse {
-	if (optional(params, "scored") !== undefined) {
-		throw invalidRequest("The scored filter is not available yet", { scored: params.get("scored") }, "Scores arrive with the scoring phase; filter by status or reviewed instead");
-	}
 	const query: RunQuery = {};
+	const scored = optional(params, "scored");
+	if (scored !== undefined) {
+		if (scored !== "true" && scored !== "false") throw invalidRequest("scored must be true or false", { scored });
+		query.scored = scored === "true";
+	}
 	const status = optional(params, "status");
 	if (status !== undefined) {
 		if (!isRunStatus(status)) throw invalidRequest(`Unknown status "${status}"`, { status });
@@ -121,6 +135,47 @@ export function runDetailResponse(ctx: ApiContext, id: string): RunDetailRespons
 		children,
 		feedback: listFeedback(ctx.db, id),
 		childFeedback,
+		scores: listScores(ctx.db, id),
+		escalations: listEscalations(ctx.db, id),
+		judgeDisagrees: judgeDisagrees(ctx.db, id),
+	};
+}
+
+/** The run's own `escalation` spans, oldest first. */
+function listEscalations(db: Db, runId: string): Escalation[] {
+	const text = (v: unknown): string | null => (typeof v === "string" ? v : null);
+	const failure = (v: unknown): { code: string; message: string } | null => {
+		if (typeof v !== "object" || v === null) return null;
+		const { code, message } = v as Record<string, unknown>;
+		return typeof code === "string" && typeof message === "string" ? { code, message } : null;
+	};
+	return listSpans(db, runId)
+		.filter((s) => s.kind === "escalation")
+		.map((s) => ({
+			spanId: s.id,
+			at: s.startedAt,
+			trigger: text(s.attrs.trigger) ?? s.name,
+			reason: text(s.attrs.reason) ?? "",
+			phase: text(s.attrs.phase) ?? "",
+			applied: s.attrs.applied === true,
+			blockedBy: text(s.attrs.blockedBy),
+			blockedReason: text(s.attrs.blockedReason),
+			from: text(s.attrs.from),
+			to: text(s.attrs.to),
+			continuationError: failure(s.attrs.continuationError),
+		}));
+}
+
+/** Judge calibration (spec §7.4, §11): live agreement on current verdicts, stored `nexo eval judge` results and disagreements. Read-only. */
+export function judgeCalibrationResponse(ctx: ApiContext): JudgeCalibrationResponse {
+	const key = ctx.judge.key;
+	const matrix = key === null ? null : confusionMatrix(judgeHumanPairs(ctx.db, key));
+	return {
+		judgeKey: key,
+		warnings: ctx.judge.warnings,
+		current: matrix ? { ...agreementStats(matrix), matrix } : null,
+		history: listCalibrations(ctx.db, key === null ? {} : { judgeKey: key }),
+		disagreements: listDisagreements(ctx.db, key === null ? {} : { judgeKey: key }),
 	};
 }
 

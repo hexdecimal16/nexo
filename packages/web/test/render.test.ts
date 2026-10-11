@@ -44,6 +44,7 @@ function summary(overrides: Partial<RunSummary> = {}): RunSummary {
 		sessionId: null,
 		turnIndex: null,
 		sessionTitle: null,
+		score: null,
 		...overrides,
 	};
 }
@@ -144,6 +145,9 @@ describe("run view", () => {
 		children: [],
 		feedback: [],
 		childFeedback: {},
+		scores: [],
+		escalations: [],
+		judgeDisagrees: false,
 		...overrides,
 	});
 
