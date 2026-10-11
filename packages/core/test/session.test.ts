@@ -284,6 +284,104 @@ describe("session turns", () => {
 	});
 });
 
+describe("shell commands", () => {
+	it("runs a command in the workspace and hands its output to the next turn only", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		const seen: string[][] = [];
+		env.faux.setResponses([
+			async (ctx) => {
+				seen.push(texts(ctx));
+				return fauxAssistantMessage("A1");
+			},
+			async (ctx) => {
+				seen.push(texts(ctx));
+				return fauxAssistantMessage("A2");
+			},
+		]);
+		const session = createSession(deps, { cwd });
+		const r = await session.shell("pwd; exit 3");
+		expect(r).toMatchObject({ exitCode: 3, ended: "exited" });
+		expect(r.output.trim()).toBe(cwd);
+		expect(session.pendingShellCount).toBe(1);
+		await session.shell("echo second");
+		await session.turn("What happened?");
+		expect(seen[0]).toHaveLength(1);
+		const first = seen[0]?.[0] ?? "";
+		expect(first).toMatch(/^user:\[nexo\] Before this message the user ran shell commands/);
+		expect(first).toContain(`$ pwd; exit 3\n[exit code 3]\n${cwd}`);
+		expect(first).toContain("$ echo second\n[exit code 0]\nsecond");
+		expect(first.indexOf("$ pwd")).toBeLessThan(first.indexOf("$ echo second"));
+		expect(first).toContain("[nexo] The user's message:\nWhat happened?");
+		expect(session.title).toBe("What happened?");
+		expect(session.pendingShellCount).toBe(0);
+		await session.turn("Again");
+		expect(seen[1]?.at(-1)).toMatch(/^user:Again/);
+		expect(seen[1]?.filter((m) => m.includes("shell commands"))).toHaveLength(1);
+		expect(session.turns).toBe(2);
+	});
+
+	it("keeps notes across a resume, drops them on clear, and redacts and caps the output", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		let sent = "";
+		env.faux.setResponses([
+			fauxAssistantMessage("A0"),
+			async (ctx) => {
+				sent = texts(ctx).at(-1) ?? "";
+				return fauxAssistantMessage("A1");
+			},
+		]);
+		const secret = "sk-ant-api03-" + "x".repeat(40);
+		const session = createSession(deps, { cwd });
+		await session.turn("Q0");
+		const r = await session.shell(`echo ${secret}; head -c 50000 /dev/zero | tr '\\0' 'a'; echo; echo tail-end`);
+		expect(r.output).not.toContain(secret);
+		session.close();
+		const resumed = resumeSession(deps, session.id);
+		expect(resumed.pendingShellCount).toBe(1);
+		await resumed.turn("Q1");
+		expect(sent).not.toContain(secret);
+		expect(sent).toContain("tail-end");
+		expect(sent).toMatch(/characters cut/);
+		expect(sent.length).toBeLessThan(25_000);
+		await resumed.shell("echo dropped");
+		resumed.clear();
+		expect(resumed.pendingShellCount).toBe(0);
+		resumed.close();
+	});
+
+	it("records a stopped command and refuses an empty command or one during a turn", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		let sent = "";
+		let release = () => {};
+		env.faux.setResponses([
+			async () => {
+				await new Promise<void>((r) => {
+					release = r;
+				});
+				return fauxAssistantMessage("A1");
+			},
+			async (ctx) => {
+				sent = texts(ctx).at(-1) ?? "";
+				return fauxAssistantMessage("A2");
+			},
+		]);
+		const session = createSession(deps, { cwd });
+		await expect(session.shell("   ")).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+		const ac = new AbortController();
+		setTimeout(() => ac.abort(), 100);
+		expect(await session.shell("sleep 5", { signal: ac.signal })).toMatchObject({ ended: "aborted", exitCode: null });
+		const turn = session.turn("Q1");
+		await expect(session.shell("echo hi")).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+		await new Promise((r) => setTimeout(r, 20));
+		release();
+		await turn;
+		expect(session.pendingShellCount).toBe(0);
+		await session.turn("Q2");
+		expect(sent).toMatch(/^user:Q2/);
+		expect(sent).not.toContain("shell commands");
+	});
+});
+
 describe("session fixes", () => {
 	it("lets a later turn read a large tool output saved by an earlier turn", async () => {
 		const { env, deps, cwd } = sessionEnv();

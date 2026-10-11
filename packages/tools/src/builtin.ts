@@ -40,6 +40,79 @@ function ensureExitHandler(): void {
 	process.on("exit", killLiveBashGroups);
 }
 
+export interface BashRun {
+	command: string;
+	cwd: string;
+	timeoutMs: number;
+	signal?: AbortSignal;
+}
+
+export interface BashOutcome {
+	/** stdout and stderr interleaved, at most MAX_BASH_OUTPUT_BYTES; the start error's message when `ended` is "failed". */
+	output: string;
+	/** Null unless `ended` is "exited". */
+	exitCode: number | null;
+	truncated: boolean;
+	ended: "exited" | "timeout" | "aborted" | "failed";
+}
+
+/** Runs `command` with `bash -c` in its own process group, killed on timeout, abort or host exit. Never rejects. */
+export function runBash(run: BashRun): Promise<BashOutcome> {
+	const { signal } = run;
+	return new Promise((resolvePromise) => {
+		if (signal?.aborted) return resolvePromise({ output: "", exitCode: null, truncated: false, ended: "aborted" });
+		const child = spawn("bash", ["-c", run.command], { cwd: run.cwd, env: process.env, detached: true });
+		const pgid = child.pid;
+		if (pgid !== undefined) {
+			ensureExitHandler();
+			liveBashGroups.add(pgid);
+		}
+		const killGroup = () => {
+			try {
+				if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+			} catch {
+				// the process group already exited
+			}
+		};
+		const chunks: Buffer[] = [];
+		let captured = 0;
+		let truncated = false;
+		let ended: "timeout" | "aborted" | undefined;
+		const collect = (chunk: Buffer) => {
+			const room = MAX_BASH_OUTPUT_BYTES - captured;
+			if (chunk.length > room) truncated = true;
+			if (room <= 0) return;
+			const part = chunk.subarray(0, room);
+			chunks.push(part);
+			captured += part.length;
+		};
+		child.stdout.on("data", collect);
+		child.stderr.on("data", collect);
+		const timer = setTimeout(() => {
+			ended = "timeout";
+			killGroup();
+		}, run.timeoutMs);
+		const onAbort = () => {
+			ended = "aborted";
+			killGroup();
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
+		child.on("close", (code) => {
+			if (pgid !== undefined) liveBashGroups.delete(pgid);
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
+			const output = new StringDecoder("utf8").write(Buffer.concat(chunks));
+			resolvePromise({ output, exitCode: ended ? null : (code ?? -1), truncated, ended: ended ?? "exited" });
+		});
+		child.on("error", (error) => {
+			if (pgid !== undefined) liveBashGroups.delete(pgid);
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
+			resolvePromise({ output: error.message, exitCode: null, truncated: false, ended: "failed" });
+		});
+	});
+}
+
 export interface ToolContext {
 	workspaceRoot: string;
 	holder: string;
@@ -145,62 +218,21 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 		label: "Run command",
 		description: "Run a bash command in the workspace directory.",
 		parameters: BashParams,
-		execute: (_id, params, signal) =>
-			new Promise((resolvePromise) => {
-				if (signal?.aborted) return resolvePromise(textResult("Command aborted\n", true));
-				const timeoutMs = params.timeoutMs ?? ctx.bashTimeoutMs;
-				const child = spawn("bash", ["-c", params.command], { cwd: root, env: process.env, detached: true });
-				const pgid = child.pid;
-				if (pgid !== undefined) {
-					ensureExitHandler();
-					liveBashGroups.add(pgid);
-				}
-				const killGroup = () => {
-					try {
-						if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
-					} catch {
-						// the process group already exited
-					}
-				};
-				const chunks: Buffer[] = [];
-				let captured = 0;
-				let truncated = false;
-				let ended: "timeout" | "aborted" | undefined;
-				const collect = (chunk: Buffer) => {
-					const room = MAX_BASH_OUTPUT_BYTES - captured;
-					if (chunk.length > room) truncated = true;
-					if (room <= 0) return;
-					const part = chunk.subarray(0, room);
-					chunks.push(part);
-					captured += part.length;
-				};
-				child.stdout.on("data", collect);
-				child.stderr.on("data", collect);
-				const timer = setTimeout(() => {
-					ended = "timeout";
-					killGroup();
-				}, timeoutMs);
-				const onAbort = () => {
-					ended = "aborted";
-					killGroup();
-				};
-				signal?.addEventListener("abort", onAbort, { once: true });
-				child.on("close", (code) => {
-					if (pgid !== undefined) liveBashGroups.delete(pgid);
-					clearTimeout(timer);
-					signal?.removeEventListener("abort", onAbort);
-					const output = new StringDecoder("utf8").write(Buffer.concat(chunks));
-					const body = `${output}${truncated ? "\n[output truncated]" : ""}`;
-					if (ended === "timeout") return resolvePromise(textResult(`Command timed out after ${timeoutMs}ms\n${body}`, true));
-					if (ended === "aborted") return resolvePromise(textResult(`Command aborted\n${body}`, true));
-					resolvePromise(textResult(`exit code: ${code ?? -1}\n${body}`, code !== 0));
-				});
-				child.on("error", (error) => {
-					if (pgid !== undefined) liveBashGroups.delete(pgid);
-					clearTimeout(timer);
-					resolvePromise(textResult(`Failed to start bash: ${error.message}`, true));
-				});
-			}),
+		execute: async (_id, params, signal) => {
+			const timeoutMs = params.timeoutMs ?? ctx.bashTimeoutMs;
+			const r = await runBash({ command: params.command, cwd: root, timeoutMs, signal });
+			const body = `${r.output}${r.truncated ? "\n[output truncated]" : ""}`;
+			switch (r.ended) {
+				case "failed":
+					return textResult(`Failed to start bash: ${r.output}`, true);
+				case "timeout":
+					return textResult(`Command timed out after ${timeoutMs}ms\n${body}`, true);
+				case "aborted":
+					return textResult(`Command aborted\n${body}`, true);
+				case "exited":
+					return textResult(`exit code: ${r.exitCode ?? -1}\n${body}`, r.exitCode !== 0);
+			}
+		},
 	};
 
 	const webFetch: AgentTool<typeof FetchParams> = {

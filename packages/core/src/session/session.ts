@@ -17,10 +17,12 @@ import {
 	type SessionRow,
 	sessionRowFromJson,
 	type SessionStatus,
+	type ShellNote,
 	type TranscriptLine,
 	upsertSessionRow,
 	type Verdict,
 } from "@nexo/store";
+import { type BashOutcome, runBash } from "@nexo/tools";
 import { createRedactor, type ErrorPayload, NexoError, type Redactor, toErrorPayload } from "@nexo/telemetry";
 import type { NexoConfig } from "../config/schema.ts";
 import { checkAdmission, sessionScope } from "../cost/admission.ts";
@@ -45,6 +47,7 @@ import {
 	titleFrom,
 } from "./transcript.ts";
 import { SessionLock } from "./lock.ts";
+import { capShellOutput, withShellNotes } from "./shell.ts";
 
 const EPSILON = 1e-9;
 
@@ -79,6 +82,14 @@ export interface TurnOptions {
 	/** Receives this turn's engine events (subagents included). */
 	onEvent?: (event: EngineEvent) => void;
 }
+
+export interface ShellOptions {
+	/** Kills the command. */
+	signal?: AbortSignal;
+}
+
+/** A `!` command's result; `output` is redacted and holds at most the bash tool's output cap. */
+export type ShellResult = BashOutcome;
 
 export type SessionSummary = SessionRow;
 
@@ -208,6 +219,10 @@ export class Session {
 	get running(): boolean {
 		return this.busy;
 	}
+	/** `!` commands waiting to go to the model with the next turn. */
+	get pendingShellCount(): number {
+		return this.state.pendingShell?.length ?? 0;
+	}
 	/** True after `compact()` until the next turn compacts. */
 	get compactPending(): boolean {
 		return this.compactRequested;
@@ -248,9 +263,10 @@ export class Session {
 			}
 			const turnIndex = this.state.turns + 1;
 			this.onEvent = options.onEvent;
+			const sent = withShellNotes(this.state.pendingShell ?? [], instruction);
 			const result = await executeRun(this.env, {
 				request: {
-					instruction,
+					instruction: sent,
 					history: buildHistory(this.lines, this.env.now().getTime()),
 					prepareHistory: this.compactionHook(turnIndex),
 					sessionId: this.id,
@@ -262,10 +278,35 @@ export class Session {
 				budget: new RunBudget(Math.min(config.budgets.perRunUsd, remaining)),
 				signal: options.signal,
 			});
-			if (result.trajectoryId !== null) this.recordTurn(turnIndex, instruction, result);
+			if (result.trajectoryId !== null) this.recordTurn(turnIndex, instruction, sent, result);
 			return result;
 		} finally {
 			this.onEvent = undefined;
+			this.busy = false;
+		}
+	}
+
+	/**
+	 * Runs a `!` command in the workspace with the bash tool's timeout, outside any run (no model call, cost or approval).
+	 * Its command and output go to the model in front of the next turn's message. Throws INVALID_REQUEST for an empty
+	 * command, a closed session or while a turn or another command is running.
+	 */
+	async shell(command: string, options: ShellOptions = {}): Promise<ShellResult> {
+		const trimmed = command.trim();
+		if (!trimmed) throw invalid("The command is empty", "Example: !git status");
+		if (this.state.status === "closed") throw invalid(`Session ${this.id} is closed`, "Resume it with `nexo --resume`");
+		this.assertIdle();
+		this.busy = true;
+		try {
+			this.reloadConfig();
+			const { config, redact } = this.env.deps;
+			const outcome = await runBash({ command: trimmed, cwd: this.state.workspace, timeoutMs: config.tools.bashTimeoutMs, signal: options.signal });
+			const result = { ...outcome, output: redact(outcome.output) };
+			const note: ShellNote = { command: redact(trimmed), ended: result.ended, exitCode: result.exitCode, output: capShellOutput(result.output, result.truncated) };
+			this.state.pendingShell = [...(this.state.pendingShell ?? []), note];
+			this.save();
+			return result;
+		} finally {
 			this.busy = false;
 		}
 	}
@@ -318,6 +359,7 @@ export class Session {
 		this.appendLines([{ type: "compaction", turnIndex: this.state.turns, summary: "", replacedThroughTurn: this.state.turns }]);
 		this.compactRequested = false;
 		this.state.context = null;
+		this.state.pendingShell = [];
 		this.save();
 	}
 
@@ -414,14 +456,16 @@ export class Session {
 		};
 	}
 
-	private recordTurn(turnIndex: number, instruction: string, result: RunResult): void {
-		// A run that ended before its first request returns no messages; the instruction is kept so it is not lost.
+	/** `instruction` is what the user typed; `sent` is the message the run started from (with any `!` command notes). */
+	private recordTurn(turnIndex: number, instruction: string, sent: string, result: RunResult): void {
+		// A run that ended before its first request returns no messages; the message is kept so it is not lost.
 		const messages: Message[] =
-			result.messages.length > 0 ? result.messages : [{ role: "user", content: [{ type: "text", text: instruction }], timestamp: this.env.now().getTime() }];
+			result.messages.length > 0 ? result.messages : [{ role: "user", content: [{ type: "text", text: sent }], timestamp: this.env.now().getTime() }];
 		this.appendLines(messages.map((message) => ({ type: "message", turnIndex, message })));
 		this.state.turns = turnIndex;
 		this.state.costUsd += result.costUsd;
 		this.state.lastRunId = result.trajectoryId;
+		this.state.pendingShell = [];
 		if (!this.state.title) this.state.title = titleFrom(this.env.deps.redact(instruction));
 		if (result.model) {
 			this.lastModelInfo = result.model;

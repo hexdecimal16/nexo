@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { createRedactor } from "@nexo/telemetry";
 import { describe, expect, it } from "vitest";
-import { createBuiltinTools, createChangeTracker, FileLeases, MAX_BASH_OUTPUT_BYTES, type ToolContext, trackedBashGroups } from "../src/index.ts";
+import { createBuiltinTools, createChangeTracker, FileLeases, MAX_BASH_OUTPUT_BYTES, runBash, type ToolContext, trackedBashGroups } from "../src/index.ts";
 
 const redact = createRedactor();
 
@@ -129,6 +129,34 @@ describe("bash hardening", () => {
 		const { tool } = setup();
 		const r = await tool("bash").execute("1", { command: `head -c ${MAX_BASH_OUTPUT_BYTES + 1} /dev/zero | tr '\\0' 'a'` });
 		expect(text(r)).toContain("[output truncated]");
+	});
+});
+
+describe("runBash", () => {
+	it("returns the combined output and exit code of a command run in cwd", async () => {
+		const ws = mkdtempSync(join(tmpdir(), "nexo-ws-"));
+		const r = await runBash({ command: "pwd; echo err >&2; exit 4", cwd: ws, timeoutMs: 5000 });
+		expect(r).toMatchObject({ exitCode: 4, truncated: false, ended: "exited" });
+		expect(r.output).toContain(ws.split("/").pop());
+		expect(r.output).toContain("err");
+		expect(trackedBashGroups()).toEqual([]);
+	});
+
+	it("reports a timeout and an abort, and does not start when already aborted", async () => {
+		const ws = mkdtempSync(join(tmpdir(), "nexo-ws-"));
+		expect(await runBash({ command: "sleep 5", cwd: ws, timeoutMs: 300 })).toMatchObject({ ended: "timeout", exitCode: null });
+		const ac = new AbortController();
+		setTimeout(() => ac.abort(), 100);
+		expect(await runBash({ command: "sleep 5", cwd: ws, timeoutMs: 5000, signal: ac.signal })).toMatchObject({ ended: "aborted", exitCode: null });
+		const r = await runBash({ command: "touch ran.txt", cwd: ws, timeoutMs: 5000, signal: ac.signal });
+		expect(r.ended).toBe("aborted");
+		expect(existsSync(join(ws, "ran.txt"))).toBe(false);
+	});
+
+	it("reports a missing cwd as a start failure", async () => {
+		const r = await runBash({ command: "echo hi", cwd: join(tmpdir(), "nexo-missing-dir-xyz"), timeoutMs: 5000 });
+		expect(r.ended).toBe("failed");
+		expect(r.output).toMatch(/ENOENT|no such/i);
 	});
 });
 

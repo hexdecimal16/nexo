@@ -32,6 +32,16 @@ export interface SessionJson {
 	lastRunId: string | null;
 	/** Size of the latest request against the model's context window, for the context gauge. */
 	context: { tokens: number; window: number } | null;
+	/** `!` shell commands run since the last turn, sent to the model with the next message; absent in older files. */
+	pendingShell?: ShellNote[];
+}
+
+/** A `!` shell command the user ran, as the model will read it; `output` is redacted and capped. */
+export interface ShellNote {
+	command: string;
+	ended: "exited" | "timeout" | "aborted" | "failed";
+	exitCode: number | null;
+	output: string;
 }
 
 /** One line of `transcript.jsonl`. `message` is a pi `Message`, stored as JSON. */

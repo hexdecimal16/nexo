@@ -95,7 +95,24 @@ describe("chat screen", () => {
 		await h.done;
 	});
 
-	it("asks for approval in an overlay and returns Allow or Deny to the policy", async () => {
+	it("denies on esc without stopping the turn, then gives the editor back", async () => {
+		const h = await startHarness();
+		h.faux.setResponses([fauxAssistantMessage([fauxToolCall("bash", { command: "echo esc-run" })]), fauxAssistantMessage("carried on")]);
+		submit(h.terminal, "run it");
+		await until(() => expect(h.terminal.output()).toContain("Allow bash: echo esc-run?"));
+		await new Promise((r) => setTimeout(r, 450));
+		h.terminal.send(KEY.escape);
+		await until(() => expect(h.terminal.output()).toMatch(/✗ bash\(echo esc-run\)/));
+		await until(() => expect(h.terminal.output()).toContain("carried on"));
+		await until(() => !h.session().running);
+		h.terminal.type("next-draft");
+		await until(() => expect(h.terminal.output()).toContain("next-draft"));
+		h.terminal.send(KEY.ctrlC);
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
+	it("asks for approval in place of the editor and returns Allow or Deny to the policy", async () => {
 		const h = await startHarness();
 		h.faux.setResponses([
 			fauxAssistantMessage([fauxToolCall("bash", { command: "echo approved-run" })]),
@@ -108,7 +125,7 @@ describe("chat screen", () => {
 		// The tool line spins while the approval is pending.
 		expect(h.terminal.output()).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] bash\(echo approved-run\)/);
 		expect(h.terminal.output()).toContain("Deny");
-		// An Enter typed ahead as the overlay appears is ignored (and Deny is preselected anyway).
+		// An Enter typed ahead as the approval box appears is ignored (and Deny is preselected anyway).
 		h.terminal.send(KEY.enter);
 		await new Promise((r) => setTimeout(r, 100));
 		expect(h.terminal.output()).not.toMatch(/✓ bash\(echo approved-run\)/);
@@ -427,5 +444,81 @@ describe("exit robustness", () => {
 		restoreTerminal();
 		expect(h.terminal.stopped).toBe(true);
 		restoreTerminal();
+	});
+});
+
+describe("! shell commands", () => {
+	it("runs a ! command without a model call, shows its output and exit code, and sends it with the next message", async () => {
+		const h = await startHarness();
+		let sent = "";
+		h.faux.setResponses([
+			async (ctx) => {
+				const last = ctx.messages.at(-1);
+				sent = typeof last?.content === "string" ? last.content : (last?.content ?? []).map((b) => ("text" in b ? b.text : "")).join("");
+				return fauxAssistantMessage("seen it");
+			},
+		]);
+		submit(h.terminal, "!echo hi-from-shell; exit 2");
+		await until(() => expect(h.terminal.output()).toContain("exit code 2"));
+		expect(h.terminal.output()).toContain("! echo hi-from-shell; exit 2");
+		expect(h.terminal.output()).toContain("hi-from-shell");
+		expect(h.session().pendingShellCount).toBe(1);
+		expect(h.session().turns).toBe(0);
+		submit(h.terminal, "what happened?");
+		await until(() => expect(h.terminal.output()).toContain("seen it"));
+		expect(sent).toContain("$ echo hi-from-shell; exit 2\n[exit code 2]\nhi-from-shell");
+		await until(() => !h.session().running);
+		h.terminal.send(KEY.ctrlD);
+		expect(await h.done).toBe(0);
+	});
+
+	it("stops a running ! command on Esc and refuses a bare !", async () => {
+		const h = await startHarness();
+		submit(h.terminal, "!");
+		await until(() => expect(h.terminal.output()).toContain("Type a command after !"));
+		submit(h.terminal, "!sleep 5");
+		await until(() => h.session().running && h.terminal.output().includes("running"));
+		submit(h.terminal, "!echo overlap");
+		await until(() => expect(h.terminal.output()).toContain("A command is running"));
+		h.terminal.send(KEY.escape);
+		await until(() => !h.session().running);
+		await until(() => expect(h.terminal.output()).toContain("stopped"));
+		expect(h.terminal.output()).not.toContain("overlap\n");
+		h.terminal.send(KEY.ctrlD);
+		expect(await h.done).toBe(0);
+	});
+
+	it("colors the editor border and swaps the footer for a shell-mode note while the input starts with !", async () => {
+		const h = await startHarness();
+		const MAGENTA_BORDER = "\x1b[35m─";
+		const DIM_BORDER = "\x1b[2m─";
+		const since = (mark: number) => h.terminal.raw().slice(mark);
+		let mark = h.terminal.raw().length;
+		h.terminal.type("!");
+		await until(() => expect(since(mark)).toContain(MAGENTA_BORDER));
+		await until(() => expect(h.terminal.output()).toContain("! shell mode"));
+		expect(h.terminal.output()).toContain("output goes to the model with your next message");
+		mark = h.terminal.raw().length;
+		h.terminal.send(KEY.backspace);
+		await until(() => expect(since(mark)).toContain(DIM_BORDER));
+		expect(since(mark)).not.toContain(MAGENTA_BORDER);
+		await until(() => expect(since(mark)).toContain("ctx "));
+		submit(h.terminal, "!echo back");
+		await until(() => expect(h.terminal.output()).toContain("exit code 0"));
+		const raw = h.terminal.raw();
+		expect(raw.lastIndexOf(DIM_BORDER)).toBeGreaterThan(raw.lastIndexOf(MAGENTA_BORDER));
+		expect(raw.lastIndexOf("ctx ")).toBeGreaterThan(raw.lastIndexOf("! shell mode"));
+		h.terminal.send(KEY.ctrlD);
+		expect(await h.done).toBe(0);
+	});
+
+	it("shows only the last lines of a long output", async () => {
+		const h = await startHarness();
+		submit(h.terminal, "!seq 1 500");
+		await until(() => expect(h.terminal.output()).toContain("exit code 0"));
+		expect(h.terminal.output()).toContain("300 earlier lines not shown");
+		expect(h.terminal.output()).toContain("500");
+		h.terminal.send(KEY.ctrlD);
+		expect(await h.done).toBe(0);
 	});
 });

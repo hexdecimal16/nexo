@@ -62,7 +62,7 @@ describe("narrow terminals", () => {
 		expect(await h.done).toBe(0);
 	});
 
-	it("draws the approval overlay at 40 columns with a long unbroken command", async () => {
+	it("draws the approval box at 40 columns with a long unbroken command", async () => {
 		const h = await startHarness({ columns: 40 });
 		h.faux.setResponses([fauxAssistantMessage([fauxToolCall("bash", { command: `echo ${LONG}` })]), fauxAssistantMessage("ok")]);
 		submit(h.terminal, "go");
