@@ -83,7 +83,7 @@ export function commandScorer(options: CommandScorerOptions): Scorer {
 	};
 }
 
-/** The body of the first fenced block (```json or bare) with a closing fence line, found in linear time. */
+/** The body of the first untagged or ```json fenced block that has a closing fence line, found in linear time. */
 function fenceBody(text: string): string | undefined {
 	let from = 0;
 	for (;;) {
@@ -92,16 +92,21 @@ function fenceBody(text: string): string | undefined {
 		const lineEnd = text.indexOf("\n", open);
 		if (lineEnd < 0) return undefined;
 		const tag = text.slice(open + 3, lineEnd).trim().toLowerCase();
-		from = open + 3;
-		if (tag !== "" && tag !== "json") continue;
 		let pos = lineEnd + 1;
+		let closeAt = -1;
 		while (pos <= text.length) {
 			let end = text.indexOf("\n", pos);
 			if (end < 0) end = text.length;
-			if (text.slice(pos, end).trim() === "```") return text.slice(lineEnd + 1, Math.max(lineEnd + 1, pos - 1));
+			if (text.slice(pos, end).trim() === "```") {
+				closeAt = pos;
+				break;
+			}
 			pos = end + 1;
 		}
-		return undefined;
+		if (closeAt < 0) return undefined;
+		if (tag === "" || tag === "json") return text.slice(lineEnd + 1, Math.max(lineEnd + 1, closeAt - 1));
+		const closeEnd = text.indexOf("\n", closeAt);
+		from = closeEnd < 0 ? text.length : closeEnd + 1;
 	}
 }
 
@@ -144,7 +149,11 @@ export function jsonSchemaScorer(options: { name: string; schema: object }): Sco
 /** Runs one match in a worker thread so a catastrophic pattern is stopped at REGEX_TIMEOUT_MS instead of freezing the engine. */
 function matchInWorker(name: string, pattern: string, flags: string | undefined, text: string, signal: AbortSignal): Promise<boolean> {
 	return new Promise((resolve, reject) => {
-		const worker = new Worker(new URL("./regex-worker.ts", import.meta.url), { workerData: { pattern, flags, text } });
+		if (signal.aborted) return reject(new NexoError({ code: "SCORER_FAILED", message: `Scorer ${name} was aborted` }));
+		const worker = new Worker(new URL("./regex-worker.ts", import.meta.url), {
+			workerData: { pattern, flags, text },
+			resourceLimits: { maxOldGenerationSizeMb: 64 },
+		});
 		const finish = (settle: () => void) => {
 			clearTimeout(timer);
 			signal.removeEventListener("abort", onAbort);
@@ -160,6 +169,7 @@ function matchInWorker(name: string, pattern: string, flags: string | undefined,
 		signal.addEventListener("abort", onAbort, { once: true });
 		worker.once("message", (matched: boolean) => finish(() => resolve(matched)));
 		worker.once("error", (error) => fail(`Regex scorer ${name} failed: ${error.message}`));
+		worker.once("exit", () => fail(`Regex scorer ${name} ended without a result`));
 	});
 }
 

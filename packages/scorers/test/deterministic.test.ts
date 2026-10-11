@@ -150,6 +150,17 @@ describe("output scorers", () => {
 		expect(Date.now() - started).toBeLessThan(3000);
 	});
 
+	it("regex rejects before starting a worker when already aborted", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		expect((await failure(regexScorer({ name: "r", pattern: "a" }).score(input("a"), controller.signal))).message).toContain("was aborted");
+	});
+
+	it("json_schema skips a ```py block before the json block", async () => {
+		const scorer = jsonSchemaScorer({ name: "shape", schema: { type: "object", required: ["b"] } });
+		expect((await scorer.score(input('x\n```py\nno\n```\n```json\n{"b":2}\n```'), signal)).passed).toBe(true);
+	});
+
 	it("regex factory rejects an invalid pattern with CONFIG_INVALID", () => {
 		expect(() => regexScorer({ name: "r", pattern: "(" })).toThrowError(expect.objectContaining({ code: "CONFIG_INVALID" }));
 	});
@@ -200,6 +211,9 @@ describe("scorer specs", () => {
 		expect(bad([{ kind: "json_schema", schema: { type: "string", pattern: "(" } }])).toContain("/0/schema");
 		expect(bad([{ kind: "json_schema", schema: { properties: { n: { type: "bogus" } } } }])).toContain("/0/schema");
 		expect(bad([{ kind: "json_schema", schema: { $ref: "#/missing" } }])).toContain("/0/schema");
+		expect(bad([{ kind: "json_schema", schema: { $ref: "#/a%" } }])).toContain("/0/schema");
+		expect(bad([{ kind: "json_schema", schema: { $ref: "#/constructor" } }])).toContain("/0/schema");
+		expect(parseScorerSpecs([{ kind: "json_schema", schema: { const: { type: "car" }, examples: [{ type: "x" }], default: { type: "y" } } }], "t")).toHaveLength(1);
 		expect(parseScorerSpecs([{ kind: "json_schema", schema: { $defs: { a: { type: "string" } }, $ref: "#/$defs/a" } }], "t")).toHaveLength(1);
 	});
 
