@@ -1,3 +1,4 @@
+import { Worker } from "node:worker_threads";
 import { NexoError } from "@nexo/telemetry";
 import { Value } from "typebox/value";
 import type { Scorer, ScoreResult } from "./types.ts";
@@ -6,6 +7,8 @@ import type { Scorer, ScoreResult } from "./types.ts";
 export const MAX_COMMAND_OUTPUT_CHARS = 256 * 1024;
 /** Characters of the output tail used as the rationale. */
 export const RATIONALE_TAIL_CHARS = 2000;
+/** Longest a `regex` scorer may spend matching one output before it is stopped, in milliseconds. */
+export const REGEX_TIMEOUT_MS = 1000;
 /** Characters of the final output that `regex` and `contains` scorers look at. */
 export const MAX_MATCHED_OUTPUT_CHARS = 1024 * 1024;
 
@@ -27,6 +30,8 @@ export interface CommandRun {
 export interface CommandOutcome {
 	/** stdout and stderr interleaved; the start error's message when `ended` is "failed". */
 	output: string;
+	/** True when the runner cut the output short. */
+	truncated?: boolean;
 	/** Null unless `ended` is "exited". */
 	exitCode: number | null;
 	ended: "exited" | "timeout" | "aborted" | "failed";
@@ -57,7 +62,8 @@ export function commandScorer(options: CommandScorerOptions): Scorer {
 		score: async (input, signal) => {
 			if (signal.aborted) throw new NexoError({ code: "SCORER_FAILED", message: `Scorer ${options.name} was aborted` });
 			const outcome = await options.run({ command: options.command, cwd: input.workspace, timeoutMs: options.timeoutMs, signal });
-			const output = outcome.output.length > MAX_COMMAND_OUTPUT_CHARS ? outcome.output.slice(0, MAX_COMMAND_OUTPUT_CHARS) : outcome.output;
+			const capped = outcome.output.length > MAX_COMMAND_OUTPUT_CHARS ? outcome.output.slice(0, MAX_COMMAND_OUTPUT_CHARS) : outcome.output;
+			const output = outcome.truncated || capped.length < outcome.output.length ? `${capped}\n[output truncated]` : capped;
 			if (outcome.ended === "failed") {
 				throw new NexoError({ code: "SCORER_FAILED", message: `Command scorer ${options.name} could not start bash: ${output}` });
 			}
@@ -77,15 +83,37 @@ export function commandScorer(options: CommandScorerOptions): Scorer {
 	};
 }
 
+/** The body of the first fenced block (```json or bare) with a closing fence line, found in linear time. */
+function fenceBody(text: string): string | undefined {
+	let from = 0;
+	for (;;) {
+		const open = text.indexOf("```", from);
+		if (open < 0) return undefined;
+		const lineEnd = text.indexOf("\n", open);
+		if (lineEnd < 0) return undefined;
+		const tag = text.slice(open + 3, lineEnd).trim().toLowerCase();
+		from = open + 3;
+		if (tag !== "" && tag !== "json") continue;
+		let pos = lineEnd + 1;
+		while (pos <= text.length) {
+			let end = text.indexOf("\n", pos);
+			if (end < 0) end = text.length;
+			if (text.slice(pos, end).trim() === "```") return text.slice(lineEnd + 1, Math.max(lineEnd + 1, pos - 1));
+			pos = end + 1;
+		}
+		return undefined;
+	}
+}
+
 /** The JSON value in a final answer: the whole text, else the body of a ```json fence. */
 export function extractJson(text: string): unknown {
 	const trimmed = text.trim();
 	try {
 		return JSON.parse(trimmed);
 	} catch {
-		const fence = /```(?:json)?\s*\n([\s\S]*?)\n\s*```/i.exec(trimmed);
-		if (!fence?.[1]) throw new Error("the output is not JSON and has no ```json block");
-		return JSON.parse(fence[1]);
+		const body = fenceBody(trimmed);
+		if (body === undefined) throw new Error("the output is not JSON and has no ```json block");
+		return JSON.parse(body);
 	}
 }
 
@@ -98,25 +126,56 @@ export function jsonSchemaScorer(options: { name: string; schema: object }): Sco
 		score: async (input) => {
 			let value: unknown;
 			try {
-				value = extractJson(input.finalOutput);
+				value = extractJson(input.finalOutput.slice(0, MAX_MATCHED_OUTPUT_CHARS));
 			} catch (error) {
 				return pass(false, `Not valid JSON: ${(error as Error).message}`);
 			}
-			const errors = [...Value.Errors(options.schema as never, value)].slice(0, 20).map((e) => `${e.instancePath || "/"} ${e.message}`);
+			let errors: string[];
+	try {
+		errors = [...Value.Errors(options.schema as never, value)].slice(0, 20).map((e) => `${e.instancePath || "/"} ${e.message}`);
+	} catch (cause) {
+		throw new NexoError({ code: "SCORER_FAILED", message: `json_schema scorer ${options.name} cannot apply its schema: ${(cause as Error).message}`, cause });
+	}
 			return errors.length === 0 ? pass(true, "The output matches the schema") : pass(false, `Schema violations:\n${errors.join("\n")}`);
 		},
 	};
 }
 
-/** Passes when the pattern matches the final output (or does not, with `negate`). */
+/** Runs one match in a worker thread so a catastrophic pattern is stopped at REGEX_TIMEOUT_MS instead of freezing the engine. */
+function matchInWorker(name: string, pattern: string, flags: string | undefined, text: string, signal: AbortSignal): Promise<boolean> {
+	return new Promise((resolve, reject) => {
+		const worker = new Worker(new URL("./regex-worker.ts", import.meta.url), { workerData: { pattern, flags, text } });
+		const finish = (settle: () => void) => {
+			clearTimeout(timer);
+			signal.removeEventListener("abort", onAbort);
+			void worker.terminate();
+			settle();
+		};
+		const fail = (message: string, hint?: string) => finish(() => reject(new NexoError({ code: "SCORER_FAILED", message, hint })));
+		const timer = setTimeout(
+			() => fail(`Regex scorer ${name} did not finish within ${REGEX_TIMEOUT_MS}ms`, "The pattern backtracks catastrophically on this output; simplify it (avoid nested quantifiers like (a+)+)"),
+			REGEX_TIMEOUT_MS,
+		);
+		const onAbort = () => fail(`Scorer ${name} was aborted`);
+		signal.addEventListener("abort", onAbort, { once: true });
+		worker.once("message", (matched: boolean) => finish(() => resolve(matched)));
+		worker.once("error", (error) => fail(`Regex scorer ${name} failed: ${error.message}`));
+	});
+}
+
+/** Passes when the pattern matches the final output (or does not, with `negate`). The match runs in a worker with a time bound. */
 export function regexScorer(options: { name: string; pattern: string; flags?: string; negate?: boolean }): Scorer {
-	const re = new RegExp(options.pattern, options.flags);
+	try {
+		new RegExp(options.pattern, options.flags);
+	} catch (cause) {
+		throw new NexoError({ code: "CONFIG_INVALID", message: `Regex scorer ${options.name} has an invalid pattern: ${(cause as Error).message}`, context: { pattern: options.pattern, flags: options.flags }, cause });
+	}
 	return {
 		name: options.name,
 		kind: "deterministic",
 		type: "regex",
-		score: async (input) => {
-			const matched = re.test(input.finalOutput.slice(0, MAX_MATCHED_OUTPUT_CHARS));
+		score: async (input, signal) => {
+			const matched = await matchInWorker(options.name, options.pattern, options.flags, input.finalOutput.slice(0, MAX_MATCHED_OUTPUT_CHARS), signal);
 			const passed = options.negate ? !matched : matched;
 			return pass(passed, `/${options.pattern}/${options.flags ?? ""} ${matched ? "matched" : "did not match"}${options.negate ? " (negated)" : ""}`);
 		},
