@@ -76,7 +76,8 @@ export function scoreLines(result: Pick<RunResult, "scores" | "escalations" | "c
 		if (s.status === "failed") return `  score ${name}: failed [${s.error?.code ?? "SCORER_FAILED"}] ${escapeControl(s.error?.message ?? "")}`.trimEnd();
 		const value = s.value === null ? "–" : s.value.toFixed(2);
 		const family = Array.isArray(s.details.sameFamily) && s.details.sameFamily.length > 0 ? " (same-family judge)" : "";
-		return `  score ${name}: ${value} ${s.passed ? "✓ pass" : "✗ fail"}${family}`;
+		const verdict = s.passed === null ? "–" : s.passed ? "✓ pass" : "✗ fail";
+		return `  score ${name}: ${value} ${verdict}${family}`;
 	});
 	if (result.escalations) lines.push(`  escalated to s2 ${result.escalations === 1 ? "once" : `${result.escalations} times`}`);
 	const failed = result.continuationError;

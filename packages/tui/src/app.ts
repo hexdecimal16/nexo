@@ -12,7 +12,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { type EngineEvent, listSessions, type RunResult, type Session, type Settings } from "@nexo/core";
 import type { Effort } from "@nexo/router";
-import type { Db, TranscriptLine } from "@nexo/store";
+import type { Db, ScoreStatus, TranscriptLine } from "@nexo/store";
 import { type ErrorPayload, toErrorPayload } from "@nexo/telemetry";
 import type { Prompter } from "@nexo/tools";
 import { createApprovalPrompter } from "./approvals.ts";
@@ -101,7 +101,16 @@ export function scoreSummary(result: Pick<RunResult, "scores">): string | null {
 	if (answered.length === 0) return "score failed";
 	const mean = answered.reduce((sum, s) => sum + (s.value ?? 0), 0) / answered.length;
 	const failed = scores.filter((s) => s.status === "failed").length;
-	return `score ${mean.toFixed(2)} ${answered.every((s) => s.passed) ? "✓" : "✗"}${failed > 0 ? ` · ${failed} failed` : ""}`;
+	// A scorer without a pass/fail verdict (passed null) neither passes nor fails the turn.
+	const mark = answered.some((s) => s.passed === false) ? "✗" : answered.some((s) => s.passed === true) ? "✓" : "–";
+	return `score ${mean.toFixed(2)} ${mark}${failed > 0 ? ` · ${failed} failed` : ""}`;
+}
+
+/** The verdict shown on a chat score line: `0.82 ✓`, `0.40 ✗`, `0.50 –` (no pass/fail verdict) or `failed`. */
+export function scoreVerdict(score: { status: ScoreStatus; value: number | null; passed: boolean | null }): string {
+	if (score.status === "failed") return style.red("failed");
+	const value = score.value === null ? "–" : score.value.toFixed(2);
+	return `${value} ${score.passed === null ? style.gray("–") : score.passed ? style.green("✓") : style.red("✗")}`;
 }
 
 /** Runs the chat UI: the conversation, the editor, the footer, approvals, slash commands and the settings screen. */
@@ -532,11 +541,7 @@ class InteractiveApp {
 			case "score": {
 				if (event.depth !== 0) return;
 				this.currentText = null;
-				const verdict =
-					event.status === "failed"
-						? style.red("failed")
-						: `${event.value === null ? "–" : event.value.toFixed(2)} ${event.passed ? style.green("✓") : style.red("✗")}`;
-				this.chat.addChild(new Block(`score ${escapeControl(oneLine(event.scorer, 60))}: ${verdict}`, style.gray, "  "));
+				this.chat.addChild(new Block(`score ${escapeControl(oneLine(event.scorer, 60))}: ${scoreVerdict(event)}`, style.gray, "  "));
 				break;
 			}
 			case "compaction_start":
