@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { DEFAULT_ROUTER_POLICY, parseRouterPolicy, type RouterPolicy } from "@nexo/router";
 import { DEFAULT_JUDGE_RUBRIC, type ModelRef, modelKeyOf, sameFamilyPairs } from "@nexo/scorers";
 import { type ArtifactRow, type Db, ensureManualArtifact, ensureSeedArtifact } from "@nexo/store";
@@ -8,17 +8,28 @@ import type { NexoConfig } from "../config/schema.ts";
 /** Artifact name of the router policy and judge rubric that `artifact:` sources and `file:` sources both use. */
 export const DEFAULT_ARTIFACT_NAME = "default";
 
+/** Largest `file:` source read; a router policy or rubric is a few KiB. */
+export const MAX_SOURCE_BYTES = 256 * 1024;
+
+/** Reads a regular file of at most MAX_SOURCE_BYTES; anything else is CONFIG_INVALID naming the key. */
 function readSource(path: string, key: string): string {
-	try {
-		return readFileSync(path, "utf8");
-	} catch (cause) {
+	const fail = (why: string, cause?: unknown): never => {
 		throw new NexoError({
 			code: "CONFIG_INVALID",
-			message: `Cannot read ${path} (${key}): ${(cause as Error).message}`,
-			hint: `Point ${key} at an existing file, or set it to its artifact: default`,
+			message: `Cannot read ${path} (${key}): ${why}`,
+			hint: `Point ${key} at an existing regular file of at most ${MAX_SOURCE_BYTES / 1024} KiB, or set it to its artifact: default`,
 			context: { key, path },
 			cause,
 		});
+	};
+	try {
+		const info = statSync(path);
+		if (!info.isFile()) return fail("not a regular file");
+		if (info.size > MAX_SOURCE_BYTES) return fail(`larger than ${MAX_SOURCE_BYTES} bytes`);
+		return readFileSync(path, "utf8");
+	} catch (cause) {
+		if (cause instanceof NexoError) throw cause;
+		return fail((cause as NodeJS.ErrnoException).code ?? "unreadable", cause);
 	}
 }
 
