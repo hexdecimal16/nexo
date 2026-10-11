@@ -10,9 +10,9 @@ function isMissing(err: unknown): boolean {
 /**
  * Absolute form of `target` (relative to `base`) with its deepest existing ancestor resolved through realpath.
  * Ancestors are probed with lstat so a dangling symlink is found rather than walked past; a symlink whose target
- * cannot be resolved is denied with TOOL_DENIED.
+ * cannot be resolved is denied with TOOL_DENIED. `realpath` resolves the existing ancestor.
  */
-export function canonicalPath(target: string, base: string = process.cwd()): string {
+export function canonicalPath(target: string, base: string = process.cwd(), realpath: (path: string) => string = realpathSync): string {
 	const absolute = isAbsolute(target) ? resolve(target) : resolve(base, target);
 	let probe = absolute;
 	for (;;) {
@@ -28,7 +28,7 @@ export function canonicalPath(target: string, base: string = process.cwd()): str
 	}
 	let resolvedProbe: string;
 	try {
-		resolvedProbe = realpathSync(probe);
+		resolvedProbe = realpath(probe);
 	} catch (cause) {
 		if (!isMissing(cause)) throw cause;
 		throw new NexoError({
@@ -59,4 +59,37 @@ export function resolveConfined(root: string, target: string): string {
 		});
 	}
 	return full;
+}
+
+function isWithin(path: string, dir: string): boolean {
+	return path === dir || path.startsWith(dir + sep);
+}
+
+/**
+ * Guards the nexo home (config, credentials, skills, runs) against the agent's file tools, whatever the workspace.
+ * Paths are compared through the native realpath, which also settles letter case on case-insensitive file systems.
+ * A workspace that lies inside the nexo home (a run's own workspace) stays writable.
+ */
+export function nexoHomeGuard(nexoHome: string, workspaceRoot: string): { checkWrite(path: string): void; checkRead(path: string): void } {
+	const native = realpathSync.native;
+	const home = canonicalPath(nexoHome, process.cwd(), native);
+	const workspace = canonicalPath(workspaceRoot, process.cwd(), native);
+	const credentials = join(home, "credentials.json");
+	const exempt = isWithin(workspace, home) && workspace !== home ? workspace : null;
+	const deny = (target: string, message: string) =>
+		new NexoError({
+			code: "TOOL_DENIED",
+			message,
+			hint: "nexo's own files (config, credentials, skills, runs) are not changed by the agent; edit them yourself outside the run",
+			context: { target, nexoHome: home },
+		});
+	return {
+		checkWrite(path) {
+			const full = canonicalPath(path, workspace, native);
+			if (isWithin(full, home) && !(exempt !== null && isWithin(full, exempt))) throw deny(path, `Path "${path}" is inside the nexo home ${home}`);
+		},
+		checkRead(path) {
+			if (canonicalPath(path, workspace, native) === credentials) throw deny(path, `Path "${path}" is the nexo credentials file`);
+		},
+	};
 }

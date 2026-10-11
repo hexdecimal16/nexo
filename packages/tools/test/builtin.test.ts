@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -60,6 +60,57 @@ describe("read/write/edit", () => {
 		writeFileSync(join(ws, "a.txt"), "x x");
 		await expect(tool("edit").execute("1", { path: "a.txt", oldText: "y", newText: "z" })).rejects.toThrow(/not found/);
 		await expect(tool("edit").execute("1", { path: "a.txt", oldText: "x", newText: "z" })).rejects.toThrow(/matches 2 times/);
+	});
+});
+
+describe("the nexo home", () => {
+	/** A workspace (like a user's home directory) that contains the nexo home. */
+	function homeSetup() {
+		const ws = mkdtempSync(join(tmpdir(), "nexo-userhome-"));
+		const nexoHome = join(ws, ".nexo");
+		mkdirSync(nexoHome);
+		writeFileSync(join(nexoHome, "config.json"), '{"tools":{}}');
+		writeFileSync(join(nexoHome, "credentials.json"), '{"faux":"k"}');
+		const { tool } = setup({ workspaceRoot: ws, nexoHome });
+		return { ws, nexoHome, tool };
+	}
+
+	it("denies write and edit inside the nexo home even when the workspace contains it", async () => {
+		const { ws, nexoHome, tool } = homeSetup();
+		await expect(tool("write").execute("1", { path: ".nexo/config.json", content: "{}" })).rejects.toMatchObject({ code: "TOOL_DENIED", hint: expect.any(String) });
+		await expect(tool("write").execute("2", { path: ".nexo/skills/x/SKILL.md", content: "x" })).rejects.toMatchObject({ code: "TOOL_DENIED" });
+		await expect(tool("edit").execute("3", { path: ".nexo/config.json", oldText: "{}", newText: "1" })).rejects.toMatchObject({ code: "TOOL_DENIED" });
+		// On a case-insensitive file system a different letter case names the same directory.
+		if (existsSync(join(ws, ".NEXO"))) await expect(tool("write").execute("5", { path: ".NEXO/config.json", content: "{}" })).rejects.toMatchObject({ code: "TOOL_DENIED" });
+		symlinkSync(nexoHome, join(ws, "link"));
+		await expect(tool("write").execute("4", { path: "link/config.json", content: "{}" })).rejects.toMatchObject({ code: "TOOL_DENIED" });
+		expect(readFileSync(join(nexoHome, "config.json"), "utf8")).toBe('{"tools":{}}');
+		expect(existsSync(join(nexoHome, "skills"))).toBe(false);
+	});
+
+	it("allows reads inside the nexo home except the credentials file", async () => {
+		const { tool } = homeSetup();
+		expect(text(await tool("read").execute("1", { path: ".nexo/config.json" }))).toBe('{"tools":{}}');
+		await expect(tool("read").execute("2", { path: ".nexo/credentials.json" })).rejects.toMatchObject({ code: "TOOL_DENIED" });
+		await expect(tool("read").execute("3", { path: ".nexo/../.nexo/credentials.json" })).rejects.toMatchObject({ code: "TOOL_DENIED" });
+	});
+
+	it("leaves other workspace files alone", async () => {
+		const { ws, tool } = homeSetup();
+		await tool("write").execute("1", { path: "notes.txt", content: "a" });
+		await tool("edit").execute("2", { path: "notes.txt", oldText: "a", newText: "b" });
+		await tool("write").execute("3", { path: ".nexo-other/x.txt", content: "c" });
+		expect(readFileSync(join(ws, "notes.txt"), "utf8")).toBe("b");
+		expect(text(await tool("read").execute("4", { path: ".nexo-other/x.txt" }))).toBe("c");
+	});
+
+	it("allows writes in a run workspace that lies inside the nexo home", async () => {
+		const nexoHome = mkdtempSync(join(tmpdir(), "nexo-home-"));
+		const ws = join(nexoHome, "runs", "r1", "workspace");
+		mkdirSync(ws, { recursive: true });
+		const { tool } = setup({ workspaceRoot: ws, nexoHome });
+		await tool("write").execute("1", { path: "a.txt", content: "a" });
+		expect(readFileSync(join(ws, "a.txt"), "utf8")).toBe("a");
 	});
 });
 

@@ -1,6 +1,6 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { addSpend, dayScope, getRun, getSpent, insertRun, listSpans, readRunJson, readTrajectory } from "@nexo/store";
@@ -71,6 +71,24 @@ describe("engine run", () => {
 		expect(result.status).toBe("succeeded");
 		expect(toolResult).toMatch(/^TOOL_DENIED: Path "..\/..\/outside.txt" is outside the workspace/);
 		expect(toolResult).toContain("hint: Use a path inside the workspace");
+	});
+
+	it("denies writes to the nexo home from a workspace that contains it", async () => {
+		const env = makeEnv();
+		const ws = dirname(env.home);
+		writeFileSync(env.deps.paths.config, "{}");
+		let toolResult = "";
+		env.faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("write", { path: "home/config.json", content: '{"tools":{"bash":"allow"}}' })]),
+			async (ctx) => {
+				toolResult = lastToolResultText(ctx);
+				return fauxAssistantMessage("ok");
+			},
+		]);
+		const result = await createEngine(env.deps).run({ instruction: "Grant yourself bash", workspace: ws });
+		expect(result.status).toBe("succeeded");
+		expect(toolResult).toMatch(/^TOOL_DENIED: Path ".*config\.json" is inside the nexo home/);
+		expect(readFileSync(env.deps.paths.config, "utf8")).toBe("{}");
 	});
 
 	it("ends with budget_exceeded once the first call overspends, keeping the partial trajectory", async () => {

@@ -643,6 +643,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				leases,
 				changeTracker: changeTracker ?? undefined,
 				bashTimeoutMs: config.tools.bashTimeoutMs,
+				nexoHome: deps.paths.home,
 				toolOutputsDir: runDir.toolOutputsDir,
 				// Large-output pointers in a session's history name files saved by earlier turns' runs.
 				earlierToolOutputsDirs: sessionId

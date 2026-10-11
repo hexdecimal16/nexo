@@ -5,7 +5,7 @@ import { StringDecoder } from "node:string_decoder";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { ChangeTracker } from "./change-tracker.ts";
-import { resolveConfined } from "./confine.ts";
+import { nexoHomeGuard, resolveConfined } from "./confine.ts";
 import type { FileLeases } from "./leases.ts";
 
 export const MAX_BASH_OUTPUT_BYTES = 1_000_000;
@@ -126,6 +126,8 @@ export interface ToolContext {
 	/** Further `tool_outputs/` directories searched, in order, for a TOOL_OUTPUT_PREFIX path not in `toolOutputsDir` (earlier turns of a session). */
 	earlierToolOutputsDirs?: () => readonly string[];
 	fetch?: typeof fetch;
+	/** The nexo home: write and edit are denied inside it (except in a workspace that lies within it), read of its credentials file too. */
+	nexoHome?: string;
 }
 
 function textResult(text: string, isError = false): AgentToolResult<undefined> {
@@ -151,6 +153,7 @@ const FetchParams = Type.Object({ url: Type.String({ description: "http(s) URL" 
 
 export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 	const root = realpathSync(ctx.workspaceRoot);
+	const guard = ctx.nexoHome === undefined ? null : nexoHomeGuard(ctx.nexoHome, root);
 	const writeFile = (abs: string, content: string): void => {
 		ctx.leases.acquire(abs, ctx.holder);
 		ctx.changeTracker?.beforeWrite(abs);
@@ -178,6 +181,7 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 			const outputs = ctx.toolOutputsDir;
 			const savedOutput = outputs !== undefined && params.path.startsWith(TOOL_OUTPUT_PREFIX);
 			const abs = savedOutput ? resolveSavedOutput(outputs, params.path) : resolveConfined(root, params.path);
+			guard?.checkRead(abs);
 			if (!existsSync(abs)) throw new Error(`File not found: ${params.path}`);
 			const lines = readFileSync(abs, "utf8").split("\n");
 			const start = (params.offset ?? 1) - 1;
@@ -192,6 +196,7 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 		parameters: WriteParams,
 		execute: async (_id, params) => {
 			const abs = resolveConfined(root, params.path);
+			guard?.checkWrite(abs);
 			writeFile(abs, params.content);
 			return textResult(`Wrote ${Buffer.byteLength(params.content)} bytes to ${relative(root, abs) || params.path}`);
 		},
@@ -205,6 +210,7 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 		execute: async (_id, params) => {
 			if (params.oldText === "") throw new Error("oldText must not be empty");
 			const abs = resolveConfined(root, params.path);
+			guard?.checkWrite(abs);
 			if (!existsSync(abs)) throw new Error(`File not found: ${params.path}`);
 			const content = readFileSync(abs, "utf8");
 			const count = content.split(params.oldText).length - 1;
