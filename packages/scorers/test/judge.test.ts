@@ -140,11 +140,34 @@ describe("fix round 1", () => {
 		expect(error).toMatchObject({ code: "SCORER_FAILED", context: { costUsd: 0.01 } });
 	});
 
-	it("rethrows an abort instead of SCORER_FAILED", async () => {
+	it("rethrows the abort reason instead of SCORER_FAILED", async () => {
+		const reason = new DOMException("user abort", "AbortError");
 		const ctl = new AbortController();
-		const caller: JudgeCaller = { complete: async () => { ctl.abort(new Error("aborted")); throw new Error("aborted"); } };
-		await expect(judge(caller, [GEMINI]).score(input(), ctl.signal)).rejects.toThrow("aborted");
-		await expect(judge(caller, [GEMINI, GPT]).score(input(), ctl.signal)).rejects.toThrow("aborted");
+		const caller: JudgeCaller = {
+			complete: async () => {
+				ctl.abort(reason);
+				throw new Error("provider stream closed");
+			},
+		};
+		await expect(judge(caller, [GEMINI]).score(input(), ctl.signal)).rejects.toBe(reason);
+		await expect(judge(caller, [GEMINI, GPT]).score(input(), ctl.signal)).rejects.toBe(reason);
+		await expect(comparePairwise(caller, [GEMINI], { instruction: "i", outputA: "a", outputB: "b", rubric: "r" }, ctl.signal)).rejects.toBe(reason);
+		const repairAbort: JudgeCaller = {
+			complete: async (_m, request) => {
+				if (request.purpose === "score") return { text: "bad", costUsd: 0, costUnknown: false };
+				ctl2.abort(reason);
+				throw new Error("closed");
+			},
+		};
+		const ctl2 = new AbortController();
+		await expect(judge(repairAbort, [GEMINI]).score(input(), ctl2.signal)).rejects.toBe(reason);
+	});
+
+	it("clips long changed-file paths so the footer stays in budget", () => {
+		const steps = Array.from({ length: 30 }, (_, i) => ({ kind: "tool_call", name: "w", status: "ok" as const, detail: "", file: `${"d/".repeat(400)}${i}.ts` }));
+		const text = renderTrajectory(steps, 6000);
+		expect(text.length).toBeLessThanOrEqual(6000);
+		expect(text).toContain("Failed steps: 0");
 	});
 
 	it("decides a panel tie by the mean through judgeScorer", async () => {
