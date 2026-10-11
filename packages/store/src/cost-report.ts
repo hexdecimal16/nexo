@@ -61,7 +61,7 @@ export function costReport(db: Db, options: CostReportOptions): CostReport {
 	}
 	const sql = `SELECT ${KEY_SQL[by]} AS key, SUM(s.cost_usd) AS cost, COUNT(*) AS calls, SUM(s.cost_unknown) AS unknown
 		FROM spans s JOIN runs r ON r.id = s.run_id
-		WHERE s.kind = 'llm_call' AND s.started_at >= ?
+		WHERE s.kind IN ('llm_call', 'compaction') AND s.started_at >= ?
 		GROUP BY key ORDER BY cost DESC, key`;
 	const rows = db
 		.prepare(sql)
