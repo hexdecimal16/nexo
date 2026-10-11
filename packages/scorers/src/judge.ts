@@ -68,7 +68,7 @@ export const DATA_BLOCK_NOTE =
  * inside is escaped to `<<\<`, so the content cannot close its block or open another one.
  */
 export function dataBlock(label: string, content: string): string {
-	return `${blockOpen(label)}\n${content.replace(/<<</g, "<<\\<")}\n${blockClose(label)}`;
+	return `${blockOpen(label)}\n${content.replace(/<<(?=<)/g, "<<\\")}\n${blockClose(label)}`;
 }
 
 const SCORE_SYSTEM = `You are an impartial judge of an AI agent's work. Grade only against the rubric. Judge the work, not its style: do not reward length, confidence or polish.
@@ -119,7 +119,12 @@ function validationErrors(schema: TSchema, text: string): { value: unknown; erro
 		return { value: undefined, errors: [`not valid JSON: ${(error as Error).message}`] };
 	}
 	if (Value.Check(schema, value)) return { value, errors: [] };
-	return { value, errors: [...new Set([...Value.Errors(schema, value)].slice(0, 10).map((e) => `${e.instancePath || "/"} ${e.message}`))] };
+	const errors = new Set<string>();
+	for (const e of Value.Errors(schema, value)) {
+		errors.add(`${e.instancePath || "/"} ${e.message}`);
+		if (errors.size >= 10) break;
+	}
+	return { value, errors: [...errors] };
 }
 
 interface Structured<T> {
@@ -150,9 +155,21 @@ export async function completeStructured<T>(
 	const repair: JudgeRequest = {
 		system: request.system,
 		purpose: `${request.purpose}-repair`,
-		user: `${request.user}\n\n# Your previous reply was invalid\n${clip(first.text, 4000)}\n\nProblems:\n- ${checked.errors.join("\n- ")}\n\nReply again with only the JSON object in the required shape.`,
+		user: `${request.user}\n\n# Your previous reply was invalid\n${dataBlock("previous_reply", clip(first.text, 4000))}\n\nProblems:\n- ${checked.errors.join("\n- ")}\n\nReply again with only the JSON object in the required shape.`,
 	};
-	const second = await caller.complete(model, repair, signal);
+	let second: JudgeCompletion;
+	try {
+		second = await caller.complete(model, repair, signal);
+	} catch (error) {
+		if (signal.aborted || !(error instanceof Error)) throw error;
+		const base = error instanceof NexoError ? error : undefined;
+		throw new NexoError({
+			code: base?.code ?? "SCORER_FAILED",
+			message: error.message,
+			hint: base?.hint,
+			context: { ...base?.context, model: modelKeyOf(model), costUsd, costUnknown, replies: [first.text] },
+		});
+	}
 	costUsd += second.costUsd;
 	costUnknown ||= second.costUnknown;
 	const rechecked = validationErrors(schema, second.text);

@@ -32,6 +32,7 @@ const PROVIDER_FAMILIES: Record<string, string> = {
 /** The model family of a provider/model pair: from the model id when it names a known family, else from the provider. */
 export function modelFamily(model: ModelRef): string {
 	for (const [re, family] of FAMILY_PREFIXES) if (re.test(model.id)) return family;
+	if (model.provider.startsWith("azure")) return "openai";
 	return PROVIDER_FAMILIES[model.provider] ?? model.provider;
 }
 
