@@ -22,6 +22,7 @@ import {
 	type NexoPaths,
 	recoverCrashedRuns,
 	RunDir,
+	sessionRunDirs,
 	type RunJson,
 	type RunStatus,
 	type TaskGraphRecord,
@@ -39,6 +40,7 @@ import {
 	type ToolPolicy,
 } from "@nexo/tools";
 import { realpathSync, statSync } from "node:fs";
+import { join } from "node:path";
 import type { NexoConfig } from "../config/schema.ts";
 import { checkAdmission, recordSpend } from "../cost/admission.ts";
 import { budgetLine, RunBudget } from "../cost/budget.ts";
@@ -461,6 +463,10 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				changeTracker: changeTracker ?? undefined,
 				bashTimeoutMs: config.tools.bashTimeoutMs,
 				toolOutputsDir: runDir.toolOutputsDir,
+				// Large-output pointers in a session's history name files saved by earlier turns' runs.
+				earlierToolOutputsDirs: sessionId
+					? () => sessionRunDirs(db, sessionId).filter((dir) => dir !== runDir.root).map((dir) => join(dir, "tool_outputs"))
+					: undefined,
 			}),
 			createLoadSkillTool({
 				catalog: deps.skills,
@@ -698,7 +704,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 						toolCallId: event.toolCallId,
 						isError: event.isError,
 						durationMs: event.durationMs ?? 0,
-						preview: deps.redact(text.slice(0, TOOL_END_PREVIEW_CHARS)),
+						preview: deps.redact(text).slice(0, TOOL_END_PREVIEW_CHARS),
 					});
 					const spanId = toolSpans.get(event.toolCallId);
 					if (!spanId) break;
