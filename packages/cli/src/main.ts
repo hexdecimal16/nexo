@@ -1,15 +1,18 @@
 import { parseArgs } from "node:util";
+import { judgeFamilyWarnings, type RunResult } from "@nexo/core";
 import { EFFORTS, type Effort } from "@nexo/router";
 import { type CostReport, costReport, ensureNexoDirs, openDb, reindex, resolveNexoPaths } from "@nexo/store";
 import { NexoError, toErrorPayload } from "@nexo/telemetry";
 import { nonInteractivePrompter, type Prompter } from "@nexo/tools";
 import { type CliIO, type CliOptions, EXIT_SIGINT, EXIT_SIGTERM, exitCodeFor, printError, USAGE, usageError } from "./common.ts";
+import { evalCommand } from "./eval.ts";
 import { createTtyPrompter } from "./prompter.ts";
 import { createTtyLineAsker, isInteractiveTerminal, type LineAsker, promptReview } from "./review.ts";
 import { createRuntime } from "./runtime.ts";
 import { interactiveCommand, settingsScreenCommand } from "./interactive.ts";
 import { sessionsCommand } from "./sessions.ts";
 import { settingsCommand } from "./settings.ts";
+import { escapeControl } from "@nexo/tui";
 import { runUi } from "./ui.ts";
 
 export { type CliIO, type CliOptions, EXIT_SIGINT, EXIT_SIGTERM, exitCodeFor };
@@ -58,6 +61,19 @@ function defaultReviewAsker(): LineAsker | null {
 	return createTtyLineAsker(process.stdin, process.stderr);
 }
 
+/** One line per scorer of the latest scoring round, then the escalation count. Scorer text is model-produced, so it is control-escaped. */
+export function scoreLines(result: Pick<RunResult, "scores" | "escalations">): string[] {
+	const lines = (result.scores ?? []).map((s) => {
+		const name = escapeControl(s.scorerName);
+		if (s.status === "failed") return `  score ${name}: failed [${s.error?.code ?? "SCORER_FAILED"}] ${escapeControl(s.error?.message ?? "")}`.trimEnd();
+		const value = s.value === null ? "–" : s.value.toFixed(2);
+		const family = Array.isArray(s.details.sameFamily) && s.details.sameFamily.length > 0 ? " (same-family judge)" : "";
+		return `  score ${name}: ${value} ${s.passed ? "✓ pass" : "✗ fail"}${family}`;
+	});
+	if (result.escalations) lines.push(`  escalated to s2 ${result.escalations === 1 ? "once" : `${result.escalations} times`}`);
+	return lines;
+}
+
 async function runCommand(args: string[], io: CliIO, options: CliOptions): Promise<number> {
 	const { values, positionals } = parseArgs({
 		args,
@@ -88,9 +104,11 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 			if (event.type === "text_delta" && event.depth === 0) io.stdout.write(event.delta);
 			if (event.type === "run_start" && event.depth > 0) io.stderr.write(`  ↳ subagent ${event.runId.slice(-6)}: ${event.instruction.split("\n")[0]?.slice(0, 80)}\n`);
 			if (event.type === "tool_start") io.stderr.write(`${"  ".repeat(event.depth)}  · ${event.toolName}\n`);
+			if (event.type === "escalation" && event.applied) io.stderr.write(`\n${"  ".repeat(event.depth)}  ↑ escalating to ${escapeControl(event.model)} (${event.trigger}: ${escapeControl(event.reason)})\n`);
 		},
 	});
 
+	for (const warning of judgeFamilyWarnings(runtime.config)) io.stderr.write(`warning: ${escapeControl(warning)}\n`);
 	const result = await runtime.engine.run(
 		{
 			instruction,
@@ -106,6 +124,7 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 	const mark = result.status === "succeeded" ? "✓" : "✗";
 	const unknown = result.costUnknown ? " (some calls unpriced)" : "";
 	io.stderr.write(`${mark} ${result.status} · $${result.costUsd.toFixed(4)}${unknown} · trajectory ${result.trajectoryId ?? "-"}${result.runDir ? ` · ${result.runDir}` : ""}\n`);
+	for (const line of scoreLines(result)) io.stderr.write(`${line}\n`);
 	if (result.error) printError(io, result.error);
 	if (result.status === "aborted") return EXIT_SIGINT;
 	const asker = values["no-review"] ? null : options.reviewAsker === undefined ? defaultReviewAsker() : options.reviewAsker;
@@ -165,6 +184,8 @@ export async function runCli(argv: string[], io: CliIO, options: CliOptions = {}
 				return costCommand(rest, io, options);
 			case "reindex":
 				return reindexCommand(io, options);
+			case "eval":
+				return evalCommand(rest, io, options);
 			case "sessions":
 				return sessionsCommand(rest, io, options);
 			case "settings":
