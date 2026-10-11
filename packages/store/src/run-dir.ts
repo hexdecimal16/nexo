@@ -39,6 +39,9 @@ export interface RunJson {
 	configSnapshotHash: string;
 	workspace: string;
 	taskGraphs: TaskGraphRecord[];
+	/** Session link of a session turn's root run; absent or null otherwise. */
+	sessionId?: string | null;
+	turnIndex?: number | null;
 	/** The latest human verdict; written by `recordFeedback` after the run ends. */
 	humanVerdict?: HumanVerdict | null;
 }

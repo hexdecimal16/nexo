@@ -12,7 +12,8 @@ export type SpanKind =
 	| "escalation"
 	| "judge_call"
 	| "memory_read"
-	| "memory_write";
+	| "memory_write"
+	| "compaction";
 
 export type SpanStatus = "running" | "ok" | "error";
 

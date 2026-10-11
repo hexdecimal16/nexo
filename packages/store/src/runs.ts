@@ -30,6 +30,9 @@ export interface RunRow {
 	tokensOut: number;
 	pid: number | null;
 	error: ErrorPayload | null;
+	/** Set on the root run of a session turn. */
+	sessionId?: string | null;
+	turnIndex?: number | null;
 }
 
 const COLUMNS: Record<keyof RunRow, string> = {
@@ -53,6 +56,8 @@ const COLUMNS: Record<keyof RunRow, string> = {
 	tokensOut: "tokens_out",
 	pid: "pid",
 	error: "error_json",
+	sessionId: "session_id",
+	turnIndex: "turn_index",
 };
 
 function encode(key: string, value: unknown): SQLInputValue {
@@ -83,6 +88,8 @@ function decode(row: Record<string, unknown>): RunRow {
 		tokensOut: Number(row.tokens_out),
 		pid: row.pid === null || row.pid === undefined ? null : Number(row.pid),
 		error: row.error_json ? (JSON.parse(String(row.error_json)) as ErrorPayload) : null,
+		sessionId: (row.session_id as string | null) ?? null,
+		turnIndex: row.turn_index === null || row.turn_index === undefined ? null : Number(row.turn_index),
 	};
 }
 
@@ -152,6 +159,10 @@ export interface RunSummary {
 	childCount: number;
 	verdict: Verdict | null;
 	error: ErrorPayload | null;
+	sessionId: string | null;
+	turnIndex: number | null;
+	/** Title of the run's session, when the session is indexed. */
+	sessionTitle: string | null;
 }
 
 export interface RunQuery {
@@ -165,6 +176,8 @@ export interface RunQuery {
 	cursor?: string;
 	/** Defaults to true: subagent runs appear inside their root run. */
 	rootOnly?: boolean;
+	/** Only the turns of this session. */
+	sessionId?: string;
 }
 
 export interface RunPage {
@@ -210,7 +223,8 @@ export function decodeRunCursor(cursor: string): { startedAt: string; id: string
 
 const SUMMARY_SELECT = `SELECT r.*,
 	(SELECT COUNT(*) FROM runs c WHERE c.parent_run_id = r.id) AS child_count,
-	(SELECT f.verdict FROM feedback f WHERE f.run_id = r.id ORDER BY f.created_at DESC, f.id DESC LIMIT 1) AS verdict
+	(SELECT f.verdict FROM feedback f WHERE f.run_id = r.id ORDER BY f.created_at DESC, f.id DESC LIMIT 1) AS verdict,
+	(SELECT s.title FROM sessions s WHERE s.id = r.session_id) AS session_title
 	FROM runs r`;
 
 function decodeSummary(row: Record<string, unknown>): RunSummary {
@@ -235,6 +249,9 @@ function decodeSummary(row: Record<string, unknown>): RunSummary {
 		childCount: Number(row.child_count ?? 0),
 		verdict: (row.verdict as Verdict | null) ?? null,
 		error: run.error,
+		sessionId: run.sessionId ?? null,
+		turnIndex: run.turnIndex ?? null,
+		sessionTitle: (row.session_title as string | null) ?? null,
 	};
 }
 
@@ -258,6 +275,10 @@ export function queryRuns(db: Db, query: RunQuery = {}): RunPage {
 	if (query.skill) {
 		where.push("r.skill = ?");
 		args.push(query.skill);
+	}
+	if (query.sessionId) {
+		where.push("r.session_id = ?");
+		args.push(query.sessionId);
 	}
 	if (since) {
 		where.push("r.started_at >= ?");
