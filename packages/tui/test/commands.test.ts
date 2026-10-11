@@ -15,6 +15,21 @@ describe("parseSlashCommand", () => {
 });
 
 describe("slash commands", () => {
+	it("Enter on an argument completion accepts it and submits the command", async () => {
+		const h = await startHarness();
+		h.terminal.type("/effort hi");
+		await until(() => expect(h.terminal.output()).toContain("high"));
+		h.terminal.send(KEY.enter);
+		await until(() => expect(h.session().effort).toBe("high"));
+		await until(() => expect(h.terminal.output()).toMatch(/s1|fast/));
+		h.terminal.type("/cost");
+		h.terminal.send(KEY.enter);
+		await until(() => expect(h.terminal.output()).toContain("last turn"));
+		expect(h.terminal.output()).not.toContain("/effort high/cost");
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
 	it("/help lists the commands", async () => {
 		const h = await startHarness();
 		submit(h.terminal, "/help");

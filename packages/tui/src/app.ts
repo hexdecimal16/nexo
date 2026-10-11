@@ -44,6 +44,8 @@ export interface InteractiveOptions {
 }
 
 const DOUBLE_CTRL_C_MS = 1000;
+/** Time given to paint the "opening…" footer before the synchronous session open blocks the loop (one render interval and a margin). */
+const OPENING_PAINT_MS = 30;
 const EXIT_TIMEOUT_MS = 5000;
 
 /** Started TUIs, so `restoreTerminal` can stop them from a crash handler. */
@@ -157,6 +159,9 @@ class InteractiveApp {
 					return await this.shutdown(1);
 				}
 			}
+			// Paint the "opening…" footer before the (synchronous) session open.
+			this.tui.requestRender();
+			await new Promise<void>((resolve) => setTimeout(resolve, OPENING_PAINT_MS));
 			try {
 				this.session = this.options.openSession(this.prompter);
 			} catch (error) {
@@ -279,7 +284,7 @@ class InteractiveApp {
 
 	private footerText(): string {
 		const session = this.session;
-		if (!session) return style.gray("nexo · setup");
+		if (!session) return style.gray(this.screen === "settings" ? "nexo · setup" : "nexo · opening…");
 		const last = session.lastModel;
 		const model = session.model ?? (last ? `${last.provider}/${last.id}` : this.defaultModel || "model ?");
 		const effort = session.effort ?? last?.effort ?? (this.defaultEffort || "default effort");
@@ -321,6 +326,12 @@ class InteractiveApp {
 		if (matchesKey(data, "ctrl+d") && this.screen === "chat" && this.session && !this.running && this.editor.getText() === "") {
 			this.requestExit();
 			return { consume: true };
+		}
+		if (matchesKey(data, "enter") && this.screen === "chat" && this.editor.isShowingAutocomplete() && /^\/\S+\s/.test(this.editor.getText())) {
+			// The editor only accepts an argument completion on Enter; press Enter again once it has, so `/effort high⏎` submits.
+			queueMicrotask(() => {
+				if (!this.editor.isShowingAutocomplete()) this.editor.handleInput(data);
+			});
 		}
 		return undefined;
 	}
@@ -513,6 +524,12 @@ class InteractiveApp {
 				case "settings":
 					void this.openSettings("settings").then(() => {
 						this.refreshDefaults();
+						try {
+							session.refreshConfig();
+						} catch (error) {
+							this.sayError(toErrorPayload(error));
+						}
+						this.tui.requestRender();
 						this.say("settings closed; changes apply from the next turn");
 					});
 					break;

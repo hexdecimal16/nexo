@@ -366,6 +366,12 @@ export class Session {
 		return createEngineEnv({ ...engineDeps, onEvent: (event) => this.onEvent?.(event) });
 	}
 
+	/** Re-reads the config now (a turn does this itself), so `budgetUsd` reflects settings changed between turns. Throws while a turn is running. */
+	refreshConfig(): void {
+		this.assertIdle();
+		this.reloadConfig();
+	}
+
 	private reloadConfig(): void {
 		if (!this.deps.reloadConfig) return;
 		const next = this.deps.reloadConfig();

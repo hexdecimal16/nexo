@@ -24,6 +24,8 @@ export interface Harness {
 	faux: ReturnType<typeof fauxProvider>;
 	settings: Settings;
 	terminal: FakeTerminal;
+	/** The session opener passed to the TUI, for tests that wrap it. */
+	openSession: (prompter: Prompter) => Session;
 	/** Set once the TUI opened the session. */
 	session: () => Session;
 	/** runInteractive's promise. */
@@ -91,6 +93,7 @@ export function makeHarness(options: HarnessOptions = {}): Omit<Harness, "done">
 		faux,
 		settings,
 		terminal,
+		openSession,
 		session: () => {
 			if (!opened) throw new Error("session not opened yet");
 			return opened;

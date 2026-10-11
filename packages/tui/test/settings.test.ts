@@ -54,6 +54,23 @@ describe("settings screen", () => {
 		await h.done;
 	});
 
+	it("refreshes the footer budget cap when settings change the session budget", async () => {
+		const h = await startHarness({ userConfig: { ...FAUX_ROLES } });
+		await until(() => expect(h.terminal.output()).toContain("$0.00/$5.00"));
+		await openSettings(h);
+		h.terminal.type("per session");
+		h.terminal.send(KEY.enter);
+		await until(() => expect(h.terminal.output()).toContain("Budget per session"));
+		h.terminal.type("9");
+		h.terminal.send(KEY.enter);
+		await until(() => expect(h.settings.getSetting("budgets.perSessionUsd")).toMatchObject({ value: 9, source: "user" }));
+		h.terminal.send(KEY.escape);
+		await until(() => expect(h.terminal.output()).toContain("$0.00/$9.00"));
+		expect(h.session().budgetUsd).toBe(9);
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
 	it("edits an enum setting from a list", async () => {
 		const h = await startHarness({ userConfig: { ...FAUX_ROLES } });
 		await openSettings(h);
@@ -149,7 +166,7 @@ describe("first-run setup", () => {
 		await until(() => expect(h.terminal.output()).toContain("API key for faux"));
 		h.terminal.type(SECRET);
 		h.terminal.send(KEY.enter);
-		await until(() => expect(h.terminal.output()).toContain("ctx"));
+		await until(() => expect(h.session().status).toBe("active"));
 		expect(h.settings.setupStatus().needed).toBe(false);
 		expect(h.settings.getSetting("models.s1").value).toBe("faux/fast");
 		expect(h.settings.getSetting("models.s2").value).toBe("faux/slow");
