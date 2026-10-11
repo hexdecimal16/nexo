@@ -2,12 +2,19 @@ import type { Escalation, RunScore, Score, Verdict } from "./api-types.ts";
 import { formatTime, formatUsd } from "./format.ts";
 import { html, type SafeHtml } from "./html.ts";
 
-/** `0.82 ✓` / `0.40 ✗` for a run's latest scoring round; `–` when never scored, `failed` when no scorer answered. */
+/** Badge class and mark for a pass/fail verdict; null (a score without a threshold) is neutral. */
+function verdictMark(passed: boolean | null): { cls: string; mark: string; word: string } {
+	if (passed === null) return { cls: "score-neutral", mark: "–", word: "–" };
+	return passed ? { cls: "score-pass", mark: "✓", word: "pass" } : { cls: "score-fail", mark: "✗", word: "fail" };
+}
+
+/** `0.82 ✓` / `0.40 ✗` / `0.50 –` for a run's latest scoring round; `–` when never scored, `failed` when no scorer answered. */
 export function renderScoreCell(score: RunScore | null): SafeHtml {
 	if (!score) return html`<span class="muted">–</span>`;
 	if (score.scorers === 0) return html`<span class="badge score-failed" title="every scorer failed">failed</span>`;
 	const value = score.value === null ? "–" : score.value.toFixed(2);
-	return html`<span class="badge ${score.passed ? "score-pass" : "score-fail"}">${value} ${score.passed ? "✓" : "✗"}</span>${score.failedScorers ? html` <span class="warn" title="scorers that failed">+${score.failedScorers} failed</span>` : ""}`;
+	const v = verdictMark(score.passed);
+	return html`<span class="badge ${v.cls}">${value} ${v.mark}</span>${score.failedScorers ? html` <span class="warn" title="scorers that failed">+${score.failedScorers} failed</span>` : ""}`;
 }
 
 /** The same-family pairs a judge score recorded in `details.sameFamily`. */
@@ -41,7 +48,7 @@ function renderScore(score: Score): SafeHtml {
 		<span class="kind">${score.scorerType}</span>
 		${score.status === "failed"
 			? html`<span class="badge score-failed">failed</span>`
-			: html`<span class="badge ${score.passed ? "score-pass" : "score-fail"}">${score.value === null ? "–" : score.value.toFixed(2)} ${score.passed ? "pass" : "fail"}</span>`}
+			: html`<span class="badge ${verdictMark(score.passed).cls}">${score.value === null ? "–" : score.value.toFixed(2)} ${verdictMark(score.passed).word}</span>`}
 		${score.model ? html`<span class="mono">${score.model}</span>` : ""}
 		${score.costUsd > 0 || score.costUnknown ? html`<span>${formatUsd(score.costUsd, score.costUnknown)}</span>` : ""}
 		${family.length ? html`<span class="badge badge-warn" title="${family.map((f) => `${f.judge} and ${f.generator} are both ${f.family} models`).join("; ")}">same-family judge</span>` : ""}
@@ -74,7 +81,7 @@ export function renderEscalations(escalations: readonly Escalation[]): SafeHtml 
 	return html`<ul class="escalations">${escalations.map(
 		(e) => html`<li class="${e.applied ? "esc-applied" : "esc-blocked"}">
 	<span class="mono">${formatTime(e.at)}</span>
-	<strong>${e.trigger}</strong> <span class="kind">${e.phase.replace("_", "-")}</span>
+	<strong>${e.trigger}</strong> <span class="kind">${e.phase.replaceAll("_", "-")}</span>
 	${e.applied ? html`${e.from ?? "?"} → <span class="mono">${e.to ?? "?"}</span>` : html`<span class="warn">suppressed: ${e.blockedBy ?? "unknown"}</span>`}
 	<div class="muted">${e.reason}</div>
 	${e.blockedReason ? html`<div class="muted">blocked: ${e.blockedReason}</div>` : ""}

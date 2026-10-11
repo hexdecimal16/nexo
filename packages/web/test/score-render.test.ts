@@ -42,6 +42,15 @@ describe("score views", () => {
 		expect(renderScoreCell({ value: null, passed: null, scorers: 0, failedScorers: 2 }).value).toContain("failed");
 	});
 
+	it("shows a neutral mark for a score with no pass/fail verdict", () => {
+		const cell = renderScoreCell({ value: 0.5, passed: null, scorers: 1, failedScorers: 0 }).value;
+		expect(cell).toContain("0.50 –");
+		expect(cell).not.toContain("✗");
+		const panel = renderScores([score({ value: 0.5, passed: null, criteria: [] })], null, false).value;
+		expect(panel).toContain('<span class="badge score-neutral">0.50 –</span>');
+		expect(panel).not.toContain("fail");
+	});
+
 	it("renders the judge reasoning panel escaped, with criteria, votes and the same-family badge", () => {
 		const markup = renderScores(
 			[
@@ -88,6 +97,8 @@ describe("score views", () => {
 		expectInert(markup);
 		expect(markup).toContain("faux/fast → <span class=\"mono\">faux/slow</span>");
 		expect(markup).toContain("suppressed: budget_cutoff");
+		expect(markup).toContain('<span class="kind">mid-run</span>');
+		expect(markup).toContain('<span class="kind">end-of-run</span>');
 		const detailed = renderEscalations([{ ...base, applied: false, blockedBy: "budget_cutoff", blockedReason: XSS, continuationError: { code: "MODEL_FAILED", message: XSS } }]).value;
 		expectInert(detailed);
 		expect(detailed).toContain("blocked: ");
@@ -110,6 +121,7 @@ describe("calibration view", () => {
 		expectInert(markup);
 		expect(markup).toContain("accuracy 75.0%");
 		expect(markup).toContain("Cohen's κ 0.500");
+		expect(markup.replace(/<[^>]+>/g, "")).toContain("4 cases · accuracy 75.0% · Cohen's κ 0.500");
 		expect(markup).toContain("<th>judge pass</th><td class=\"num\">2</td><td class=\"num\">1</td>");
 		expect(markup).toContain('href="/run.html?id=r%261"');
 		expect(markup).toContain("same-family judge");

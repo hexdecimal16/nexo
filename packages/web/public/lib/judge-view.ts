@@ -45,7 +45,7 @@ export function renderCalibration(data: JudgeCalibrationResponse): SafeHtml {
 		? html`<p class="muted">Configure a judge to see its agreement.</p>`
 		: current.cases === 0
 			? html`<p class="muted">No run has both a score from this judge and a human verdict yet. Review judged runs in the review queue.</p>`
-			: html`<div class="facts"><span>${current.cases} cases</span><span>accuracy ${pct(current.accuracy)}</span><span>Cohen's κ ${kappa(current.kappa)}</span></div>${renderMatrix(current.matrix)}`}
+			: html`<div class="facts"><span>${current.cases} cases</span> · <span>accuracy ${pct(current.accuracy)}</span> · <span>Cohen's κ ${kappa(current.kappa)}</span></div>${renderMatrix(current.matrix)}`}
 </section>
 <section>
 	<h2>Stored calibrations</h2>
