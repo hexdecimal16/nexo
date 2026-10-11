@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { NexoError } from "@nexo/telemetry";
 import { type Static, Type } from "typebox";
+import { Compile } from "typebox/compile";
 import { Value } from "typebox/value";
 
 const Name = Type.Optional(Type.String({ minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9_.:-]+$" }));
@@ -42,6 +43,52 @@ export function scorerName(spec: ScorerSpec): string {
 	return spec.name ?? spec.kind;
 }
 
+const JSON_TYPES = ["string", "number", "integer", "boolean", "object", "array", "null"];
+
+function resolvePointer(root: unknown, ref: string): boolean {
+	let node: unknown = root;
+	for (const part of ref.slice(1).split("/").slice(1)) {
+		const key = decodeURIComponent(part).replaceAll("~1", "/").replaceAll("~0", "~");
+		if (typeof node !== "object" || node === null || !(key in node)) return false;
+		node = (node as Record<string, unknown>)[key];
+	}
+	return true;
+}
+
+/** The first problem that would make a JSON Schema unusable: an unknown `type`, an unresolvable local `$ref`, or a pattern that does not compile. */
+function schemaProblem(schema: object): string | undefined {
+	const walk = (node: unknown, path: string): string | undefined => {
+		if (Array.isArray(node)) {
+			for (const [i, item] of node.entries()) {
+				const found = walk(item, `${path}/${i}`);
+				if (found) return found;
+			}
+			return undefined;
+		}
+		if (typeof node !== "object" || node === null) return undefined;
+		const obj = node as Record<string, unknown>;
+		const type = obj.type;
+		const types = typeof type === "string" ? [type] : Array.isArray(type) && type.every((t) => typeof t === "string") ? (type as string[]) : [];
+		const bad = types.find((t) => !JSON_TYPES.includes(t));
+		if (bad !== undefined) return `${path}/type "${bad}" is not a JSON Schema type`;
+		const ref = obj.$ref;
+		if (typeof ref === "string" && ref.startsWith("#") && !resolvePointer(schema, ref)) return `${path}/$ref ${ref} does not resolve`;
+		for (const [key, value] of Object.entries(obj)) {
+			const found = walk(value, `${path}/${key}`);
+			if (found) return found;
+		}
+		return undefined;
+	};
+	const found = walk(schema, "");
+	if (found) return found;
+	try {
+		Compile(schema as never);
+	} catch (cause) {
+		return (cause as Error).message;
+	}
+	return undefined;
+}
+
 function invalid(source: string, message: string, context: Record<string, unknown> = {}): NexoError {
 	return new NexoError({
 		code: "CONFIG_INVALID",
@@ -75,6 +122,10 @@ export function parseScorerSpecs(raw: unknown, source: string): ScorerSpec[] {
 			} catch (cause) {
 				throw invalid(source, `/${index}/pattern does not compile: ${(cause as Error).message}`, { index });
 			}
+		}
+		if (spec.kind === "json_schema") {
+			const problem = schemaProblem(spec.schema);
+			if (problem) throw invalid(source, `/${index}/schema is not a usable JSON Schema: ${problem}`, { index });
 		}
 		const name = scorerName(spec);
 		if (names.has(name)) throw invalid(source, `/${index} repeats the scorer name "${name}"; give each scorer a distinct name`, { index });

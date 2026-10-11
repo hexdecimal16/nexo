@@ -1,9 +1,9 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { NexoError } from "@nexo/telemetry";
-import { runBash } from "../../tools/src/builtin.ts";
+import { runBash, trackedBashGroups } from "../../tools/src/builtin.ts";
 import {
 	type CommandRunner,
 	commandScorer,
@@ -59,6 +59,24 @@ describe("command scorer", () => {
 		expect(error).toMatchObject({ code: "SCORER_FAILED", message: "Command scorer slow timed out after 150ms" });
 		expect(error.hint).toContain("timeoutMs");
 		expect(Date.now() - started).toBeLessThan(5000);
+		expect(trackedBashGroups()).toEqual([]);
+	});
+
+	it("kills backgrounded children when the command times out", async () => {
+		const ws = mkdtempSync(join(tmpdir(), "nexo-kill-"));
+		const command = "sleep 30 & echo $! > child.pid; sleep 30; wait";
+		await failure(commandScorer({ name: "slow", command, timeoutMs: 400, run }).score(input("", ws), signal));
+		const pid = Number(readFileSync(join(ws, "child.pid"), "utf8").trim());
+		expect(pid).toBeGreaterThan(0);
+		await new Promise((r) => setTimeout(r, 100));
+		expect(() => process.kill(pid, 0)).toThrow();
+	});
+
+	it("marks truncated output", async () => {
+		const truncating: CommandRunner = async () => ({ output: "partial", exitCode: 0, ended: "exited", truncated: true });
+		const r = await commandScorer({ name: "t", command: "x", timeoutMs: 1000, run: truncating }).score(input(""), signal);
+		expect(r.rationale).toContain("[output truncated]");
+		expect(r.files?.["t.log"]).toContain("[output truncated]");
 	});
 
 	it("throws SCORER_FAILED when aborted", async () => {
@@ -106,9 +124,45 @@ describe("output scorers", () => {
 		expect((await containsScorer({ name: "c", text: "NEEDLE" }).score(input("aNEEDLE"), signal)).passed).toBe(true);
 	});
 
+	it("json_schema finds an unclosed fence in linear time", async () => {
+		const scorer = jsonSchemaScorer({ name: "shape", schema: { type: "object" } });
+		const started = Date.now();
+		const r = await scorer.score(input(`\`\`\`${"\n".repeat(100_000)}`), signal);
+		expect(r.passed).toBe(false);
+		expect(Date.now() - started).toBeLessThan(500);
+	});
+
+	it("json_schema ignores output past MAX_MATCHED_OUTPUT_CHARS", async () => {
+		const scorer = jsonSchemaScorer({ name: "shape", schema: { type: "object" } });
+		expect((await scorer.score(input(`{}${" ".repeat(MAX_MATCHED_OUTPUT_CHARS)}x`), signal)).passed).toBe(true);
+	});
+
+	it("json_schema fails with SCORER_FAILED when the schema cannot be applied", async () => {
+		const scorer = jsonSchemaScorer({ name: "shape", schema: { type: "string", pattern: "(" } });
+		expect((await failure(scorer.score(input('"x"'), signal))).code).toBe("SCORER_FAILED");
+	});
+
+	it("regex stops a catastrophic pattern with SCORER_FAILED", async () => {
+		const started = Date.now();
+		const error = await failure(regexScorer({ name: "r", pattern: "^(a+)+$" }).score(input(`${"a".repeat(40)}b`), signal));
+		expect(error.code).toBe("SCORER_FAILED");
+		expect(error.hint).toContain("simplify");
+		expect(Date.now() - started).toBeLessThan(3000);
+	});
+
+	it("regex factory rejects an invalid pattern with CONFIG_INVALID", () => {
+		expect(() => regexScorer({ name: "r", pattern: "(" })).toThrowError(expect.objectContaining({ code: "CONFIG_INVALID" }));
+	});
+
+	it("contains ignoreCase handles non-ASCII text", async () => {
+		expect((await containsScorer({ name: "c", text: "ÉCOLE", ignoreCase: true }).score(input("la école"), signal)).passed).toBe(true);
+	});
+
 	it("human reads the latest verdict and fails without one", async () => {
 		const scorer = humanScorer({ name: "human", readVerdict: (id) => (id === "r1" ? { verdict: "not_done", comment: "missed a file" } : undefined) });
 		expect(await scorer.score(input(""), signal)).toMatchObject({ value: 0, passed: false, rationale: "missed a file" });
+		const approving = humanScorer({ name: "human", readVerdict: () => ({ verdict: "done", comment: "" }) });
+		expect(await approving.score(input(""), signal)).toMatchObject({ value: 1, passed: true, rationale: "Reviewed as done" });
 		expect((await failure(scorer.score({ ...input(""), runId: "r2" }, signal))).code).toBe("SCORER_FAILED");
 	});
 });
@@ -143,6 +197,10 @@ describe("scorer specs", () => {
 		expect(parseScorerSpecs([{ kind: "regex", pattern: "a".repeat(1000) }], "t")).toHaveLength(1);
 		expect(bad([{ kind: "contains", text: "a" }, { kind: "contains", text: "b" }])).toContain('repeats the scorer name "contains"');
 		expect(bad([{ kind: "command", command: "x", extra: 1 }])).toContain("spec.json");
+		expect(bad([{ kind: "json_schema", schema: { type: "string", pattern: "(" } }])).toContain("/0/schema");
+		expect(bad([{ kind: "json_schema", schema: { properties: { n: { type: "bogus" } } } }])).toContain("/0/schema");
+		expect(bad([{ kind: "json_schema", schema: { $ref: "#/missing" } }])).toContain("/0/schema");
+		expect(parseScorerSpecs([{ kind: "json_schema", schema: { $defs: { a: { type: "string" } }, $ref: "#/$defs/a" } }], "t")).toHaveLength(1);
 	});
 
 	it("loads a skill's scorer file as an array or as { scorers }", () => {
