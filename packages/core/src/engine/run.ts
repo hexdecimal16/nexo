@@ -545,22 +545,29 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		// System 1 -> System 2 escalation (spec §7.2).
 		const monitor = new TriggerMonitor(policy);
 		const blockedOnce = new Set<string>();
-		const escalate = (signal: EscalationSignal, phase: "mid_run" | "end_of_run"): boolean => {
-			if (phase === "mid_run" && active.resolved.role === "s2") return false;
-			const from = `${active.model.provider}/${active.model.id}`;
-			const blockedBy = escalationBlock({
+		/** Why an escalation may not happen now, or null when it may. Reserved budget counts as spent. */
+		const currentBlock = (): EscalationBlock | null =>
+			escalationBlock({
 				escalations,
 				maxEscalations: config.router.maxEscalations,
-				spentFraction: budget.limitUsd > 0 ? budget.spentUsd / budget.limitUsd : 1,
+				spentFraction: 1 - budget.remainingFraction(),
 				cutoff: config.budgets.escalationCutoff,
 				skillAllows: skill?.meta.escalate ?? true,
 				modelAllowed: isModelAllowed("s2", skill?.meta.modelAllowed ?? ["s1", "s2"], { s1: config.models.s1, s2: config.models.s2 }),
 				userPinned: resolved.source === "user",
 			});
+		/**
+		 * Applies or records one escalation and returns its span when it took effect, else null. An applied end-of-run
+		 * escalation's span is left open for the caller, which finishes it once the continuation has run.
+		 */
+		const escalate = (signal: EscalationSignal, phase: "mid_run" | "end_of_run"): string | null => {
+			if (phase === "mid_run" && active.resolved.role === "s2") return null;
+			const from = `${active.model.provider}/${active.model.id}`;
+			const blockedBy = currentBlock();
 			if (blockedBy) {
 				// A suppressed trigger is recorded once per reason, not on every tool error that re-fires it.
 				const key = `${signal.trigger}:${blockedBy}`;
-				if (blockedOnce.has(key)) return false;
+				if (blockedOnce.has(key)) return null;
 				blockedOnce.add(key);
 			} else {
 				const s2 = config.models.s2;
@@ -594,15 +601,25 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 					to,
 				},
 			});
-			recorder.finish(span, { status: "ok" });
-			deps.onEvent?.({ type: "escalation", runId, depth, trigger: signal.trigger, reason: signal.reason, phase, applied: blockedBy === null, blockedBy, model: to });
+			if (blockedBy !== null || phase === "mid_run") recorder.finish(span, { status: "ok" });
+			deps.onEvent?.({
+				type: "escalation",
+				runId,
+				depth,
+				trigger: signal.trigger,
+				reason: deps.redact(signal.reason),
+				phase,
+				applied: blockedBy === null,
+				blockedBy,
+				model: to,
+			});
 			logger.info(blockedBy ? "escalation suppressed" : "escalated to s2", {
 				trigger: signal.trigger,
 				reason: signal.reason,
 				blocked_by: blockedBy,
 				...(blockedBy ? { blocked_reason: ESCALATION_BLOCK_REASONS[blockedBy] } : {}),
 			});
-			return blockedBy === null;
+			return blockedBy === null ? span : null;
 		};
 
 		// Tools.
@@ -958,7 +975,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 						workspace,
 						trajectory: summarizeSpans(listSpans(db, runId)),
 					};
-					const selfCheck = selfCheckOn ? await runSelfCheck(scoring, active.model, active.resolved.effort, active.resolved.role ?? "custom", scoreInput) : null;
+					// The self-check only feeds escalation, so it is skipped when an escalation could not happen anyway.
+					const selfCheck = selfCheckOn && currentBlock() === null ? await runSelfCheck(scoring, active.model, active.resolved.effort, active.resolved.role ?? "custom", scoreInput) : null;
 					latestScores = await runScoringRound(scoring, plan, scoreInput, round);
 					scoreRows.push(...latestScores);
 					const judge = latestScores.find((r) => r.scorerType === "llm_judge" && r.status === "ok");
@@ -970,8 +988,28 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 					const first = signals[0];
 					if (!first || input.signal?.aborted) break;
 					const combined: EscalationSignal = { trigger: first.trigger, reason: signals.map((x) => x.reason).join("; ") };
-					if (!escalate(combined, "end_of_run")) break;
-					await drive(continuationPrompt(signals, latestScores));
+					const escalationSpan = escalate(combined, "end_of_run");
+					if (!escalationSpan) break;
+					// A continuation that fails or runs out of budget keeps the answer that was scored; an abort still aborts the run.
+					const before: { output: string; status: RunStatus; error: ErrorPayload | null } = { output, status, error };
+					let continuationError: ErrorPayload | null = null;
+					try {
+						await drive(continuationPrompt(signals, latestScores));
+						// drive() updates status and error; the casts undo the narrowing from the loop condition.
+						const ended = status as RunStatus;
+						const endedError = error as ErrorPayload | null;
+						if ((ended === "failed" || ended === "budget_exceeded") && !input.signal?.aborted) {
+							continuationError = deps.redact(endedError ?? { code: "INTERNAL", message: `continuation ended ${ended}`, retryable: false });
+							logger.warn("S2 continuation failed; keeping the previous answer", { status: ended, error: continuationError });
+							output = before.output;
+							status = before.status;
+							error = before.error;
+							budgetExceeded = false;
+						}
+					} finally {
+						recorder.finish(escalationSpan, { status: "ok", attrs: continuationError ? { continuationError: { code: continuationError.code, message: continuationError.message } } : {} });
+					}
+					if (continuationError) break;
 				}
 				if (input.signal?.aborted) status = "aborted";
 			}

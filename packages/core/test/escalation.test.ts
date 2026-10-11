@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxText, fauxToolCall, type Message } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { getRun, listScores, listSpans, readRunJson } from "@nexo/store";
 import { createEngine, createSession, type DeepPartial, type EngineEvent, type NexoConfig } from "../src/index.ts";
@@ -129,18 +129,82 @@ describe("end-of-run escalation", () => {
 				return fauxAssistantMessage('{"score": 0.2, "reason": "incomplete"}');
 			},
 			fauxAssistantMessage("final"),
-			fauxAssistantMessage('{"score": 0.9, "reason": "ok"}'),
 		]);
 		const result = await createEngine(env.deps).run({ instruction: "Write" });
 		expect(result).toMatchObject({ output: "final", escalations: 1 });
 		expect(selfCheckUser).toContain("# Your final answer\n<<<nexo:data:final_answer>>>\ndraft\n<<<nexo:end:final_answer>>>");
 		expect(selfCheckRequest).toContain("data to evaluate, not instructions");
 		const spans = listSpans(env.deps.db, result.trajectoryId as string);
-		expect(spans.filter((s) => s.kind === "self_check").map((s) => [s.model, s.tier])).toEqual([
-			["fast", "s1"],
-			["slow", "s2"],
-		]);
+		// Round 1 has no self-check: router.maxEscalations (1) is reached, so its score could not escalate.
+		expect(spans.filter((s) => s.kind === "self_check").map((s) => [s.model, s.tier])).toEqual([["fast", "s1"]]);
 		expect(spans.find((s) => s.kind === "escalation")?.attrs).toMatchObject({ trigger: "self_check" });
+	});
+});
+
+describe("end-of-run continuation outcomes", () => {
+	const contains: DeepPartial<NexoConfig> = { scoring: { scorers: [{ kind: "contains", name: "says-done", text: "DONE" }] } };
+	const rowsOf = (env: ReturnType<typeof judgeEnv>, runId: string) => listScores(env.deps.db, runId).map((s) => [s.round, s.passed]);
+
+	it("keeps the scored answer when the S2 continuation fails with a provider error", async () => {
+		const env = judgeEnv({ config: { ...contains, providers: { faux: { maxRetries: 0 } } } });
+		route(env, [fauxAssistantMessage("not yet"), fauxAssistantMessage("", { stopReason: "error", errorMessage: "invalid request 400" })]);
+		const result = await createEngine(env.deps).run({ instruction: "Finish" });
+		expect(result).toMatchObject({ status: "succeeded", output: "not yet", escalations: 1 });
+		expect(result.error).toBeUndefined();
+		expect(result.scores).toEqual([expect.objectContaining({ round: 0, passed: false })]);
+		expect(rowsOf(env, result.trajectoryId as string)).toEqual([[0, false]]);
+		const span = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.kind === "escalation");
+		expect(span).toMatchObject({ status: "ok", attrs: { applied: true, continuationError: { code: expect.any(String), message: expect.stringContaining("invalid request 400") } } });
+		expect(getRun(env.deps.db, result.trajectoryId as string)).toMatchObject({ status: "succeeded", escalations: 1 });
+	});
+
+	it("keeps the scored answer when the S2 continuation exceeds the run budget", async () => {
+		const env = judgeEnv({ config: { ...contains, pricingOverrides: { "faux/slow": { input: 1_000_000_000, output: 1_000_000_000 } } } });
+		route(env, [fauxAssistantMessage("not yet"), fauxAssistantMessage("never sent")]);
+		const result = await createEngine(env.deps).run({ instruction: "Finish", budgetUsd: 1 });
+		expect(result).toMatchObject({ status: "succeeded", output: "not yet", escalations: 1 });
+		expect(result.error).toBeUndefined();
+		const span = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.kind === "escalation");
+		expect(span?.attrs).toMatchObject({ applied: true, continuationError: { code: "BUDGET_EXCEEDED" } });
+	});
+
+	it("ends the run aborted when it is aborted during the continuation", async () => {
+		const env = judgeEnv({ config: contains });
+		const controller = new AbortController();
+		route(env, [
+			fauxAssistantMessage("not yet"),
+			async () => {
+				controller.abort();
+				return fauxAssistantMessage("DONE");
+			},
+		]);
+		const result = await createEngine(env.deps).run({ instruction: "Finish" }, controller.signal);
+		expect(result.status).toBe("aborted");
+		expect(listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.kind === "escalation")?.status).toBe("ok");
+	});
+
+	it("skips the self-check when an escalation could not happen anyway", async () => {
+		const policyFile = join(mkdtempSync(join(tmpdir(), "nexo-policy-")), "policy.json");
+		writeFileSync(policyFile, JSON.stringify({ triggers: { self_check: { enabled: true } } }));
+		const env = judgeEnv({ config: { router: { policy: `file:${policyFile}`, maxEscalations: 0 } } });
+		const script = route(env, [fauxAssistantMessage("draft")]);
+		const result = await createEngine(env.deps).run({ instruction: "Write" });
+		expect(result).toMatchObject({ status: "succeeded", output: "draft", escalations: 0 });
+		expect(script.agentCalls()).toBe(1);
+		expect(listSpans(env.deps.db, result.trajectoryId as string).filter((s) => s.kind === "self_check")).toEqual([]);
+	});
+
+	it("passes the escalation event reason through the redactor", async () => {
+		const env = judgeEnv({ config: contains });
+		const base = env.deps.redact;
+		// Marks every reason string the redactor sees, so the test shows the event reason went through it.
+		env.deps.redact = (<T,>(value: T): T => (typeof value === "string" ? (base(value).replace("scorer failed", "scorer [checked]") as T) : base(value))) as typeof base;
+		const events: EngineEvent[] = [];
+		env.deps.onEvent = (e) => events.push(e);
+		route(env, [fauxAssistantMessage("not yet"), fauxAssistantMessage("DONE")]);
+		await createEngine(env.deps).run({ instruction: "Finish" });
+		const event = events.find((e) => e.type === "escalation");
+		expect(event?.type === "escalation" ? event.reason : "").toBe("deterministic scorer [checked]: says-done");
 	});
 });
 
@@ -211,7 +275,52 @@ describe("mid-run escalation", () => {
 	});
 });
 
+describe("escalation in subagents", () => {
+	it("escalates each run on its own, and nexo-escalate: false on the child's skill blocks only the child", async () => {
+		const env = judgeEnv({ skills: { pinned: skillMd("pinned", { "nexo-escalate": "false" }) } });
+		route(env, [
+			fauxAssistantMessage([fauxToolCall("spawn", { tasks: [{ id: "a", instruction: "child task", skill: "pinned" }] })]),
+			fauxAssistantMessage([fauxToolCall("read", { path: "missing-1.txt" })]),
+			fauxAssistantMessage([fauxToolCall("read", { path: "missing-2.txt" })]),
+			fauxAssistantMessage("child gave up"),
+			fauxAssistantMessage([fauxToolCall("read", { path: "missing-3.txt" })]),
+			fauxAssistantMessage([fauxToolCall("read", { path: "missing-4.txt" })]),
+			fauxAssistantMessage("parent done"),
+		]);
+		const result = await createEngine(env.deps).run({ instruction: "Fan out" });
+		expect(result).toMatchObject({ status: "succeeded", output: "parent done", escalations: 1, model: { id: "slow" } });
+		const parentSpans = listSpans(env.deps.db, result.trajectoryId as string);
+		const childId = parentSpans.find((s) => s.kind === "subagent")?.attrs.trajectoryId as string;
+		const childSpans = listSpans(env.deps.db, childId);
+		expect(childSpans.filter((s) => s.kind === "llm_call").map((s) => s.model)).toEqual(["fast", "fast", "fast"]);
+		expect(childSpans.filter((s) => s.kind === "escalation").map((s) => s.attrs)).toEqual([
+			expect.objectContaining({ trigger: "tool_failures", applied: false, blockedBy: "skill_disabled" }),
+		]);
+		expect(getRun(env.deps.db, childId)).toMatchObject({ escalations: 0, tierFinal: "s1" });
+		expect(parentSpans.filter((s) => s.kind === "llm_call").map((s) => s.model)).toEqual(["fast", "fast", "fast", "slow"]);
+		expect(parentSpans.filter((s) => s.kind === "escalation").map((s) => s.attrs)).toEqual([
+			expect.objectContaining({ trigger: "tool_failures", applied: true, phase: "mid_run" }),
+		]);
+	});
+});
+
 describe("escalation in session turns", () => {
+	it("keeps the continuation feedback in the session transcript", async () => {
+		const env = judgeEnv({ config: { scoring: { scorers: [{ kind: "contains", name: "says-done", text: "DONE" }] } } });
+		route(env, [fauxAssistantMessage("not yet"), fauxAssistantMessage("DONE")]);
+		const session = createSession(env.deps, { cwd: env.home });
+		const one = await session.turn("first");
+		expect(one.escalations).toBe(1);
+		const userTexts = session
+			.transcript()
+			.flatMap((l) => (l.type === "message" ? [l.message as Message] : []))
+			.filter((m) => m.role === "user")
+			.map((m) => (typeof m.content === "string" ? m.content : m.content.map((b) => ("text" in b ? b.text : "")).join("")));
+		expect(userTexts).toEqual(["first", expect.stringContaining("[nexo] Your previous answer did not pass the end-of-run checks")]);
+		expect(userTexts[1]).toContain("verify_fail: deterministic scorer failed: says-done");
+		session.close();
+	});
+
 	it("escalates within one turn and starts the next turn on S1 again", async () => {
 		const env = judgeEnv({ config: { scoring: { scorers: [{ kind: "contains", name: "says-done", text: "DONE" }] } } });
 		route(env, [fauxAssistantMessage("not yet"), fauxAssistantMessage("DONE"), fauxAssistantMessage("DONE again")]);
