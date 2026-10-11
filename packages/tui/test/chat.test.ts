@@ -6,6 +6,22 @@ import { KEY, until } from "./fake-terminal.ts";
 import { makeHarness, startHarness, submit } from "./helpers.ts";
 
 describe("chat screen", () => {
+	it("shows a neutral opening footer until the session exists", async () => {
+		const h = makeHarness();
+		let seen = "";
+		const done = h.start({
+			openSession: (prompter) => {
+				seen = h.terminal.output();
+				return h.openSession(prompter);
+			},
+		});
+		await until(() => h.terminal.started && h.terminal.output().includes("nexo session"));
+		expect(seen).toContain("nexo · opening…");
+		expect(seen).not.toContain("nexo · setup");
+		h.terminal.send(KEY.ctrlD);
+		await done;
+	});
+
 	it("echoes the user message and streams assistant markdown", async () => {
 		const h = await startHarness();
 		h.faux.setResponses([fauxAssistantMessage("Hello **world**, from nexo.")]);
