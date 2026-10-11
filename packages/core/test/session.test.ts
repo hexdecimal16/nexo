@@ -1,13 +1,15 @@
-import { existsSync, mkdtempSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall, type TranscriptContext } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import { getRun, getSessionRow, latestFeedback, listSpans, readRunJson, SessionDir } from "@nexo/store";
+import { getRun, getSessionRow, insertRun, latestFeedback, listSpans, readRunJson, SessionDir } from "@nexo/store";
 import { type NexoError, REDACTED } from "@nexo/telemetry";
 import type { Prompter } from "@nexo/tools";
 import { createSession, type EngineEvent, listSessions, resumeSession, type SessionDeps } from "../src/index.ts";
-import { makeEnv, type TestEnv } from "./helpers.ts";
+import { runRow } from "../../store/test/fixtures.ts";
+import { renderForSummary } from "../src/session/transcript.ts";
+import { lastToolResultText, makeEnv, type TestEnv } from "./helpers.ts";
 
 /** Non-system messages of a request, as `role:text` lines. */
 function texts(ctx: TranscriptContext): string[] {
@@ -279,6 +281,154 @@ describe("session turns", () => {
 		release();
 		await pending;
 		expect(session.running).toBe(false);
+	});
+});
+
+describe("session fixes", () => {
+	it("lets a later turn read a large tool output saved by an earlier turn", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		writeFileSync(join(cwd, "big.txt"), Array.from({ length: 5000 }, (_, i) => `line ${i} ${"x".repeat(10)}`).join("\n"));
+		let pointer = "";
+		let readBack = "";
+		env.faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("read", { path: "big.txt" })]),
+			async (ctx) => {
+				pointer = /@tool_outputs\/[A-Z0-9]+\.txt/.exec(lastToolResultText(ctx))?.[0] ?? "missing";
+				return fauxAssistantMessage("saw an excerpt");
+			},
+			async () => fauxAssistantMessage([fauxToolCall("read", { path: pointer, offset: 1500, limit: 1 })]),
+			async (ctx) => {
+				readBack = lastToolResultText(ctx);
+				return fauxAssistantMessage("done");
+			},
+		]);
+		const session = createSession(deps, { cwd });
+		await session.turn("read big.txt");
+		expect(pointer).not.toBe("missing");
+		await session.turn("now read line 1500 of the saved output");
+		expect(readBack).toBe(`line 1499 ${"x".repeat(10)}`);
+	});
+
+	it("follows budgets.perSessionUsd from the reloaded config until /budget overrides it", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		env.faux.setResponses([fauxAssistantMessage("one"), fauxAssistantMessage("two")]);
+		let config = deps.config;
+		let configHash = deps.configHash;
+		const session = createSession({ ...deps, reloadConfig: () => ({ config, configHash }) }, { cwd });
+		expect(session.budgetUsd).toBe(5);
+		config = { ...deps.config, budgets: { ...deps.config.budgets, perSessionUsd: 7 } };
+		configHash = "seven";
+		await session.turn("one");
+		expect(session.budgetUsd).toBe(7);
+		expect(getSessionRow(deps.db, session.id)?.budgetUsd).toBe(7);
+		session.setBudget(2);
+		config = { ...deps.config, budgets: { ...deps.config.budgets, perSessionUsd: 9 } };
+		configHash = "nine";
+		await session.turn("two");
+		expect(session.budgetUsd).toBe(2);
+		session.close();
+		expect(resumeSession(deps, session.id).budgetUsd).toBe(2);
+	});
+
+	it("rebuilds the redactor when the reloaded config changes its patterns", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		env.faux.setResponses([fauxAssistantMessage("one"), fauxAssistantMessage("two")]);
+		let config = deps.config;
+		let configHash = deps.configHash;
+		const session = createSession({ ...deps, reloadConfig: () => ({ config, configHash }) }, { cwd });
+		await session.turn("first CUSTOM-123");
+		config = { ...deps.config, redaction: { patterns: ["CUSTOM-\\d+"] } };
+		configHash = "patterns";
+		await session.turn("second CUSTOM-456");
+		const raw = readFileSync(join(deps.paths.sessions, session.id, "transcript.jsonl"), "utf8");
+		expect(raw).toContain("CUSTOM-123");
+		expect(raw).not.toContain("CUSTOM-456");
+		expect(raw).toContain(REDACTED);
+	});
+
+	it("keeps a requested compaction pending when the turn is aborted during it, and records the instruction", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		const ac = new AbortController();
+		env.faux.setResponses([
+			fauxAssistantMessage("A1"),
+			fauxAssistantMessage("A2"),
+			fauxAssistantMessage("A3"),
+			async () => {
+				ac.abort();
+				return fauxAssistantMessage("partial summary");
+			},
+		]);
+		const session = createSession(deps, { cwd });
+		await session.turn("Q1");
+		await session.turn("Q2");
+		await session.turn("Q3");
+		session.compact();
+		const aborted = await session.turn("Q4", { signal: ac.signal });
+		expect(aborted.status).toBe("aborted");
+		expect(session.compactPending).toBe(true);
+		expect(session.turns).toBe(4);
+		expect(session.transcript().some((l) => l.type === "compaction")).toBe(false);
+		const last = session.transcript().at(-1);
+		expect(last).toMatchObject({ type: "message", turnIndex: 4, message: { role: "user", content: [{ type: "text", text: "Q4" }] } });
+	});
+
+	it("does not reuse turn indexes of runs recorded after the last save", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		env.faux.setResponses([fauxAssistantMessage("one"), fauxAssistantMessage("three")]);
+		const session = createSession(deps, { cwd });
+		await session.turn("one");
+		insertRun(deps.db, runRow({ id: "crashed-turn", status: "aborted", sessionId: session.id, turnIndex: 2 }));
+		session.close();
+		const again = resumeSession(deps, session.id);
+		expect(again.turns).toBe(2);
+		expect(again.lastRunId).toBe("crashed-turn");
+		const r = await again.turn("three");
+		expect(getRun(deps.db, r.trajectoryId as string)?.turnIndex).toBe(3);
+	});
+
+	it("caps the compaction input by dropping the oldest lines first", () => {
+		const messages = Array.from({ length: 40 }, (_, i) => ({ role: "user" as const, content: `MSG-${i} ${"y".repeat(5000)}`, timestamp: 0 }));
+		const text = renderForSummary("PREVIOUS", messages, 50_000);
+		expect(text.length).toBeLessThanOrEqual(50_000);
+		expect(text).toContain("PREVIOUS");
+		expect(text).toContain("MSG-39 ");
+		expect(text).not.toContain("MSG-0 ");
+	});
+
+	it("locks an open session against a second opener and takes over a stale lock", async () => {
+		const { deps, cwd } = sessionEnv();
+		const session = createSession(deps, { cwd });
+		const err = (() => {
+			try {
+				resumeSession(deps, session.id);
+			} catch (error) {
+				return error as NexoError;
+			}
+			throw new Error("expected CONFLICT");
+		})();
+		expect(err.code).toBe("CONFLICT");
+		expect(err.hint).toBeTruthy();
+		session.close();
+		const lock = join(deps.paths.sessions, session.id, "session.lock");
+		expect(existsSync(lock)).toBe(false);
+		writeFileSync(lock, "999999999");
+		const again = resumeSession(deps, session.id);
+		expect(readFileSync(lock, "utf8")).toBe(String(process.pid));
+		again.close();
+	});
+
+	it("refuses to close while a turn is running", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		let release: () => void = () => {};
+		env.faux.setResponses([() => new Promise((resolve) => (release = () => resolve(fauxAssistantMessage("slow"))))]);
+		const session = createSession(deps, { cwd });
+		const pending = session.turn("first");
+		expectCode(() => session.close(), "CONFLICT");
+		await new Promise((r) => setTimeout(r, 10));
+		release();
+		await pending;
+		session.close();
+		expect(session.status).toBe("closed");
 	});
 });
 

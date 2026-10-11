@@ -61,10 +61,12 @@ function blockText(content: Message["content"]): string {
 	return content.map((b) => (b.type === "text" ? b.text : b.type === "image" ? "[image]" : "")).join("");
 }
 
-/** Plain-text rendering of turns for the compaction call. */
-export function renderForSummary(previousSummary: string, messages: readonly Message[]): string {
-	const parts: string[] = [];
-	if (previousSummary) parts.push(`Summary of the conversation before these turns:\n${previousSummary}`);
+/**
+ * Plain-text rendering of turns for the compaction call, at most `maxChars` long: when the turns do not fit, the oldest
+ * lines are dropped first (the previous summary is kept, cut to half of `maxChars` if needed).
+ */
+export function renderForSummary(previousSummary: string, messages: readonly Message[], maxChars = Number.POSITIVE_INFINITY): string {
+	const head = previousSummary ? `Summary of the conversation before these turns:\n${cap(previousSummary, Math.floor(maxChars / 2))}\n\n` : "";
 	const lines: string[] = [];
 	for (const m of messages) {
 		if (m.role === "user") lines.push(`[user] ${cap(blockText(m.content), SUMMARY_MESSAGE_CHARS)}`);
@@ -76,6 +78,17 @@ export function renderForSummary(previousSummary: string, messages: readonly Mes
 			}
 		}
 	}
-	parts.push(`Turns to summarize:\n${lines.join("\n")}`);
-	return parts.join("\n\n");
+	const dropped = "[earlier lines omitted]\n";
+	let label = "Turns to summarize:\n";
+	let size = head.length + label.length + lines.reduce((sum, l) => sum + l.length + 1, 0);
+	let start = 0;
+	while (size > maxChars && start < lines.length) {
+		size -= (lines[start]?.length ?? 0) + 1;
+		start++;
+		if (start === 1) {
+			label += dropped;
+			size += dropped.length;
+		}
+	}
+	return `${head}${label}${lines.slice(start).join("\n")}`.slice(0, Number.isFinite(maxChars) ? maxChars : undefined);
 }
