@@ -7,6 +7,7 @@ export * from "./engine/prompts.ts";
 export type { ApiKeyResolver } from "./engine/provider-gate.ts";
 export * from "./engine/run.ts";
 export * from "./engine/task-graph.ts";
+export * from "./scoring/calibration.ts";
 export * from "./scoring/sources.ts";
 export * from "./session/session.ts";
 export * from "./session/transcript.ts";

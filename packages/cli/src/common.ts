@@ -51,6 +51,7 @@ export const USAGE = `Usage:
   nexo run <instruction...> [--skill <name>] [--model <s1|s2|provider/id>] [--effort <level>] [--workspace <dir>] [--budget <usd>] [--no-review]
   nexo cost [--by model|tier|day|run|skill] [--since YYYY-MM-DD]
   nexo reindex
+  nexo eval judge [--judge <provider/id[+provider/id…]>]   judge-vs-human agreement and Cohen's κ
   nexo ui [--port <n>]
 `;
 
