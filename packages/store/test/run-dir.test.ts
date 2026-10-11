@@ -83,7 +83,7 @@ describe("reindex", () => {
 
 		const db = openDb(":memory:");
 		const result = reindex(db, root);
-		expect(result).toEqual({ runs: 2, spans: 3, skipped: [broken.root] });
+		expect(result).toEqual({ runs: 2, spans: 3, sessions: 0, skipped: [broken.root] });
 		expect(getRun(db, "p1")?.dirPath).toBe(parent.root);
 		expect(listChildRuns(db, "p1").map((r) => r.id)).toEqual(["c1"]);
 		expect(listSpans(db, "c1")).toHaveLength(2);
@@ -114,7 +114,7 @@ describe("reindex", () => {
 		dir.appendTrajectory(spanRow("r1"));
 		appendFileSync(join(dir.root, "trajectory.jsonl"), '{"id":"cut","runI');
 		const db = openDb(":memory:");
-		expect(reindex(db, root)).toEqual({ runs: 1, spans: 1, skipped: [] });
+		expect(reindex(db, root)).toEqual({ runs: 1, spans: 1, sessions: 0, skipped: [] });
 		expect(listSpans(db, "r1")).toHaveLength(1);
 	});
 

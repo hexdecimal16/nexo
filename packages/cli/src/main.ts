@@ -189,9 +189,9 @@ function costCommand(args: string[], io: CliIO, options: CliOptions): number {
 function reindexCommand(io: CliIO, options: CliOptions): number {
 	const paths = resolveNexoPaths(options.env ?? process.env);
 	ensureNexoDirs(paths);
-	const result = reindex(openDb(paths.db), paths.runs);
-	io.stdout.write(`Reindexed ${result.runs} runs, ${result.spans} spans\n`);
-	for (const dir of result.skipped) io.stderr.write(`skipped unreadable run directory: ${dir}\n`);
+	const result = reindex(openDb(paths.db), paths.runs, paths.sessions);
+	io.stdout.write(`Reindexed ${result.runs} runs, ${result.spans} spans, ${result.sessions} sessions\n`);
+	for (const dir of result.skipped) io.stderr.write(`skipped unreadable directory: ${dir}\n`);
 	return 0;
 }
 
