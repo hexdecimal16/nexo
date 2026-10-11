@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, type FauxResponseFactory, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { listScores, listSpans, readRunJson } from "@nexo/store";
 import { createEngine, createSession, type EngineEvent, judgeFamilyWarnings } from "../src/index.ts";
@@ -141,6 +141,54 @@ describe("LLM judge at the end of a run", () => {
 		expect(listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.kind === "scorer")).toMatchObject({ status: "error" });
 	});
 
+	it("caps every judge reply at the estimated output tokens, so a verbose judge cannot overspend the budget", async () => {
+		const env = judgeEnv({
+			config: { ...JUDGE, budgets: { estimateOutputTokens: 50 }, pricingOverrides: { "faux/fast": { input: 0, output: 0 }, "faux/gemini-judge": { input: 0, output: 10_000 } } },
+		});
+		const maxTokens: (number | undefined)[] = [];
+		// A provider that honours maxTokens: the reply is cut at maxTokens tokens (4 characters each).
+		const verbose: FauxResponseFactory = async (_context, options) => {
+			maxTokens.push(options?.maxTokens);
+			const text = verdict(0.9, "x".repeat(8000));
+			return fauxAssistantMessage(options?.maxTokens ? text.slice(0, options.maxTokens * 4) : text);
+		};
+		env.faux.setResponses([fauxAssistantMessage("Done."), verbose, verbose]);
+		const result = await createEngine(env.deps).run({ instruction: "Do it", budgetUsd: 1.2 });
+		expect(result.status).toBe("succeeded");
+		expect(maxTokens).toEqual([50, 50]);
+		expect(result.costUsd).toBeLessThanOrEqual(1.2);
+		expect(result.scores?.[0]).toMatchObject({ status: "failed", error: { code: "SCORER_FAILED" } });
+	});
+
+	it("loads and snapshots the judge rubric only when the run has an llm_judge scorer", async () => {
+		const env = judgeEnv({ config: { scoring: { scorers: [{ kind: "contains", text: "Done" }] } } });
+		route(env, [fauxAssistantMessage("Done.")]);
+		const result = await createEngine(env.deps).run({ instruction: "Do it" });
+		expect(result.scores?.[0]).toMatchObject({ status: "ok", passed: true });
+		expect(existsSync(join(result.runDir as string, "artifacts", "judge_rubric.md"))).toBe(false);
+		expect(env.deps.db.prepare("SELECT COUNT(*) AS n FROM artifacts WHERE kind = 'judge_rubric'").get()?.n).toBe(0);
+	});
+
+	it("keeps the run status when recording a failed score cannot write its files", async () => {
+		const env = judgeEnv({ config: JUDGE });
+		route(
+			env,
+			[
+				async () => {
+					// Block the judge reply file: a directory where the file would go.
+					const [runId] = readdirSync(env.deps.paths.runs);
+					mkdirSync(join(env.deps.paths.runs, runId as string, "scores", "round-0", "llm_judge-faux_gemini-judge.json"), { recursive: true });
+					return fauxAssistantMessage("Done.");
+				},
+			],
+			["prose", "more prose"],
+		);
+		const result = await createEngine(env.deps).run({ instruction: "Do it" });
+		expect(result.status).toBe("succeeded");
+		expect(result.scores?.[0]).toMatchObject({ status: "failed", error: { code: "SCORER_FAILED" } });
+		expect(result.scores?.[0]?.details.files).toBeUndefined();
+	});
+
 	it("stores the judge rationale, criteria and replies redacted", async () => {
 		const secret = "sk-ant-abcdefghijklmnopqrstuvwxyz0123";
 		const env = judgeEnv({ config: JUDGE });
@@ -151,6 +199,24 @@ describe("LLM judge at the end of a run", () => {
 		expect(JSON.stringify(result.scores)).not.toContain(secret);
 		expect(readFileSync(join(result.runDir as string, "run.json"), "utf8")).not.toContain(secret);
 		expect(readFileSync(join(result.runDir as string, "scores", "round-0", "llm_judge-faux_gemini-judge.json"), "utf8")).not.toContain(secret);
+		const judgeSpan = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.kind === "judge_call");
+		expect(judgeSpan?.attrs.reply).toContain("quoted [REDACTED]");
+		expect(JSON.stringify(judgeSpan?.attrs)).not.toContain(secret);
+	});
+
+	it("stores invalid judge replies redacted", async () => {
+		const secret = "sk-ant-abcdefghijklmnopqrstuvwxyz0123";
+		const env = judgeEnv({ config: JUDGE });
+		route(env, [fauxAssistantMessage("Done.")], [`not json ${secret}`, `still not json ${secret}`]);
+		const result = await createEngine(env.deps).run({ instruction: "Do it" });
+		expect(result.scores?.[0]).toMatchObject({ status: "failed" });
+		const file = readFileSync(join(result.runDir as string, "scores", "round-0", "llm_judge-faux_gemini-judge.json"), "utf8");
+		expect(file).toContain("[REDACTED]");
+		expect(file).not.toContain(secret);
+		const spans = listSpans(env.deps.db, result.trajectoryId as string).filter((s) => s.kind === "judge_call");
+		expect(spans).toHaveLength(2);
+		expect(JSON.stringify(spans)).not.toContain(secret);
+		expect(JSON.stringify(listScores(env.deps.db, result.trajectoryId as string))).not.toContain(secret);
 	});
 });
 
@@ -255,22 +321,57 @@ describe("command scorer trust", () => {
 	});
 
 	it("runs user-level command scorers directly, without provider keys in their environment", async () => {
-		const saved = { key: process.env.OPENAI_API_KEY, probe: process.env.NEXO_SCORER_PROBE };
-		process.env.OPENAI_API_KEY = "test-scorer-env-value";
+		const stripped = ["OPENAI_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_CONTAINER_CREDENTIALS_FULL_URI", "GH_TOKEN", "GITHUB_TOKEN"];
+		const names = [...stripped, "NEXO_SCORER_PROBE"];
+		const saved = Object.fromEntries(names.map((n) => [n, process.env[n]]));
+		for (const n of stripped) process.env[n] = "test-scorer-env-value";
 		process.env.NEXO_SCORER_PROBE = "kept";
 		try {
-			const command = 'echo "key=${OPENAI_API_KEY:-none} probe=$NEXO_SCORER_PROBE"';
+			const command = `echo "${stripped.map((n) => `${n}=\${${n}:-none}`).join(" ")} probe=$NEXO_SCORER_PROBE"`;
 			const env = judgeEnv({ config: { tools: { policy: { bash: "deny" } }, scoring: { scorers: [{ kind: "command", name: "env-check", command }] } } });
 			route(env, [fauxAssistantMessage("Done.")]);
 			const result = await createEngine(env.deps).run({ instruction: "Do it" });
 			expect(result.scores?.[0]).toMatchObject({ scorerName: "env-check", status: "ok", passed: true });
-			expect(result.scores?.[0]?.rationale).toContain("key=none probe=kept");
+			expect(result.scores?.[0]?.rationale).toContain(`${stripped.map((n) => `${n}=none`).join(" ")} probe=kept`);
 		} finally {
-			for (const [name, value] of [["OPENAI_API_KEY", saved.key], ["NEXO_SCORER_PROBE", saved.probe]] as const) {
-				if (value === undefined) delete process.env[name];
-				else process.env[name] = value;
+			for (const n of names) {
+				if (saved[n] === undefined) delete process.env[n];
+				else process.env[n] = saved[n];
 			}
 		}
+	});
+
+	it("ignores a bash allow in the project config that ships the command scorer", async () => {
+		const cwd = project({ tools: { policy: { bash: "allow" }, rules: [{ tool: "bash", action: "allow" }], nonInteractiveAsk: "allow" }, scoring: { scorers: touch } });
+		const env = judgeEnv({ cwd });
+		route(env, [fauxAssistantMessage("Done.")]);
+		const result = await createEngine(env.deps).run({ instruction: "Do it" });
+		expect(result.scores?.[0]).toMatchObject({ scorerName: "proj-check", status: "failed", error: { code: "SCORER_FAILED" } });
+		expect(result.scores?.[0]?.error?.message).toContain("requires approval");
+		expect(existsSync(join(result.runDir as string, "workspace", "ran.txt"))).toBe(false);
+	});
+
+	it("asks the interactive prompter about a project command scorer and follows the answer", async () => {
+		for (const answer of [true, false]) {
+			const questions: string[] = [];
+			const prompter = { interactive: true, confirm: async (q: string) => (questions.push(q), answer) };
+			const env = judgeEnv({ cwd: project({ tools: { policy: { bash: "allow" } }, scoring: { scorers: touch } }), prompter });
+			route(env, [fauxAssistantMessage("Done.")]);
+			const result = await createEngine(env.deps).run({ instruction: "Do it" });
+			expect(questions).toEqual([expect.stringContaining("[scorer proj-check] Allow bash: touch ran.txt?")]);
+			expect(result.scores?.[0]).toMatchObject({ scorerName: "proj-check", status: answer ? "ok" : "failed" });
+			expect(existsSync(join(result.runDir as string, "workspace", "ran.txt"))).toBe(answer);
+		}
+	});
+
+	it("treats a skill inside the run's workspace as project-level, even under NEXO_HOME", async () => {
+		const env = judgeEnv({ skills: { "home-skill": skillMd("home-skill", { "nexo-scorers": "scorers.json" }) } });
+		writeFileSync(join(env.deps.paths.skills, "home-skill", "scorers.json"), JSON.stringify(touch));
+		route(env, [fauxAssistantMessage("Done.")]);
+		const result = await createEngine(env.deps).run({ instruction: "Do it", skill: "home-skill", workspace: env.home });
+		expect(result.scores?.[0]).toMatchObject({ scorerName: "proj-check", status: "failed" });
+		expect(result.scores?.[0]?.error?.message).toContain("requires approval");
+		expect(existsSync(join(env.home, "ran.txt"))).toBe(false);
 	});
 });
 

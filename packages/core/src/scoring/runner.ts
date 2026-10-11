@@ -22,7 +22,8 @@ import {
 import type { Skill } from "@nexo/skills";
 import { insertScore, latestFeedback, newId, type RunDir, type ScoreRow, type SpanRow } from "@nexo/store";
 import { type ErrorPayload, NexoError, toErrorPayload } from "@nexo/telemetry";
-import { runBash } from "@nexo/tools";
+import { createPolicy, runBash } from "@nexo/tools";
+import { DEFAULT_CONFIG } from "../config/schema.ts";
 import type { RunBudget } from "../cost/budget.ts";
 import { estimateCallCostUsd, type PricedUsage } from "../cost/pricing.ts";
 import { classifyProviderError, retryDelayMs } from "../engine/errors.ts";
@@ -43,7 +44,8 @@ export interface ScoringPlan {
 	specError: ErrorPayload | null;
 	/**
 	 * "user" for specs from `~/.nexo` (the home config, CLI overrides, skills under NEXO_HOME); "project" for specs from
-	 * `./.nexo/config.json` or a skill outside NEXO_HOME. Project-level command scorers pass the bash tool policy first.
+	 * `./.nexo/config.json`, a skill outside NEXO_HOME or a skill inside the run's workspace. Project-level command scorers
+	 * pass the user-level bash tool policy first.
 	 */
 	origin: "user" | "project";
 }
@@ -65,13 +67,14 @@ function isInside(dir: string, root: string): boolean {
  * specs are left out: human verdicts arrive after the run, through the feedback table. Called before the agent loop
  * starts, so the agent cannot change the run's scorers by editing a scorer file.
  */
-export function planScoring(env: EngineEnv, skill: Skill | undefined, depth: number): ScoringPlan {
+export function planScoring(env: EngineEnv, skill: Skill | undefined, depth: number, workspace: string): ScoringPlan {
 	const { config, paths } = env.deps;
 	const none: ScoringPlan = { specs: [], source: null, specError: null, origin: "user" };
 	if (!config.scoring.enabled) return none;
 	const runnable = (specs: ScorerSpec[]) => specs.filter((s) => s.kind !== "human");
 	if (skill?.meta.scorers) {
-		const origin = isInside(skill.dir, paths.home) ? "user" : "project";
+		// A skill inside the run's workspace is project-level even under NEXO_HOME (a session started in the home directory).
+		const origin = isInside(skill.dir, paths.home) && !isInside(skill.dir, workspace) ? "user" : "project";
 		try {
 			return { specs: runnable(loadScorerFile(join(skill.dir, skill.meta.scorers))), source: `skill:${skill.name}`, specError: null, origin };
 		} catch (error) {
@@ -86,8 +89,9 @@ export function planScoring(env: EngineEnv, skill: Skill | undefined, depth: num
 	return none;
 }
 
-/** Environment variables that hold provider credentials (API keys, tokens, cloud access keys). */
-const PROVIDER_KEY_VAR = /(^|_)(API_KEY|AUTH_TOKEN|OAUTH_TOKEN|ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN|BEARER_TOKEN(_[A-Z0-9_]+)?)$|^(HF_TOKEN|COPILOT_GITHUB_TOKEN)$/;
+/** Environment variables that hold provider credentials (API keys, tokens, credential files, cloud access keys). */
+const PROVIDER_KEY_VAR =
+	/(^|_)(API_KEY|AUTH_TOKEN|OAUTH_TOKEN|ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN|BEARER_TOKEN(_[A-Z0-9_]+)?|CREDENTIALS|TOKEN_FILE)$|^AWS_CONTAINER_|^(HF_TOKEN|COPILOT_GITHUB_TOKEN|GH_TOKEN|GITHUB_TOKEN)$/;
 
 /** The environment command scorers run with: the process environment without provider credential variables. */
 export function scorerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -153,6 +157,8 @@ async function chargedCompletion(
 	const providerCfg = config.providers[model.provider] ?? {};
 	const maxRetries = providerCfg.maxRetries ?? 3;
 	const baseDelay = providerCfg.retryBaseDelayMs ?? 1000;
+	// The reply is capped at the output tokens the estimate assumes, so a verbose reply cannot cost more than was reserved.
+	const maxTokens = Math.min(config.budgets.estimateOutputTokens, model.maxTokens);
 	let costUsd = 0;
 	let costUnknown = false;
 	for (let attempt = 1; ; attempt++) {
@@ -179,7 +185,7 @@ async function chargedCompletion(
 		let msg: AssistantMessage;
 		try {
 			const context = normalizeContext({ systemPrompt: request.system, messages: [{ role: "user", content: request.user, timestamp: env.now().getTime() }] });
-			const stream = await env.streamFn(model, context, { reasoning: request.effort === "off" ? undefined : request.effort, signal });
+			const stream = await env.streamFn(model, context, { reasoning: request.effort === "off" ? undefined : request.effort, maxTokens, signal });
 			msg = await stream.result();
 		} catch (error) {
 			if (estimate > 0) budget.settleReservation(estimate, 0);
@@ -228,19 +234,22 @@ export function createJudgeCaller(deps: ScoringDeps, scorerSpanId: () => string)
 
 /**
  * How command scorers run: the bash tool's `runBash` (process group killed on timeout, abort and exit) without provider
- * credentials in the environment. A project-level command first passes the bash tool policy like an agent's bash call
- * (allow, deny, or ask; ask without an interactive prompt follows tools.nonInteractiveAsk).
+ * credentials in the environment. A project-level command first passes the user-level bash tool policy (tools.policy,
+ * tools.rules and tools.nonInteractiveAsk from the defaults, ~/.nexo/config.json and CLI flags; ./.nexo/config.json does
+ * not count): allow, deny, or ask, where ask uses the interactive prompt and otherwise follows tools.nonInteractiveAsk.
  */
 function commandRunner(deps: ScoringDeps, name: string, origin: "user" | "project"): CommandRunner {
 	const { env } = deps;
 	return async (run) => {
 		if (origin === "project") {
-			const auth = await env.policy.authorize(env.deps.prompter, "bash", { command: run.command }, run.signal, `scorer ${name}`);
+			// Only the user-level policy (defaults, ~/.nexo/config.json, CLI flags) applies, so a project cannot approve its own commands.
+			const policy = createPolicy(env.deps.config.scoring.scorerTools ?? DEFAULT_CONFIG.tools);
+			const auth = await policy.authorize(env.deps.prompter, "bash", { command: run.command }, run.signal, `scorer ${name}`);
 			if (!auth.allowed) {
 				throw new NexoError({
 					code: "SCORER_FAILED",
 					message: `Command scorer ${name} was not run: ${auth.error.message}`,
-					hint: auth.error.hint ?? "Allow the command in tools.policy or tools.rules, or define the scorer in ~/.nexo",
+					hint: "Allow the command in tools.policy or tools.rules of ~/.nexo/config.json (project config cannot approve it), or define the scorer in ~/.nexo",
 					context: { cause: auth.error.toPayload(), origin },
 				});
 			}
@@ -307,8 +316,16 @@ export async function runScoringRound(deps: ScoringDeps, plan: ScoringPlan, inpu
 		rows.push(safe);
 		emitScore(deps, safe);
 	};
+	/** Recording a failure must not fail the run (spec §12): a write error is logged and scoring continues. */
+	const guarded = (what: string, fn: () => void) => {
+		try {
+			fn();
+		} catch (error) {
+			env.deps.logger.error(`${what} failed`, { error, run_id: deps.runId });
+		}
+	};
 	if (plan.specError) {
-		record({
+		guarded("recording a failed score", () => record({
 			id: newId(),
 			runId: deps.runId,
 			round,
@@ -326,7 +343,7 @@ export async function runScoringRound(deps: ScoringDeps, plan: ScoringPlan, inpu
 			costUsd: 0,
 			costUnknown: false,
 			createdAt: env.now().toISOString(),
-		});
+		}));
 	}
 	const signal = deps.signal ?? new AbortController().signal;
 	for (const spec of plan.specs) {
@@ -371,10 +388,13 @@ export async function runScoringRound(deps: ScoringDeps, plan: ScoringPlan, inpu
 			});
 			const ctx = error.context ?? {};
 			const ctxFiles = (ctx.files ?? {}) as Record<string, string>;
-			const files = Object.entries(ctxFiles).map(([file, content]) => runDir.writeScoreFile(`round-${round}/${file}`, content));
+			const files: string[] = [];
+			for (const [file, content] of Object.entries(ctxFiles)) {
+				guarded("writing a score file", () => files.push(runDir.writeScoreFile(`round-${round}/${file}`, content)));
+			}
 			const { files: _f, replies: _r, votes, ...rest } = ctx;
 			const payload = { ...error.toPayload(), context: rest };
-			record({
+			guarded("recording a failed score", () => record({
 				...base,
 				scorerKind: spec.kind === "llm_judge" ? "judge" : spec.kind === "human" ? "human" : "deterministic",
 				status: "failed",
@@ -388,8 +408,8 @@ export async function runScoringRound(deps: ScoringDeps, plan: ScoringPlan, inpu
 				costUsd: typeof ctx.costUsd === "number" ? ctx.costUsd : 0,
 				costUnknown: ctx.costUnknown === true,
 				createdAt: env.now().toISOString(),
-			});
-			recorder.finish(spanId, { status: "error", attrs: { error: redact(payload) } });
+			}));
+			guarded("finishing a scorer span", () => recorder.finish(spanId, { status: "error", attrs: { error: redact(payload) } }));
 		}
 	}
 	return rows;

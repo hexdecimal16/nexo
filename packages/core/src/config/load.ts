@@ -151,6 +151,24 @@ function assertJudgeConfigured(config: NexoConfig): void {
 	});
 }
 
+/**
+ * The tool policy of the user-level layers only: defaults, `~/.nexo/config.json` and CLI overrides, without
+ * `./.nexo/config.json`. Throws CONFIG_INVALID when those layers' tools section is invalid on its own.
+ */
+function userToolPolicy(homeLayer: unknown, overrides: unknown, homeFile: string): NonNullable<NexoConfig["scoring"]["scorerTools"]> {
+	const section = (layer: unknown) => (isPlainObject(layer) ? layer.tools : undefined);
+	const tools = structuredClone(deepMerge(DEFAULT_CONFIG.tools, section(homeLayer), section(overrides)));
+	if (!Value.Check(ConfigSchema.properties.tools, tools)) {
+		throw new NexoError({
+			code: "CONFIG_INVALID",
+			message: "Invalid configuration:\n  /tools is invalid in the user-level config",
+			hint: `Fix tools in ${homeFile}`,
+			context: { path: "/tools" },
+		});
+	}
+	return { policy: tools.policy, rules: tools.rules, nonInteractiveAsk: tools.nonInteractiveAsk };
+}
+
 /** The project config file of a working directory. */
 export function projectConfigPath(cwd: string): string {
 	return join(cwd, ".nexo", "config.json");
@@ -179,6 +197,7 @@ export function loadConfig(options: LoadConfigOptions): LoadedConfig {
 
 	const hashed = structuredClone(merged);
 	delete (hashed.scoring as { scorersOrigin?: unknown }).scorersOrigin;
+	delete (hashed.scoring as { scorerTools?: unknown }).scorerTools;
 	const hash = createHash("sha256").update(stableStringify(hashed)).digest("hex").slice(0, 16);
 	const config = merged as NexoConfig;
 	parseScorerSpecs(config.scoring.scorers, "/scoring/scorers");
@@ -186,6 +205,7 @@ export function loadConfig(options: LoadConfigOptions): LoadedConfig {
 	// Values from ./.nexo/config.json come from a file in the working directory (a cloned repo), so they are marked or confined.
 	const projectLayer = sources.includes(projectFile) ? layers[sources.indexOf(projectFile)] : undefined;
 	config.scoring.scorersOrigin = fromProject(projectLayer, options.overrides, "scoring", "scorers") ? "project" : "user";
+	config.scoring.scorerTools = userToolPolicy(sources.includes(options.paths.config) ? layers[sources.indexOf(options.paths.config)] : undefined, options.overrides, options.paths.config);
 	config.skills.dirs = config.skills.dirs.map((d) => expandDir(d, options.paths, options.cwd));
 	config.router.policy = fromProject(projectLayer, options.overrides, "router", "policy")
 		? projectFileSource(config.router.policy, "/router/policy", options.cwd)

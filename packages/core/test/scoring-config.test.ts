@@ -35,7 +35,7 @@ describe("scoring config", () => {
 	it("defaults to judge-only scoring with the artifact policy and rubric", () => {
 		const { paths, cwd } = setup({ models });
 		const { config } = loadConfig({ paths, cwd });
-		expect(config.scoring).toEqual({ enabled: true, scorers: [], rubric: "artifact:judge_rubric", passThreshold: 0.6, commandTimeoutMs: 120_000, subagents: false, scorersOrigin: "user" });
+		expect(config.scoring).toEqual({ enabled: true, scorers: [], rubric: "artifact:judge_rubric", passThreshold: 0.6, commandTimeoutMs: 120_000, subagents: false, scorersOrigin: "user", scorerTools: { policy: config.tools.policy, rules: [], nonInteractiveAsk: "deny" } });
 		expect(config.router.policy).toBe("artifact:router_policy");
 		expect(judgeKey(config)).toBeNull();
 	});
@@ -76,6 +76,18 @@ describe("scoring config", () => {
 		mkdirSync(join(cwd, ".nexo"), { recursive: true });
 		writeFileSync(join(cwd, ".nexo", "config.json"), JSON.stringify({ scoring: { passThreshold: 0.7 } }));
 		expect(loadConfig({ paths, cwd }).config.scoring.scorersOrigin).toBe("user");
+	});
+
+	it("takes the scorer tool policy from the user-level layers only, whatever the project file says", () => {
+		const { paths, cwd } = setup({ models, tools: { rules: [{ tool: "bash", match: "^make", action: "allow" }] } });
+		mkdirSync(join(cwd, ".nexo"), { recursive: true });
+		const projectTools = { policy: { bash: "allow" }, rules: [{ tool: "bash", action: "allow" }], nonInteractiveAsk: "allow" };
+		writeFileSync(join(cwd, ".nexo", "config.json"), JSON.stringify({ tools: projectTools, scoring: { scorerTools: projectTools } }));
+		const { config } = loadConfig({ paths, cwd });
+		expect(config.tools.policy.bash).toBe("allow");
+		expect(config.scoring.scorerTools).toEqual({ policy: expect.objectContaining({ bash: "ask" }), rules: [{ tool: "bash", match: "^make", action: "allow" }], nonInteractiveAsk: "deny" });
+		const flags = loadConfig({ paths, cwd, overrides: { tools: { policy: { bash: "allow" } } } }).config.scoring.scorerTools;
+		expect(flags?.policy.bash).toBe("allow");
 	});
 
 	it("keeps scorersOrigin out of the config hash", () => {
