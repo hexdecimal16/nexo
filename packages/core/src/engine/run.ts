@@ -538,7 +538,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				throw new NexoError({
 					code: "BUDGET_EXCEEDED",
 					message: `The run budget cannot cover the compaction call (estimated $${estimate.toFixed(4)}, $${budget.remainingUsd().toFixed(4)} left)`,
-					hint: "Raise the session budget with /budget or start a new conversation with /clear",
+					hint: "Raise the run budget (or the session budget) so the compaction call fits",
 				});
 			}
 			const span = recorder.start({
