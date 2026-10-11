@@ -109,9 +109,9 @@ export function getSessionRow(db: Db, id: string): SessionRow | undefined {
 	return row ? decode(row) : undefined;
 }
 
-/** Sessions, most recently updated first; `withTurns` leaves out sessions that never ran a turn. */
+/** Sessions, most recently updated first; `withTurns` leaves out sessions that never ran a turn (no recorded turn and no linked run). */
 export function listSessionRows(db: Db, options: { limit?: number; withTurns?: boolean } = {}): SessionRow[] {
-	const where = options.withTurns ? "WHERE turns > 0 " : "";
+	const where = options.withTurns ? "WHERE turns > 0 OR EXISTS (SELECT 1 FROM runs WHERE runs.session_id = sessions.id) " : "";
 	return db
 		.prepare(`SELECT * FROM sessions ${where}ORDER BY updated_at DESC, id DESC LIMIT ?`)
 		.all(options.limit ?? 20)

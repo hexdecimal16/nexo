@@ -335,15 +335,26 @@ export class Session {
 		}
 		if (this.state.status === "closed") return;
 		this.state.status = "closed";
-		if (this.state.turns === 0 && this.state.costUsd === 0 && !this.state.lastRunId) {
-			// Nothing happened: leave no empty session behind.
-			this.lock.release();
+		if (this.isEmpty()) {
+			// Nothing happened: leave no empty session behind. The lock goes last, so nobody can resume a half-deleted session.
 			this.dir.remove();
 			deleteSessionRow(this.deps.db, this.id);
+			this.lock.release();
 			return;
 		}
 		this.save();
 		this.lock.release();
+	}
+
+	/** No turn, cost or run: in memory and in the database, which stays the source of truth after a failed save. */
+	private isEmpty(): boolean {
+		return (
+			this.state.turns === 0 &&
+			this.state.costUsd === 0 &&
+			!this.state.lastRunId &&
+			latestSessionRunId(this.deps.db, this.id) === undefined &&
+			getSpent(this.deps.db, sessionScope(this.id)) === 0
+		);
 	}
 
 	private assertIdle(): void {

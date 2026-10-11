@@ -102,6 +102,16 @@ describe("SessionDir", () => {
 });
 
 describe("sessions table", () => {
+	it("withTurns hides sessions without turns unless a run is linked to them", () => {
+		const db = openDb(":memory:");
+		upsertSessionRow(db, sessionRowFromJson(sessionJson("done", { turns: 2 }), "/d/done"));
+		upsertSessionRow(db, sessionRowFromJson(sessionJson("empty", { turns: 0 }), "/d/empty"));
+		upsertSessionRow(db, sessionRowFromJson(sessionJson("crashed", { turns: 0 }), "/d/crashed"));
+		insertRun(db, runRow({ id: "r1", sessionId: "crashed", turnIndex: 1 }));
+		expect(listSessionRows(db, { withTurns: true }).map((s) => s.id).sort()).toEqual(["crashed", "done"]);
+		expect(listSessionRows(db).map((s) => s.id).sort()).toEqual(["crashed", "done", "empty"]);
+	});
+
 	it("upserts and lists sessions newest first", () => {
 		const db = openDb(":memory:");
 		upsertSessionRow(db, sessionRowFromJson(sessionJson("a", { updatedAt: "2026-10-11T00:00:01.000Z" }), "/d/a"));

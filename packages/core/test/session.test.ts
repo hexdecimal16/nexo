@@ -435,6 +435,21 @@ describe("session fixes", () => {
 });
 
 describe("empty sessions", () => {
+	it("keeps a session whose first turn ran but could not be recorded", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		env.faux.setResponses([fauxAssistantMessage("ok")]);
+		const session = createSession(deps, { cwd });
+		(session as unknown as { dir: { appendTranscript: () => void } }).dir.appendTranscript = () => {
+			throw new Error("disk full");
+		};
+		await expect(session.turn("hello")).rejects.toThrow("disk full");
+		expect(session.turns).toBe(0);
+		session.close();
+		expect(existsSync(session.dirPath)).toBe(true);
+		expect(getSessionRow(deps.db, session.id)).toBeDefined();
+		expect(listSessions(deps.db).map((s) => s.id)).toEqual([session.id]);
+	});
+
 	it("deletes a session that never ran a turn when it closes, and hides 0-turn sessions from listSessions", async () => {
 		const { env, deps, cwd } = sessionEnv();
 		const empty = createSession(deps, { cwd });
