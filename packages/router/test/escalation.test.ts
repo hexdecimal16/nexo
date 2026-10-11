@@ -31,6 +31,10 @@ describe("parseRouterPolicy", () => {
 		expect(configError(() => parseRouterPolicy('{"triggers":{"stagnation":{"turns":0}}}', "p")).message).toContain("/triggers/stagnation/turns");
 		expect(configError(() => parseRouterPolicy('{"triggers":{"verify_fail":true}}', "p")).message).toContain("/triggers/verify_fail");
 		expect(configError(() => parseRouterPolicy('{"triggers":{"tool_failure":{"enabled":true}}}', "p")).message).toContain("/triggers/tool_failure is not a recognized setting");
+		expect(configError(() => parseRouterPolicy('{"triggers":{"tool_failures":{"consecutive":-1}}}', "p")).message).toContain("/triggers/tool_failures/consecutive");
+		expect(configError(() => parseRouterPolicy('{"triggers":{"tool_failures":{"consecutive":1.5}}}', "p")).message).toContain("/triggers/tool_failures/consecutive");
+		expect(configError(() => parseRouterPolicy('{"triggers":{"self_check":{"threshold":-0.1}}}', "p")).message).toContain("/triggers/self_check/threshold");
+		expect(configError(() => parseRouterPolicy('{"triggers":{"tool_failures":{"consecutiv":3}}}', "p")).message).toContain("/triggers/tool_failures/consecutiv is not a recognized setting");
 		expect(configError(() => parseRouterPolicy("[]", "p")).code).toBe("CONFIG_INVALID");
 	});
 });

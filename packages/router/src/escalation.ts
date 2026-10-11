@@ -1,7 +1,6 @@
 import { NexoError } from "@nexo/telemetry";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
-import { parseModelRef, type Role, type RoleModel } from "./resolve.ts";
 
 /** Escalation triggers of spec §7.2. */
 export const ESCALATION_TRIGGERS = ["tool_failures", "stagnation", "self_check", "verify_fail", "judge_low", "skill_hint"] as const;
@@ -78,6 +77,7 @@ export function parseRouterPolicy(text: string, source: string): RouterPolicy {
 		const errors = [
 			...new Set(
 				[...Value.Errors(RouterPolicySchema, policy)]
+					// typebox reports a property that additionalProperties: false rejects as a "boolean" (false-schema) error at that property's path
 					.filter((e) => e.keyword !== "additionalProperties")
 					.map((e) => `${e.instancePath || "/"} ${e.keyword === "boolean" ? "is not a recognized setting" : e.message}`),
 			),
@@ -205,26 +205,4 @@ export function escalationBlock(gate: EscalationGate): EscalationBlock | null {
 	if (gate.escalations >= gate.maxEscalations) return "max_escalations";
 	if (gate.spentFraction > gate.cutoff) return "budget_cutoff";
 	return null;
-}
-
-/**
- * True when `ref` ("s1", "s2" or "provider/model-id") is in a skill's `nexo-model-allowed` list (spec §7.3): an entry
- * matches by its text or by the model it names. Malformed entries never match.
- */
-export function isModelAllowed(ref: string, allowed: readonly string[], roles: Record<Role, RoleModel>): boolean {
-	let wanted: { provider: string; id: string };
-	try {
-		wanted = parseModelRef(ref, roles);
-	} catch {
-		return false;
-	}
-	return allowed.some((entry) => {
-		if (entry === ref) return true;
-		try {
-			const p = parseModelRef(entry, roles);
-			return p.provider === wanted.provider && p.id === wanted.id;
-		} catch {
-			return false;
-		}
-	});
 }
