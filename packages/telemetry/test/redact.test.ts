@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createRedactor, NexoError, REDACTED } from "../src/index.ts";
+import { createMutableRedactor, createRedactor, createSecretSet, NexoError, REDACTED } from "../src/index.ts";
 
 describe("createRedactor", () => {
 	const redact = createRedactor();
@@ -57,5 +57,39 @@ describe("createRedactor", () => {
 		} catch (err) {
 			expect((err as NexoError).code).toBe("CONFIG_INVALID");
 		}
+	});
+});
+
+describe("exact secrets", () => {
+	it("redacts every exact secret in the set, including ones added after the redactor was built", () => {
+		const secrets = createSecretSet(["plain-secret-one"]);
+		const redact = createRedactor([], { secrets });
+		expect(redact("a plain-secret-one b")).toBe(`a ${REDACTED} b`);
+		secrets.add("later.secret*value");
+		expect(redact({ note: "x later.secret*value y", list: ["later.secret*value"] })).toEqual({
+			note: `x ${REDACTED} y`,
+			list: [REDACTED],
+		});
+	});
+
+	it("replaces the longest secret first so a shorter overlapping secret leaves no tail", () => {
+		const secrets = createSecretSet(["abcdefgh", "abcdefgh-ijkl"]);
+		expect(createRedactor([], { secrets })("abcdefgh-ijkl")).toBe(REDACTED);
+	});
+
+	it("ignores empty values", () => {
+		const secrets = createSecretSet();
+		secrets.add("");
+		expect(secrets.size).toBe(0);
+		expect(createRedactor([], { secrets })("text")).toBe("text");
+	});
+});
+
+describe("createMutableRedactor", () => {
+	it("delegates to the redactor it currently holds", () => {
+		const redact = createMutableRedactor(createRedactor());
+		expect(redact("id acct-123456")).toBe("id acct-123456");
+		redact.replace(createRedactor(["acct-[0-9]{6}"]));
+		expect(redact("id acct-123456")).toBe(`id ${REDACTED}`);
 	});
 });

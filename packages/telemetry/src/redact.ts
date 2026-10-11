@@ -16,8 +16,57 @@ const SENSITIVE_KEY = /^(api[_-]?key|authorization|password|secret|token|access[
 
 export type Redactor = <T>(value: T) => T;
 
+/** Exact secret values (such as stored API keys) that every redactor built with this set replaces, including values added later. */
+export interface SecretSet {
+	/** Adds a value; empty strings are ignored. */
+	add(value: string): void;
+	has(value: string): boolean;
+	readonly size: number;
+	/** The values, longest first. */
+	values(): readonly string[];
+}
+
+export function createSecretSet(initial: Iterable<string> = []): SecretSet {
+	const set = new Set<string>();
+	let sorted: string[] = [];
+	const add = (value: string): void => {
+		if (value === "" || set.has(value)) return;
+		set.add(value);
+		sorted = [...set].sort((a, b) => b.length - a.length);
+	};
+	for (const value of initial) add(value);
+	return {
+		add,
+		has: (value) => set.has(value),
+		get size() {
+			return set.size;
+		},
+		values: () => sorted,
+	};
+}
+
+export interface RedactorOptions {
+	/** Exact values to replace, read on every call so secrets added later apply immediately. */
+	secrets?: SecretSet;
+}
+
+/** A redactor whose implementation can be swapped, so holders of the reference (the logger) pick up a rebuilt redactor. */
+export interface MutableRedactor {
+	<T>(value: T): T;
+	replace(next: Redactor): void;
+}
+
+export function createMutableRedactor(initial: Redactor): MutableRedactor {
+	let current = initial;
+	const redact = (<T>(value: T): T => current(value)) as MutableRedactor;
+	redact.replace = (next) => {
+		current = next;
+	};
+	return redact;
+}
+
 /** Returns a pure function that deep-copies a value with secrets replaced by `[REDACTED]`. */
-export function createRedactor(extraPatterns: readonly string[] = []): Redactor {
+export function createRedactor(extraPatterns: readonly string[] = [], options: RedactorOptions = {}): Redactor {
 	const patterns = [...BUILTIN_PATTERNS];
 	for (const source of extraPatterns) {
 		if (source === "") {
@@ -40,7 +89,12 @@ export function createRedactor(extraPatterns: readonly string[] = []): Redactor 
 		}
 	}
 
-	const redactString = (text: string): string => patterns.reduce((acc, re) => acc.replace(re, REDACTED), text);
+	const secrets = options.secrets;
+	const redactString = (text: string): string => {
+		let out = text;
+		if (secrets) for (const secret of secrets.values()) if (out.includes(secret)) out = out.split(secret).join(REDACTED);
+		return patterns.reduce((acc, re) => acc.replace(re, REDACTED), out);
+	};
 
 	/** `ancestors` holds only the objects on the current path, so shared non-circular references are copied, not marked. */
 	const walk = (value: unknown, ancestors: object[]): unknown => {
