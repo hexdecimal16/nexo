@@ -1,38 +1,18 @@
 import { parseArgs } from "node:util";
-import type { Models } from "@earendil-works/pi-ai";
 import { EFFORTS, type Effort } from "@nexo/router";
 import { type CostReport, costReport, ensureNexoDirs, openDb, reindex, resolveNexoPaths } from "@nexo/store";
-import { type ErrorPayload, NexoError, type NexoErrorCode, toErrorPayload } from "@nexo/telemetry";
+import { NexoError, toErrorPayload } from "@nexo/telemetry";
 import { nonInteractivePrompter, type Prompter } from "@nexo/tools";
+import { type CliIO, type CliOptions, EXIT_SIGINT, EXIT_SIGTERM, exitCodeFor, printError, USAGE, usageError } from "./common.ts";
 import { createTtyPrompter } from "./prompter.ts";
 import { createTtyLineAsker, isInteractiveTerminal, type LineAsker, promptReview } from "./review.ts";
 import { createRuntime } from "./runtime.ts";
+import { interactiveCommand, settingsScreenCommand } from "./interactive.ts";
+import { sessionsCommand } from "./sessions.ts";
+import { settingsCommand } from "./settings.ts";
 import { runUi } from "./ui.ts";
 
-export interface CliIO {
-	stdout: { write(text: string): boolean };
-	stderr: { write(text: string): boolean };
-}
-
-export interface CliOptions {
-	env?: NodeJS.ProcessEnv;
-	cwd?: string;
-	models?: Models;
-	prompter?: Prompter;
-	/** Asks the post-run review question. Undefined: a terminal asker when stdin, stdout and stderr are TTYs. Null: never ask. */
-	reviewAsker?: LineAsker | null;
-	signal?: AbortSignal;
-}
-
-const USAGE = `Usage:
-  nexo run <instruction...> [--skill <name>] [--model <s1|s2|provider/id>] [--effort <level>] [--workspace <dir>] [--budget <usd>] [--no-review]
-  nexo cost [--by model|tier|day|run|skill] [--since YYYY-MM-DD]
-  nexo reindex
-  nexo ui [--port <n>]
-`;
-
-export const EXIT_SIGINT = 130;
-export const EXIT_SIGTERM = 143;
+export { type CliIO, type CliOptions, EXIT_SIGINT, EXIT_SIGTERM, exitCodeFor };
 
 type NexoSignal = "SIGINT" | "SIGTERM";
 
@@ -61,30 +41,6 @@ export function abortOnSignals(
 		return [name, handler] as const;
 	});
 	return { received: () => first, dispose: () => handlers.forEach(([name, handler]) => source.off(name, handler)) };
-}
-
-export function exitCodeFor(code: NexoErrorCode | undefined): number {
-	switch (code) {
-		case undefined:
-			return 0;
-		case "CONFIG_INVALID":
-			return 2;
-		case "BUDGET_EXCEEDED":
-			return 3;
-		case "PROVIDER_AUTH":
-			return 4;
-		default:
-			return 1;
-	}
-}
-
-function printError(io: CliIO, error: ErrorPayload): void {
-	io.stderr.write(`error [${error.code}]: ${error.message}\n`);
-	if (error.hint) io.stderr.write(`hint: ${error.hint}\n`);
-}
-
-function usageError(message: string): NexoError {
-	return new NexoError({ code: "CONFIG_INVALID", message, hint: USAGE.trim() });
 }
 
 /**
@@ -197,7 +153,11 @@ function reindexCommand(io: CliIO, options: CliOptions): number {
 
 export async function runCli(argv: string[], io: CliIO, options: CliOptions = {}): Promise<number> {
 	const [command, ...rest] = argv;
+	const stdio = options.stdio ?? process;
 	try {
+		if (command === undefined || (command.startsWith("-") && command !== "--help" && command !== "-h")) {
+			return await interactiveCommand(argv, io, options, stdio);
+		}
 		switch (command) {
 			case "run":
 				return await runCommand(rest, io, options);
@@ -205,16 +165,19 @@ export async function runCli(argv: string[], io: CliIO, options: CliOptions = {}
 				return costCommand(rest, io, options);
 			case "reindex":
 				return reindexCommand(io, options);
+			case "sessions":
+				return sessionsCommand(rest, io, options);
+			case "settings":
+				return rest.length === 0 ? await settingsScreenCommand(io, options, stdio) : await settingsCommand(rest, io, options, stdio);
 			case "ui": {
 				const { values } = parseArgs({ args: rest, options: { port: { type: "string" } } });
 				return await runUi({ env: options.env ?? process.env, cwd: options.cwd ?? process.cwd(), port: values.port, io, signal: options.signal });
 			}
-			case undefined:
 			case "help":
 			case "--help":
 			case "-h":
 				io.stdout.write(USAGE);
-				return command === undefined ? 2 : 0;
+				return 0;
 			default:
 				throw usageError(`Unknown command "${command}"`);
 		}

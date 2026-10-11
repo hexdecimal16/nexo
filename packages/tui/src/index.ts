@@ -2,3 +2,4 @@ export { type InteractiveOptions, restoreTerminal, runInteractive, runSettingsSc
 export { createOverlayPrompter, type OverlayPrompterOptions } from "./approvals.ts";
 export { helpText, type ParsedCommand, parseSlashCommand, SLASH_COMMANDS } from "./commands.ts";
 export type { SettingsScreenMode } from "./settings-screen.ts";
+export { escapeControl, oneLine } from "./text.ts";
