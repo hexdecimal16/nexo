@@ -79,6 +79,8 @@ export function listRunsResponse(ctx: ApiContext, params: URLSearchParams): RunL
 	}
 	const skill = optional(params, "skill");
 	if (skill !== undefined) query.skill = skill;
+	const session = optional(params, "session");
+	if (session !== undefined) query.sessionId = session;
 	const reviewed = optional(params, "reviewed");
 	if (reviewed !== undefined) {
 		if (reviewed !== "true" && reviewed !== "false") throw invalidRequest("reviewed must be true or false", { reviewed });

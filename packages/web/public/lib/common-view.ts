@@ -5,6 +5,11 @@ export function runLink(id: string): string {
 	return `/run.html?id=${encodeURIComponent(id)}`;
 }
 
+/** The runs list filtered to one session's turns. */
+export function sessionLink(sessionId: string): string {
+	return `/?session=${encodeURIComponent(sessionId)}`;
+}
+
 /** A run or span status badge. The class is `status-<status>` for plain lowercase names (style.css colours the known ones) and `status-other` for anything else. */
 export function statusBadge(status: string): SafeHtml {
 	const cls = /^[a-z_]{1,32}$/.test(status) ? status : "other";

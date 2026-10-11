@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Db, insertRun, insertSpan, openDb, RunDir, type RunJson, type RunRow } from "@nexo/store";
+import { type Db, insertRun, insertSpan, openDb, RunDir, type RunJson, type RunRow, upsertSessionRow } from "@nexo/store";
 import { createRedactor } from "@nexo/telemetry";
 import { runRow, spanRow } from "../../store/test/fixtures.ts";
 
@@ -80,7 +80,19 @@ export function buildFixture(): Fixture {
 	writeFileSync(join(home, "secret.txt"), "outside the run");
 	symlinkSync(join(home, "secret.txt"), join(root.dirPath, "artifacts", "escape.txt"));
 
-	const runningBase = runRow({ instruction: "still going", status: "running", startedAt: "2026-10-10T11:00:00.000Z" });
+	upsertSessionRow(db, {
+		id: "01SESSION0000000000000001",
+		title: `Chat ${XSS}`,
+		cwd: "/w",
+		status: "active",
+		budgetUsd: 5,
+		costUsd: 0,
+		turns: 2,
+		createdAt: "2026-10-10T10:59:00.000Z",
+		updatedAt: "2026-10-10T11:00:00.000Z",
+		dirPath: join(home, "sessions", "01SESSION0000000000000001"),
+	});
+	const runningBase = runRow({ instruction: "still going", status: "running", startedAt: "2026-10-10T11:00:00.000Z", sessionId: "01SESSION0000000000000001", turnIndex: 2 });
 	const runningDir = RunDir.create(runsRoot, runningBase.id, redact);
 	const running: RunRow = { ...runningBase, dirPath: runningDir.root };
 	insertRun(db, running);
