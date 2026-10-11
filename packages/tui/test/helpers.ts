@@ -38,6 +38,8 @@ export interface HarnessOptions {
 	interactive?: Partial<InteractiveOptions>;
 	/** Resume this session id instead of creating one. */
 	resume?: string;
+	/** Terminal width (default 100). */
+	columns?: number;
 	/** Reuse the home, cwd and db of an earlier harness. */
 	reuse?: Pick<Harness, "paths" | "cwd">;
 }
@@ -57,7 +59,7 @@ export function makeHarness(options: HarnessOptions = {}): Omit<Harness, "done">
 	const overrides = options.overrides ?? (options.userConfig ? undefined : FAUX_ROLES);
 	const settings = createSettings({ paths, cwd, env: {}, models, overrides });
 	const db = openDb(paths.db);
-	const terminal = new FakeTerminal();
+	const terminal = new FakeTerminal(options.columns ?? 100);
 	let opened: Session | null = null;
 
 	const openSession = (prompter: Prompter): Session => {
@@ -101,7 +103,7 @@ export function makeHarness(options: HarnessOptions = {}): Omit<Harness, "done">
 export async function startHarness(options: HarnessOptions = {}): Promise<Harness> {
 	const h = makeHarness(options);
 	const done = h.start();
-	await until(() => h.terminal.started && h.terminal.output().includes("ctx"));
+	await until(() => h.terminal.started && h.terminal.output().includes("nexo session"));
 	return { ...h, done };
 }
 

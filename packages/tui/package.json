@@ -14,5 +14,8 @@
     "@nexo/store": "0.1.0",
     "@nexo/telemetry": "0.1.0",
     "@nexo/tools": "0.1.0"
+  },
+  "devDependencies": {
+    "@nexo/skills": "0.1.0"
   }
 }

@@ -1,7 +1,7 @@
 import { type Component, fuzzyFilter, Input, matchesKey, type SelectItem, SelectList, truncateToWidth } from "@earendil-works/pi-tui";
 import { type KeyStatus, keyStatusLabel, type SettingView, type Settings } from "@nexo/core";
 import { toErrorPayload } from "@nexo/telemetry";
-import { MaskedInput } from "./components.ts";
+import { fitLines, MaskedInput } from "./components.ts";
 import { escapeControl, formatError } from "./text.ts";
 import { selectListTheme, style } from "./theme.ts";
 
@@ -95,7 +95,7 @@ class PickerView implements View {
 		} else {
 			lines.push(...this.list.render(width));
 		}
-		return lines;
+		return fitLines(lines, width);
 	}
 
 	invalidate(): void {}
@@ -116,7 +116,7 @@ class EntryView implements View {
 		this.input.handleInput(data);
 	}
 	render(width: number): string[] {
-		return this.input.render(width);
+		return fitLines(this.input.render(width), width);
 	}
 	invalidate(): void {}
 }
@@ -209,8 +209,8 @@ export class SettingsScreen implements Component {
 			this.setError(error);
 		}
 		const items: SelectItem[] = [
-			...keys.map((k) => ({ value: `key:${k.provider}`, label: `${k.provider} key`, description: escapeControl(keyStatusLabel(k)) })),
-			...views.map((v) => ({ value: `set:${v.key}`, label: v.label, description: settingDescription(v) })),
+			...keys.map((k) => ({ value: `key:${k.provider}`, label: `${escapeControl(k.provider)} key`, description: escapeControl(keyStatusLabel(k)) })),
+			...views.map((v) => ({ value: `set:${v.key}`, label: escapeControl(v.label), description: settingDescription(v) })),
 		];
 		return new PickerView({
 			title: "Settings",
@@ -244,7 +244,7 @@ export class SettingsScreen implements Component {
 		if (status.inFile) items.push({ value: "remove", label: "Remove key", description: "delete it from credentials.json" });
 		items.push({ value: BACK, label: "Back" });
 		return new PickerView({
-			title: `${provider} key: ${keyStatusLabel(status)}${status.state === "env" && status.envVar ? ` (${status.envVar} wins over the file)` : ""}`,
+			title: escapeControl(`${provider} key: ${keyStatusLabel(status)}${status.state === "env" && status.envVar ? ` (${status.envVar} wins over the file)` : ""}`),
 			items,
 			maxVisible: () => 3,
 			onPick: (value) => {
@@ -280,7 +280,7 @@ export class SettingsScreen implements Component {
 		};
 		input.onCancel = onCancel;
 		return new EntryView({
-			title: `API key for ${provider} (input hidden)`,
+			title: `API key for ${escapeControl(provider)} (input hidden)`,
 			hint: "paste or type the key · enter save · esc cancel",
 			input,
 		});
@@ -322,17 +322,17 @@ export class SettingsScreen implements Component {
 		};
 		input.onEscape = () => this.backToMenu();
 		return new EntryView({
-			title: `${view.label}: ${escapeControl(view.description)} (now ${settingDescription(view)})`,
+			title: `${escapeControl(view.label)}: ${escapeControl(view.description)} (now ${settingDescription(view)})`,
 			hint: "enter save · empty resets to the default · esc back",
 			input,
 		});
 	}
 
 	private enumView(view: SettingView, values: readonly string[]): View {
-		const items: SelectItem[] = values.map((v) => ({ value: v, label: v, description: v === view.value ? "current" : undefined }));
+		const items: SelectItem[] = values.map((v) => ({ value: v, label: escapeControl(v), description: v === view.value ? "current" : undefined }));
 		items.push({ value: RESET, label: "reset to default", description: "remove it from your user config" });
 		return new PickerView({
-			title: `${view.label}: ${escapeControl(view.description)}`,
+			title: `${escapeControl(view.label)}: ${escapeControl(view.description)}`,
 			items,
 			maxVisible: () => this.listRows(),
 			onPick: (value) => {
@@ -348,7 +348,7 @@ export class SettingsScreen implements Component {
 		try {
 			for (const provider of this.settings.modelCatalog()) {
 				for (const model of provider.models) {
-					items.push({ value: model.ref, label: model.ref, description: `${model.name} · ${Math.round(model.contextWindow / 1000)}k ctx` });
+					items.push({ value: model.ref, label: escapeControl(model.ref), description: escapeControl(`${model.name} · ${Math.round(model.contextWindow / 1000)}k ctx`) });
 				}
 			}
 		} catch (error) {
@@ -360,7 +360,7 @@ export class SettingsScreen implements Component {
 
 	private modelView(view: SettingView, onDone: () => void, onCancel: () => void, withReset: boolean): View {
 		return new PickerView({
-			title: `${this.mode === "setup" ? `Choose ${view.label.toLowerCase()}` : view.label}: ${escapeControl(view.description)}`,
+			title: escapeControl(`${this.mode === "setup" ? `Choose ${view.label.toLowerCase()}` : view.label}: ${view.description}`),
 			items: this.modelItems(withReset),
 			freeText: true,
 			maxVisible: () => this.listRows(),
@@ -430,7 +430,7 @@ export class SettingsScreen implements Component {
 		lines.push(...this.view.render(width));
 		if (this.status) lines.push(truncateToWidth(this.status.kind === "error" ? style.red(this.status.text) : style.green(this.status.text), width));
 		lines.push(truncateToWidth(style.gray(this.view.hint), width));
-		return lines;
+		return fitLines(lines, width);
 	}
 
 	invalidate(): void {}

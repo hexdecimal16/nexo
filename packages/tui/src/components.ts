@@ -1,4 +1,4 @@
-import { type Component, CURSOR_MARKER, type Focusable, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { type Component, Container, CURSOR_MARKER, type Focusable, Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { duration, previewLines, usd } from "./text.ts";
 import { style } from "./theme.ts";
 
@@ -9,6 +9,25 @@ export class Ticker {
 	frame = 0;
 	get spinner(): string {
 		return SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length] as string;
+	}
+}
+
+/** Cuts every line to the width, so no child can make pi-tui throw on an over-wide line. */
+export function fitLines(lines: string[], width: number): string[] {
+	return lines.map((line) => (visibleWidth(line) > width ? truncateToWidth(line, width, "…") : line));
+}
+
+/** A Container whose rendered lines never exceed the width. */
+export class SafeContainer extends Container {
+	override render(width: number): string[] {
+		return fitLines(super.render(width), width);
+	}
+}
+
+/** Markdown whose rendered lines never exceed the width. */
+export class SafeMarkdown extends Markdown {
+	override render(width: number): string[] {
+		return fitLines(super.render(width), width);
 	}
 }
 
@@ -139,6 +158,11 @@ export class MaskedInput implements Component, Focusable {
 		return this.value.length;
 	}
 	handleInput(data: string): void {
+		if (this.inPaste && (matchesKey(data, "escape") || matchesKey(data, "ctrl+c"))) {
+			this.clear();
+			this.onCancel?.();
+			return;
+		}
 		if (data.includes("\x1b[200~")) {
 			this.inPaste = true;
 			this.pasteBuffer = "";
@@ -155,12 +179,12 @@ export class MaskedInput implements Component, Focusable {
 		}
 		if (matchesKey(data, "enter")) {
 			const value = this.value;
-			this.value = "";
+			this.clear();
 			this.onSubmit?.(value);
 			return;
 		}
 		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
-			this.value = "";
+			this.clear();
 			this.onCancel?.();
 			return;
 		}
@@ -178,6 +202,7 @@ export class MaskedInput implements Component, Focusable {
 	clear(): void {
 		this.value = "";
 		this.pasteBuffer = "";
+		this.inPaste = false;
 	}
 	render(width: number): string[] {
 		const bullets = "•".repeat(Math.min(this.value.length, Math.max(0, width - visibleWidth(this.prompt) - 2)));

@@ -1,13 +1,23 @@
 import type { ErrorPayload } from "@nexo/telemetry";
 
-/** Replaces control characters (ANSI escapes, carriage returns, newlines) with visible `\xNN` text. */
+/** Bidi overrides and isolates, and zero-width characters: invisible, but they reorder or hide text. */
+const INVISIBLE = "\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff";
+const CONTROL = new RegExp(`[\u0000-\u001f\u007f-\u009f${INVISIBLE}]`, "g");
+const CONTROL_EXCEPT_LINES = new RegExp(`[\u0000-\u0008\u000b-\u001f\u007f-\u009f${INVISIBLE}]`, "g");
+
+function visible(c: string): string {
+	const code = c.charCodeAt(0);
+	return code <= 0xff ? `\\x${code.toString(16).padStart(2, "0")}` : `\\u${code.toString(16).padStart(4, "0")}`;
+}
+
+/** Replaces control characters (ANSI escapes, carriage returns, newlines) and bidi/zero-width characters with visible text. */
 export function escapeControl(text: string): string {
-	return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
+	return text.replace(CONTROL, visible);
 }
 
 /** Like `escapeControl`, but keeps newlines and tabs (for multi-line agent text). */
 export function escapeControlKeepLines(text: string): string {
-	return text.replace(/\r\n/g, "\n").replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
+	return text.replace(/\r\n/g, "\n").replace(CONTROL_EXCEPT_LINES, visible);
 }
 
 /** Collapses text to one line and cuts it to `max` characters. */
