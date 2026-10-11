@@ -19,7 +19,10 @@ export interface SessionJson {
 	/** Session-level user overrides (`/model`, `/effort`); null means no override. */
 	model: string | null;
 	effort: string | null;
+	/** Effective session cap when last saved: `budgetOverrideUsd`, else `budgets.perSessionUsd`. */
 	budgetUsd: number;
+	/** The `/budget` override; null (or absent in older files) follows `budgets.perSessionUsd`. */
+	budgetOverrideUsd?: number | null;
 	costUsd: number;
 	turns: number;
 	status: SessionStatus;
@@ -114,6 +117,63 @@ export function listSessionRows(db: Db, options: { limit?: number } = {}): Sessi
 		.map(decode);
 }
 
+/** Highest `turn_index` among the session's indexed runs; 0 when it has none. */
+export function maxSessionTurn(db: Db, sessionId: string): number {
+	const row = db.prepare("SELECT MAX(turn_index) AS t FROM runs WHERE session_id = ?").get(sessionId);
+	return row?.t === null || row?.t === undefined ? 0 : Number(row.t);
+}
+
+/** The latest indexed run of a session (highest turn index), or undefined. */
+export function latestSessionRunId(db: Db, sessionId: string): string | undefined {
+	const row = db.prepare("SELECT id FROM runs WHERE session_id = ? ORDER BY turn_index DESC, id DESC LIMIT 1").get(sessionId);
+	return row ? String(row.id) : undefined;
+}
+
+/** Directories of the session's indexed turn runs, newest turn first. */
+export function sessionRunDirs(db: Db, sessionId: string): string[] {
+	return db
+		.prepare("SELECT dir_path FROM runs WHERE session_id = ? ORDER BY turn_index DESC, id DESC")
+		.all(sessionId)
+		.map((row) => String(row.dir_path));
+}
+
+/** Keys whose values are opaque provider data (signatures, response handles) that must round-trip unchanged. */
+const OPAQUE_KEYS = new Set(["thinkingSignature", "textSignature", "thoughtSignature", "responseId", "deferred"]);
+const OPAQUE_MARK = "\u0000nexo-opaque:";
+
+/**
+ * Redacts `value` like `redact`, except that opaque provider fields (signatures, response ids, deferred handles and
+ * image data) are kept byte for byte: altering them would make the provider reject the replayed message.
+ */
+export function redactPreservingOpaque<T>(redact: Redactor, value: T): T {
+	const saved: unknown[] = [];
+	const strip = (v: unknown): unknown => {
+		if (Array.isArray(v)) return v.map(strip);
+		if (v === null || typeof v !== "object") return v;
+		const obj = v as Record<string, unknown>;
+		const out: Record<string, unknown> = {};
+		for (const [key, item] of Object.entries(obj)) {
+			const opaque = OPAQUE_KEYS.has(key) || (key === "data" && obj.type === "image");
+			if (opaque && item !== undefined) {
+				saved.push(item);
+				out[key] = `${OPAQUE_MARK}${saved.length - 1}`;
+			} else {
+				out[key] = strip(item);
+			}
+		}
+		return out;
+	};
+	const restore = (v: unknown): unknown => {
+		if (typeof v === "string" && v.startsWith(OPAQUE_MARK)) return saved[Number(v.slice(OPAQUE_MARK.length))];
+		if (Array.isArray(v)) return v.map(restore);
+		if (v === null || typeof v !== "object") return v;
+		const out: Record<string, unknown> = {};
+		for (const [key, item] of Object.entries(v)) out[key] = restore(item);
+		return out;
+	};
+	return restore(redact(strip(value))) as T;
+}
+
 export function sessionNotFound(id: string): NexoError {
 	return new NexoError({
 		code: "NOT_FOUND",
@@ -186,7 +246,7 @@ export class SessionDir {
 	appendTranscript(lines: readonly TranscriptLine[]): void {
 		if (lines.length === 0) return;
 		try {
-			appendFileSync(this.transcriptFile, lines.map((line) => `${JSON.stringify(this.redact(line))}\n`).join(""));
+			appendFileSync(this.transcriptFile, lines.map((line) => `${JSON.stringify(redactPreservingOpaque(this.redact, line))}\n`).join(""));
 		} catch (cause) {
 			throw new NexoError({ code: "STORE_IO", message: `Cannot append to ${this.transcriptFile}`, retryable: true, cause });
 		}
