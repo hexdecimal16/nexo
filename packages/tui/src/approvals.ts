@@ -1,0 +1,77 @@
+import { type Component, Container, SelectList, type TUI, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import type { Prompter } from "@nexo/tools";
+import { escapeControl } from "./text.ts";
+import { selectListTheme, style } from "./theme.ts";
+
+/** The question, the Allow once / Deny list and a key hint, in a bordered box. */
+class ApprovalBox extends Container {
+	private readonly question: string;
+	readonly list: SelectList;
+	constructor(question: string, list: SelectList) {
+		super();
+		this.question = question;
+		this.list = list;
+	}
+	handleInput(data: string): void {
+		this.list.handleInput(data);
+	}
+	override render(width: number): string[] {
+		const inner = Math.max(10, width - 4);
+		const border = (s: string) => style.yellow(s);
+		const row = (s: string) => `${border("│")} ${truncateToWidth(s, inner, "…", true)} ${border("│")}`;
+		const lines = [border(`╭${"─".repeat(inner + 2)}╮`)];
+		lines.push(row(style.bold(style.yellow("Approval needed"))));
+		for (const line of wrapTextWithAnsi(this.question, inner)) lines.push(row(line));
+		lines.push(row(""));
+		for (const line of this.list.render(inner)) lines.push(row(line));
+		lines.push(row(style.gray("enter select · esc deny · ctrl-c deny and stop the turn")));
+		lines.push(border(`╰${"─".repeat(inner + 2)}╯`));
+		return lines;
+	}
+}
+
+/**
+ * A policy Prompter that asks in a SelectList overlay. Questions are queued, so concurrent subagents get one overlay
+ * each in turn. An aborted signal (Ctrl-C, turn end) closes the overlay and denies.
+ */
+export function createOverlayPrompter(tui: TUI): Prompter {
+	let queue: Promise<unknown> = Promise.resolve();
+
+	const ask = (question: string, signal: AbortSignal | undefined): Promise<boolean> =>
+		new Promise<boolean>((resolve) => {
+			if (signal?.aborted) return resolve(false);
+			const list = new SelectList(
+				[
+					{ value: "allow", label: "Allow once" },
+					{ value: "deny", label: "Deny" },
+				],
+				2,
+				selectListTheme,
+			);
+			const box: Component = new ApprovalBox(escapeControl(question), list);
+			const handle = tui.showOverlay(box, { width: "80%", minWidth: 40, anchor: "center" });
+			tui.requestRender();
+			let settled = false;
+			const finish = (allowed: boolean) => {
+				if (settled) return;
+				settled = true;
+				signal?.removeEventListener("abort", onAbort);
+				handle.hide();
+				tui.requestRender();
+				resolve(allowed);
+			};
+			const onAbort = () => finish(false);
+			signal?.addEventListener("abort", onAbort, { once: true });
+			list.onSelect = (item) => finish(item.value === "allow");
+			list.onCancel = () => finish(false);
+		});
+
+	return {
+		interactive: true,
+		confirm(question, signal) {
+			const next = queue.then(() => ask(question, signal));
+			queue = next.catch(() => undefined);
+			return next;
+		},
+	};
+}
