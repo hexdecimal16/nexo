@@ -36,7 +36,8 @@ export function deepMerge(...layers: unknown[]): Record<string, unknown> {
 	return out;
 }
 
-function readJson(file: string): unknown {
+/** Parses a config file; CONFIG_INVALID naming the file when it is not valid JSON. */
+export function readConfigFile(file: string): unknown {
 	try {
 		return JSON.parse(readFileSync(file, "utf8"));
 	} catch (cause) {
@@ -66,7 +67,7 @@ function stableStringify(value: unknown): string {
  * `params.requiredProperties`) and an unknown key as a `boolean` error on the key itself; both are rewritten here
  * so every message names the exact path the user has to fix.
  */
-function formatErrors(config: unknown): { path: string; message: string }[] {
+export function configErrors(config: unknown): { path: string; message: string }[] {
 	const seen = new Map<string, string>();
 	for (const error of Value.Errors(ConfigSchema, config)) {
 		if (error.keyword === "additionalProperties") continue;
@@ -93,15 +94,20 @@ function expandDir(dir: string, paths: NexoPaths, cwd: string): string {
 	return resolve(cwd, dir);
 }
 
+/** The project config file of a working directory. */
+export function projectConfigPath(cwd: string): string {
+	return join(cwd, ".nexo", "config.json");
+}
+
 /** Loads `~/.nexo/config.json`, then `./.nexo/config.json`, then overrides, on top of DEFAULT_CONFIG, and validates the result. */
 export function loadConfig(options: LoadConfigOptions): LoadedConfig {
-	const projectFile = join(options.cwd, ".nexo", "config.json");
+	const projectFile = projectConfigPath(options.cwd);
 	const sources = [options.paths.config, projectFile].filter((f) => existsSync(f));
-	const layers = sources.map(readJson);
+	const layers = sources.map(readConfigFile);
 	const merged = structuredClone(deepMerge(DEFAULT_CONFIG, ...layers, options.overrides));
 
 	if (!Value.Check(ConfigSchema, merged)) {
-		const errors = formatErrors(merged);
+		const errors = configErrors(merged);
 		const hint =
 			merged.models === undefined
 				? `No models are configured. Create ${options.paths.config} defining /models/s1 and /models/s2, for example ${MODELS_EXAMPLE}`
