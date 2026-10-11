@@ -18,6 +18,7 @@ import {
 	ensureManualArtifact,
 	insertRun,
 	isPidAlive,
+	listSpans,
 	newId,
 	type NexoPaths,
 	recoverCrashedRuns,
@@ -25,6 +26,9 @@ import {
 	sessionRunDirs,
 	type RunJson,
 	type RunStatus,
+	type ScoreRow,
+	type ScorerKind,
+	type ScoreStatus,
 	type TaskGraphRecord,
 	updateRun,
 } from "@nexo/store";
@@ -45,11 +49,13 @@ import type { NexoConfig } from "../config/schema.ts";
 import { checkAdmission, recordSpend } from "../cost/admission.ts";
 import { budgetLine, RunBudget } from "../cost/budget.ts";
 import { estimateCallCostUsd, priceUsage } from "../cost/pricing.ts";
-import { classifyProviderError, contextOverflowError, retryAfterMs, toolErrorText, withToolErrorCodes } from "./errors.ts";
+import { classifyProviderError, contextOverflowError, retryDelayMs, toolErrorText, withToolErrorCodes } from "./errors.ts";
 import { assistantText, contentText, estimatePromptChars, lastAssistant, recordedContent, withBudgetLine } from "./messages.ts";
 import { DEFAULT_PLANNER_PROMPT, DEFAULT_SYSTEM_PROMPT, renderSystemPrompt } from "./prompts.ts";
 import { type ApiKeyResolver, createGatedStreamFn } from "./provider-gate.ts";
 import { Recorder } from "./recorder.ts";
+import { planScoring, runScoringRound, type ScoringDeps, summarizeSpans } from "../scoring/runner.ts";
+import { judgeFamilyWarnings, loadJudgeRubric } from "../scoring/sources.ts";
 
 const TOOL_RESULT_INLINE_LIMIT = 32_768;
 const TOOL_RESULT_EXCERPT_CHARS = 8_000;
@@ -92,6 +98,18 @@ export type EngineEvent =
 	| { type: "llm_end"; runId: string; depth: number; costUsd: number; costUnknown: boolean; tokensIn: number; tokensOut: number }
 	| { type: "compaction_start"; runId: string; depth: number }
 	| { type: "compaction_end"; runId: string; depth: number; ok: boolean; costUsd: number }
+	| {
+			type: "score";
+			runId: string;
+			depth: number;
+			round: number;
+			scorer: string;
+			kind: ScorerKind;
+			status: ScoreStatus;
+			value: number | null;
+			passed: boolean | null;
+			costUsd: number;
+	  }
 	| { type: "run_end"; runId: string; depth: number; status: RunStatus; costUsd: number };
 
 /** What a `prepareHistory` hook can use to shrink the history before the run's first request. */
@@ -147,6 +165,8 @@ export interface RunResult {
 	messages: Message[];
 	/** The model the run used; null when it failed before resolving one. */
 	model: RunModelInfo | null;
+	/** The latest scoring round; absent when nothing scored the run. */
+	scores?: ScoreRow[];
 }
 
 export interface Engine {
@@ -255,6 +275,7 @@ export function createEngineEnv(deps: EngineDeps): EngineEnv {
 	};
 	const recovered = recoverCrashedRuns(deps.db, isPidAlive, now().toISOString());
 	if (recovered.length > 0) deps.logger.warn("marked crashed runs as aborted", { run_ids: recovered });
+	for (const warning of judgeFamilyWarnings(deps.config)) deps.logger.warn(warning);
 	return env;
 }
 
@@ -348,6 +369,10 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	const workspace = sharedWorkspace ?? runDir.workspaceDir;
 	let changeTracker: ChangeTracker | null = parent?.changeTracker ?? null;
 	let artifactSetId: string | null = null;
+	/** Every scorer result of the run, and those of its latest round. */
+	const scoreRows: ScoreRow[] = [];
+	let latestScores: ScoreRow[] = [];
+	let rubric = "";
 
 	const recorder = new Recorder({ db, runDir, runId, now, redact: deps.redact });
 	const runJson = (status: RunStatus, output: string, error: ErrorPayload | null): RunJson => ({
@@ -371,6 +396,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		workspace,
 		taskGraphs,
 		...(parent ? {} : { sessionId, turnIndex: request.turnIndex ?? null }),
+		...(scoreRows.length > 0 ? { scores: scoreRows } : {}),
 	});
 
 	// Setup up to and including the DB row. A failure here leaves no row, only a failed run.json.
@@ -388,6 +414,10 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		snapshot("system_prompt", "default", DEFAULT_SYSTEM_PROMPT, "system_prompt.md");
 		snapshot("planner_prompt", "default", DEFAULT_PLANNER_PROMPT, "planner_prompt.md");
 		if (skill) snapshot("skill", skill.name, skill.content, `skills/${skill.name}/SKILL.md`);
+		const judgeRubric = loadJudgeRubric(db, config, nowIso, deps.redact);
+		rubric = judgeRubric.rubric;
+		members.push({ kind: "judge_rubric", name: judgeRubric.artifact.name, artifactId: judgeRubric.artifact.id, version: judgeRubric.artifact.version });
+		runDir.writeArtifact("judge_rubric.md", judgeRubric.artifact.content);
 		artifactSetId = createArtifactSet(db, members, nowIso);
 		runDir.writeArtifact("config.json", JSON.stringify(config, null, 2));
 
@@ -729,11 +759,9 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			}
 		});
 
-		input.signal?.addEventListener("abort", onAbort, { once: true });
-		if (input.signal?.aborted) {
-			status = "aborted";
-		} else {
-			await runAgent.prompt(request.instruction);
+		/** Sends one prompt (the instruction, or a continuation), retries retryable provider errors, and sets status and output. */
+		const drive = async (text: string): Promise<void> => {
+			await runAgent.prompt(text);
 			const providerCfg = config.providers[model.provider] ?? {};
 			const maxRetries = providerCfg.maxRetries ?? 3;
 			const baseDelay = providerCfg.retryBaseDelayMs ?? 1000;
@@ -741,7 +769,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				const last = lastAssistant(runAgent.state.messages);
 				if (!last || last.stopReason !== "error" || isContextOverflow(last) || !isRetryableAssistantError(last)) break;
 				if (attempt > maxRetries || input.signal?.aborted || budgetExceeded) break;
-				const delay = Math.max(Math.random() * baseDelay * 2 ** (attempt - 1), retryAfterMs(last.errorMessage ?? "") ?? 0);
+				const delay = retryDelayMs(attempt, baseDelay, last.errorMessage ?? "");
 				logger.warn("retrying provider error", { attempt, delay_ms: Math.round(delay), error_message: last.errorMessage });
 				await env.sleep(delay, input.signal);
 				runAgent.state.messages = runAgent.state.messages.slice(0, -1);
@@ -763,6 +791,42 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				status = "failed";
 				const message = last.errorMessage ?? "Provider error";
 				error = (isContextOverflow(last) ? contextOverflowError(message) : classifyProviderError(message)).toPayload();
+			}
+		};
+
+		// The scorers are fixed before the loop starts, so the agent cannot change them by editing a scorer file.
+		const plan = planScoring(env, skill, depth);
+		input.signal?.addEventListener("abort", onAbort, { once: true });
+		if (input.signal?.aborted) {
+			status = "aborted";
+		} else {
+			await drive(request.instruction);
+			// Scoring (spec §7.1 step 5). Scorer failures are recorded on the scores and never change the run's status.
+			if (status === "succeeded" && (plan.specs.length > 0 || plan.specError !== null)) {
+				const scoring: ScoringDeps = {
+					env,
+					runId,
+					depth,
+					runDir,
+					recorder,
+					runSpanId: rootSpan,
+					budget,
+					charge: chargeCall,
+					rubric,
+					generators: () => [{ provider: model.provider, id: model.id }],
+					signal: input.signal,
+				};
+				const scoreInput = {
+					runId,
+					instruction: request.instruction,
+					finalOutput: output,
+					runDir: runDir.root,
+					workspace,
+					trajectory: summarizeSpans(listSpans(db, runId)),
+				};
+				latestScores = await runScoringRound(scoring, plan, scoreInput, 0);
+				scoreRows.push(...latestScores);
+				if (input.signal?.aborted) status = "aborted";
 			}
 		}
 	} catch (caught) {
@@ -819,6 +883,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		...(safeError ? { error: safeError } : {}),
 		messages,
 		model: modelInfo(model, resolved),
+		...(scoreRows.length > 0 ? { scores: latestScores } : {}),
 	};
 }
 

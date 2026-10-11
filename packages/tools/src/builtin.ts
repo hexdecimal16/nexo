@@ -45,6 +45,8 @@ export interface BashRun {
 	cwd: string;
 	timeoutMs: number;
 	signal?: AbortSignal;
+	/** The command's environment; the process environment when left out. */
+	env?: NodeJS.ProcessEnv;
 }
 
 export interface BashOutcome {
@@ -61,7 +63,7 @@ export function runBash(run: BashRun): Promise<BashOutcome> {
 	const { signal } = run;
 	return new Promise((resolvePromise) => {
 		if (signal?.aborted) return resolvePromise({ output: "", exitCode: null, truncated: false, ended: "aborted" });
-		const child = spawn("bash", ["-c", run.command], { cwd: run.cwd, env: process.env, detached: true });
+		const child = spawn("bash", ["-c", run.command], { cwd: run.cwd, env: run.env ?? process.env, detached: true });
 		const pgid = child.pid;
 		if (pgid !== undefined) {
 			ensureExitHandler();
