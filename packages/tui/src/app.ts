@@ -15,12 +15,12 @@ import type { Effort } from "@nexo/router";
 import type { Db, TranscriptLine } from "@nexo/store";
 import { type ErrorPayload, toErrorPayload } from "@nexo/telemetry";
 import type { Prompter } from "@nexo/tools";
-import { createOverlayPrompter } from "./approvals.ts";
+import { createApprovalPrompter } from "./approvals.ts";
 import { helpText, parseSlashCommand, SLASH_COMMANDS } from "./commands.ts";
 import { Block, DynamicLine, SafeContainer, SafeMarkdown, SubagentLine, Ticker, ToolLine } from "./components.ts";
 import { SettingsScreen, type SettingsScreenMode } from "./settings-screen.ts";
 import { escapeControl, escapeControlKeepLines, formatError, oneLine, toolSummary, usd } from "./text.ts";
-import { editorTheme, markdownTheme, style } from "./theme.ts";
+import { editorTheme, markdownTheme, shellBorder, style } from "./theme.ts";
 
 export interface InteractiveOptions {
 	/**
@@ -44,6 +44,8 @@ export interface InteractiveOptions {
 }
 
 const DOUBLE_CTRL_C_MS = 1000;
+/** Last lines of a `!` command's output shown in the chat (the model gets more). */
+const SHELL_SCREEN_LINES = 200;
 /** Time given to paint the "opening…" footer before the synchronous session open blocks the loop (one render interval and a margin). */
 const OPENING_PAINT_MS = 30;
 const EXIT_TIMEOUT_MS = 5000;
@@ -80,7 +82,7 @@ export function restoreTerminal(): void {
 }
 const TICK_MS = 80;
 
-type Screen = "chat" | "settings";
+type Screen = "chat" | "approval" | "settings";
 
 function textOf(content: unknown): string {
 	if (typeof content === "string") return content;
@@ -107,6 +109,8 @@ class InteractiveApp {
 	private running = false;
 	private turnAbort: AbortController | null = null;
 	private turnPromise: Promise<void> | null = null;
+	/** The running work is a `!` command, not a turn. */
+	private runningShell = false;
 	private turnCost = 0;
 	private lastTurnCost = 0;
 	private currentText: { component: SafeMarkdown; text: string } | null = null;
@@ -135,8 +139,9 @@ class InteractiveApp {
 		this.now = options.now ?? Date.now;
 		this.tui = new TuiMainScreen(this.terminal);
 		this.editor = new Editor(this.tui, editorTheme);
+		this.editor.borderColor = (border) => (this.shellMode() ? shellBorder(border) : editorTheme.borderColor(border));
 		this.editor.onSubmit = (text) => this.onSubmit(text);
-		this.prompter = createOverlayPrompter(this.tui, { now: this.now, redact: (text) => this.settings.redact(text) });
+		this.prompter = createApprovalPrompter({ show: (box) => this.showApproval(box) }, { now: this.now, redact: (text) => this.settings.redact(text) });
 		const root = new SafeContainer();
 		root.addChild(this.chat);
 		root.addChild(this.status);
@@ -228,6 +233,18 @@ class InteractiveApp {
 		this.tui.requestRender();
 	}
 
+	/** Swaps the editor for an approval box; the editor keeps its draft and comes back when the returned function runs. */
+	private showApproval(box: Component): () => void {
+		this.screen = "approval";
+		this.slot.clear();
+		this.slot.addChild(box);
+		this.tui.setFocus(box);
+		this.tui.requestRender();
+		return () => {
+			if (this.slot.children.includes(box)) this.showEditor();
+		};
+	}
+
 	private add(component: Component): void {
 		this.chat.addChild(component);
 		this.tui.requestRender();
@@ -282,9 +299,15 @@ class InteractiveApp {
 		}
 	}
 
+	/** The input is a `!` command: the editor border and the footer say so. */
+	private shellMode(): boolean {
+		return this.screen === "chat" && this.session !== null && this.editor.getText().trimStart().startsWith("!");
+	}
+
 	private footerText(): string {
 		const session = this.session;
 		if (!session) return style.gray(this.screen === "settings" ? "nexo · setup" : "nexo · opening…");
+		if (this.shellMode()) return shellBorder(`! shell mode · output goes to the model with your next message · ${escapeControl(session.workspace)}`);
 		const last = session.lastModel;
 		const model = session.model ?? (last ? `${last.provider}/${last.id}` : this.defaultModel || "model ?");
 		const effort = session.effort ?? last?.effort ?? (this.defaultEffort || "default effort");
@@ -319,7 +342,7 @@ class InteractiveApp {
 			}
 			return { consume: true };
 		}
-		if (matchesKey(data, "escape") && this.running && !this.tui.hasOverlay() && !this.editor.isShowingAutocomplete()) {
+		if (matchesKey(data, "escape") && this.running && this.screen === "chat" && !this.editor.isShowingAutocomplete()) {
 			this.turnAbort?.abort();
 			return { consume: true };
 		}
@@ -346,7 +369,19 @@ class InteractiveApp {
 			return;
 		}
 		if (this.running) {
-			this.say("A turn is running — press esc to stop it, or wait for it to finish");
+			this.say(`A ${this.runningShell ? "command" : "turn"} is running — press esc to stop it, or wait for it to finish`);
+			return;
+		}
+		if (text.startsWith("!")) {
+			const shell = text.slice(1).trim();
+			if (!shell) {
+				this.say("Type a command after !, e.g. !git status");
+				return;
+			}
+			this.add(new Block(escapeControlKeepLines(shell), style.dim, "! "));
+			this.turnPromise = this.runShell(this.session, shell).finally(() => {
+				this.turnPromise = null;
+			});
 			return;
 		}
 		this.add(new Block(escapeControlKeepLines(text), style.dim, "› "));
@@ -384,6 +419,32 @@ class InteractiveApp {
 			if (result.status === "aborted") this.say("interrupted");
 			else if (result.error) this.sayError(result.error);
 			else if (result.status !== "succeeded") this.say(`turn ended: ${result.status}`);
+		}
+		this.tui.requestRender();
+	}
+
+	/** Runs a `!` command like a turn (esc and ctrl-c stop it), then shows its output and how it ended. */
+	private async runShell(session: Session, command: string): Promise<void> {
+		const abort = new AbortController();
+		this.turnAbort = abort;
+		this.running = true;
+		this.runningShell = true;
+		this.startTicker();
+		try {
+			const result = await session.shell(command, { signal: abort.signal });
+			const lines = result.output.replace(/\n$/, "").split("\n");
+			const hidden = lines.length - SHELL_SCREEN_LINES;
+			const shown = hidden > 0 ? [`… ${hidden} earlier lines not shown`, ...lines.slice(-SHELL_SCREEN_LINES)] : lines;
+			if (result.output) this.add(new Block(escapeControlKeepLines(shown.join("\n")), (t) => t, "  "));
+			const ending = { exited: `exit code ${result.exitCode}`, timeout: "timed out", aborted: "stopped", failed: "failed to start" }[result.ended];
+			this.say(`${ending}${result.truncated ? " · output truncated" : ""}`);
+		} catch (error) {
+			this.sayError(toErrorPayload(error));
+		} finally {
+			this.running = false;
+			this.runningShell = false;
+			this.turnAbort = null;
+			this.stopTicker();
 		}
 		this.tui.requestRender();
 	}

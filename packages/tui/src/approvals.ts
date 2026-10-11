@@ -1,4 +1,4 @@
-import { type Component, Container, SelectList, type TUI, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { type Component, Container, SelectList, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { Prompter } from "@nexo/tools";
 import { fitLines } from "./components.ts";
 import { escapeControl } from "./text.ts";
@@ -34,14 +34,20 @@ class ApprovalBox extends Container {
 		for (const line of wrapTextWithAnsi(this.question, inner)) lines.push(row(line));
 		lines.push(row(""));
 		for (const line of this.list.render(inner)) lines.push(row(line));
-		lines.push(row(style.gray("↑↓ choose · enter select · esc deny · ctrl-c deny and stop the turn")));
+		for (const line of wrapTextWithAnsi("↑↓ choose · enter select · esc deny · ctrl-c deny and stop the turn", inner)) lines.push(row(style.gray(line)));
 		lines.push(border(`╰${"─".repeat(inner + 2)}╯`));
 		return lines;
 	}
 }
 
-export interface OverlayPrompterOptions {
-	/** How long the overlay ignores input after it appears (default 400 ms). */
+/** Where the approval box is drawn. */
+export interface ApprovalHost {
+	/** Shows the box (focused) in place of the editor and returns a function that puts the editor back. */
+	show(box: Component): () => void;
+}
+
+export interface ApprovalPrompterOptions {
+	/** How long the box ignores input after it appears (default 400 ms). */
 	guardMs?: number;
 	now?: () => number;
 	/** Applied to every question before it is shown (the policy builds it from unredacted tool arguments). */
@@ -49,11 +55,11 @@ export interface OverlayPrompterOptions {
 }
 
 /**
- * A policy Prompter that asks in a SelectList overlay. Questions are queued, so concurrent subagents get one overlay
- * each in turn. An aborted signal (Ctrl-C, turn end) closes the overlay and denies. Deny is preselected and input is
- * ignored for `guardMs`, so a keystroke typed ahead cannot approve a tool.
+ * A policy Prompter that asks in a bordered SelectList box the host draws in place of the editor. Questions are
+ * queued, so concurrent subagents get one box each in turn. An aborted signal (Ctrl-C, turn end) closes the box and
+ * denies. Deny is preselected and input is ignored for `guardMs`, so a keystroke typed ahead cannot approve a tool.
  */
-export function createOverlayPrompter(tui: TUI, options: OverlayPrompterOptions = {}): Prompter {
+export function createApprovalPrompter(host: ApprovalHost, options: ApprovalPrompterOptions = {}): Prompter {
 	const guardMs = options.guardMs ?? 400;
 	const now = options.now ?? Date.now;
 	const redact = options.redact ?? ((text: string) => text);
@@ -72,15 +78,13 @@ export function createOverlayPrompter(tui: TUI, options: OverlayPrompterOptions 
 			);
 			list.setSelectedIndex(1);
 			const box: Component = new ApprovalBox(escapeControl(redact(question)), list, guardMs, now);
-			const handle = tui.showOverlay(box, { width: "80%", minWidth: 40, anchor: "center" });
-			tui.requestRender();
+			const hide = host.show(box);
 			let settled = false;
 			const finish = (allowed: boolean) => {
 				if (settled) return;
 				settled = true;
 				signal?.removeEventListener("abort", onAbort);
-				handle.hide();
-				tui.requestRender();
+				hide();
 				resolve(allowed);
 			};
 			const onAbort = () => finish(false);

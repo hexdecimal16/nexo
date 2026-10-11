@@ -42,7 +42,10 @@ export const selectListTheme: SelectListTheme = {
 	noMatch: style.gray,
 };
 
+/** Editor border and footer color while the input is a `!` shell command. */
+export const shellBorder = style.magenta;
+
 export const editorTheme: EditorTheme = {
-	borderColor: style.gray,
+	borderColor: style.dim,
 	selectList: selectListTheme,
 };
