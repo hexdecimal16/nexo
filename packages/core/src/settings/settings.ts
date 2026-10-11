@@ -108,6 +108,8 @@ export interface Settings {
 	attachLogger(logger: Logger): void;
 	/** INVALID_REQUEST unless the provider is in the registry, the config or the credentials file. */
 	keyStatus(provider: string): KeyStatus;
+	/** Throws INVALID_REQUEST unless `setKey` would accept the provider id (checked before asking for a key). */
+	validateKeyProvider(provider: string): void;
 	/** Providers of the configured models (s1, s2, judge, reflector, embedding) in that order, then the others in the credentials file. */
 	keyProviders(): KeyStatus[];
 	/**
@@ -288,6 +290,9 @@ export function createSettings(options: SettingsOptions): Settings {
 			const { config, hash } = loadEffective();
 			registerEnvKeys();
 			return { config, configHash: hash, redact };
+		},
+		validateKeyProvider(provider) {
+			validateProvider(provider, true);
 		},
 		keyStatus(provider) {
 			validateProvider(provider, false);

@@ -7,28 +7,59 @@ import { openLogger } from "./runtime.ts";
 
 const MAX_PIPED_KEY_BYTES = 64 * 1024;
 
-/** One line from a piped stdin; the key never passes through argv. */
-async function readPipedKey(stdin: CliStdio["stdin"]): Promise<string> {
-	let text = "";
-	for await (const chunk of stdin) {
-		text += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-		if (text.length > MAX_PIPED_KEY_BYTES) break;
-	}
-	return (text.split(/\r?\n/, 1)[0] ?? "").trim();
+/** One line from a piped stdin; the key never passes through argv. Resolves null when `signal` aborts or stdin fails first. */
+function readPipedKey(stdin: CliStdio["stdin"], signal: AbortSignal | undefined): Promise<string | null> {
+	return new Promise((resolve) => {
+		let text = "";
+		let settled = false;
+		const finish = (result: string | null): void => {
+			if (settled) return;
+			settled = true;
+			stdin.off("data", onData);
+			stdin.off("end", onEnd);
+			stdin.off("error", onError);
+			signal?.removeEventListener("abort", onAbort);
+			stdin.pause();
+			resolve(result);
+		};
+		const line = (): string => (text.split(/\r?\n/, 1)[0] ?? "").trim();
+		const onData = (chunk: Buffer | string): void => {
+			text += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+			if (text.includes("\n") || text.length > MAX_PIPED_KEY_BYTES) finish(line());
+		};
+		const onEnd = (): void => finish(line());
+		const onError = (): void => finish(null);
+		const onAbort = (): void => finish(null);
+		if (signal?.aborted) return resolve(null);
+		stdin.on("data", onData);
+		stdin.on("end", onEnd);
+		stdin.on("error", onError);
+		signal?.addEventListener("abort", onAbort, { once: true });
+		stdin.resume();
+	});
 }
 
-/** Reads a line from the terminal in raw mode, so nothing is echoed. Resolves null on Ctrl-C or Ctrl-D at an empty prompt. */
-function readHiddenKey(stdin: CliStdio["stdin"], stderr: CliIO["stderr"], provider: string): Promise<string | null> {
+/**
+ * Reads a line from the terminal in raw mode, so nothing is echoed. Resolves null on Ctrl-C, Ctrl-D at an empty
+ * prompt, end of input, an input error or an abort; raw mode is always switched off again.
+ */
+function readHiddenKey(stdin: CliStdio["stdin"], stderr: CliIO["stderr"], provider: string, signal: AbortSignal | undefined): Promise<string | null> {
 	return new Promise((resolve) => {
 		let value = "";
-		stderr.write(`API key for ${provider} (input hidden): `);
+		let settled = false;
 		const finish = (result: string | null): void => {
+			if (settled) return;
+			settled = true;
 			stdin.off("data", onData);
+			stdin.off("end", onEnd);
+			stdin.off("error", onEnd);
+			signal?.removeEventListener("abort", onEnd);
 			stdin.setRawMode?.(false);
 			stdin.pause();
 			stderr.write("\n");
 			resolve(result);
 		};
+		const onEnd = (): void => finish(null);
 		const onData = (chunk: Buffer | string): void => {
 			const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
 			for (let i = 0; i < text.length; i++) {
@@ -40,8 +71,13 @@ function readHiddenKey(stdin: CliStdio["stdin"], stderr: CliIO["stderr"], provid
 				else if (ch >= " ") value += ch;
 			}
 		};
+		if (signal?.aborted) return resolve(null);
+		stderr.write(`API key for ${provider} (input hidden): `);
 		stdin.setRawMode?.(true);
 		stdin.on("data", onData);
+		stdin.on("end", onEnd);
+		stdin.on("error", onEnd);
+		signal?.addEventListener("abort", onEnd, { once: true });
 		stdin.resume();
 	});
 }
@@ -61,6 +97,7 @@ export async function settingsCommand(args: string[], io: CliIO, options: CliOpt
 		openLogger(settings, paths, "settings");
 		return settings;
 	};
+	let redact: (text: string) => string = (text) => text;
 	try {
 		switch (sub) {
 			case "get": {
@@ -87,8 +124,11 @@ export async function settingsCommand(args: string[], io: CliIO, options: CliOpt
 				}
 				if (rest.length === 0) throw usageError("nexo settings set-key needs a provider");
 				const settings = build();
+				redact = settings.redact;
 				const provider = rest[0] as string;
-				const key = stdio.stdin.isTTY === true ? await readHiddenKey(stdio.stdin, io.stderr, provider) : await readPipedKey(stdio.stdin);
+				// Checked before the prompt, so a mistyped (or secret-looking) provider is never echoed or asked about.
+				settings.validateKeyProvider(provider);
+				const key = stdio.stdin.isTTY === true ? await readHiddenKey(stdio.stdin, io.stderr, provider, options.signal) : await readPipedKey(stdio.stdin, options.signal);
 				if (key === null) {
 					io.stderr.write("cancelled\n");
 					return EXIT_SIGINT;
@@ -103,7 +143,7 @@ export async function settingsCommand(args: string[], io: CliIO, options: CliOpt
 		}
 	} catch (error) {
 		const payload = toErrorPayload(error);
-		printError(io, payload);
+		printError(io, payload, redact);
 		return payload.code === "INVALID_REQUEST" ? 2 : exitCodeFor(payload.code);
 	}
 }

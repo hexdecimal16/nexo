@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SQLInputValue } from "node:sqlite";
 import { NexoError, type Redactor } from "@nexo/telemetry";
@@ -109,12 +109,17 @@ export function getSessionRow(db: Db, id: string): SessionRow | undefined {
 	return row ? decode(row) : undefined;
 }
 
-/** Sessions, most recently updated first. */
-export function listSessionRows(db: Db, options: { limit?: number } = {}): SessionRow[] {
+/** Sessions, most recently updated first; `withTurns` leaves out sessions that never ran a turn. */
+export function listSessionRows(db: Db, options: { limit?: number; withTurns?: boolean } = {}): SessionRow[] {
+	const where = options.withTurns ? "WHERE turns > 0 " : "";
 	return db
-		.prepare("SELECT * FROM sessions ORDER BY updated_at DESC, id DESC LIMIT ?")
+		.prepare(`SELECT * FROM sessions ${where}ORDER BY updated_at DESC, id DESC LIMIT ?`)
 		.all(options.limit ?? 20)
 		.map(decode);
+}
+
+export function deleteSessionRow(db: Db, id: string): void {
+	db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
 }
 
 /** Highest `turn_index` among the session's indexed runs; 0 when it has none. */
@@ -203,6 +208,15 @@ export class SessionDir {
 			throw new NexoError({ code: "STORE_IO", message: `Cannot create session directory ${dir.root}`, cause });
 		}
 		return dir;
+	}
+
+	/** Deletes the directory and everything in it. */
+	remove(): void {
+		try {
+			rmSync(this.root, { recursive: true, force: true });
+		} catch (cause) {
+			throw new NexoError({ code: "STORE_IO", message: `Cannot remove session directory ${this.root}`, cause });
+		}
 	}
 
 	/** An existing session's directory; NOT_FOUND when it has no session.json. */

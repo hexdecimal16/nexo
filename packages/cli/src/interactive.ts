@@ -14,6 +14,8 @@ export interface CrashHandlerOptions {
 	proc: ProcessLike;
 	/** Puts the terminal back (raw mode off, cursor shown); idempotent. */
 	restore: () => void;
+	/** Applied to the crash text before it is printed. */
+	redact?: (text: string) => string;
 	stderr: CliIO["stderr"];
 	exit: (code: number) => void;
 }
@@ -24,10 +26,11 @@ export interface CrashHandlerOptions {
  */
 export function installCrashHandlers(options: CrashHandlerOptions): () => void {
 	const { proc, restore, stderr, exit } = options;
+	const redact = options.redact ?? ((text: string) => text);
 	const crash = (reason: unknown): void => {
 		restore();
 		const detail = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
-		stderr.write(`nexo crashed: ${detail}\n`);
+		stderr.write(`nexo crashed: ${redact(detail)}\n`);
 		exit(1);
 	};
 	const handlers = [
@@ -76,13 +79,13 @@ export function parseInteractiveArgs(args: string[]): InteractiveArgs {
 const PICKER_LIMIT = 20;
 
 /** A numbered list on stderr and one question; null means the user cancelled. */
-async function pickSession(io: CliIO, asker: LineAsker, rows: ReturnType<typeof listSessions>): Promise<string | null> {
+async function pickSession(io: CliIO, asker: LineAsker, rows: ReturnType<typeof listSessions>, signal?: AbortSignal): Promise<string | null> {
 	io.stderr.write("Recent sessions:\n");
 	rows.forEach((row, i) => {
 		const title = oneLine(escapeControl(row.title), 50) || "(untitled)";
 		io.stderr.write(`  ${String(i + 1).padStart(2)}. ${row.id}  ${title}  (${row.turns} turns, ${row.updatedAt.slice(0, 16).replace("T", " ")})\n`);
 	});
-	const answer = await asker.ask(`Resume which session? [1-${rows.length}, Enter to cancel] `);
+	const answer = await asker.ask(`Resume which session? [1-${rows.length}, Enter to cancel] `, signal);
 	const trimmed = answer?.trim() ?? "";
 	if (trimmed === "") return null;
 	const index = /^\d+$/.test(trimmed) ? Number(trimmed) : 0;
@@ -115,7 +118,7 @@ export async function interactiveCommand(args: string[], io: CliIO, options: Cli
 			}
 			const asker = options.lineAsker ?? createTtyLineAsker(stdio.stdin, io.stderr as NodeJS.WritableStream);
 			try {
-				resumeId = await pickSession(io, asker, rows);
+				resumeId = await pickSession(io, asker, rows, options.signal);
 			} finally {
 				asker.close?.();
 			}
@@ -129,7 +132,7 @@ export async function interactiveCommand(args: string[], io: CliIO, options: Cli
 		exit(code);
 		return code;
 	};
-	const dispose = installCrashHandlers({ proc: options.proc ?? process, restore: restoreTerminal, stderr: io.stderr, exit: options.exit ?? ((code) => process.exit(code)) });
+	const dispose = installCrashHandlers({ proc: options.proc ?? process, restore: restoreTerminal, redact: settings.redact, stderr: io.stderr, exit: options.exit ?? ((code) => process.exit(code)) });
 	try {
 		const code = await runInteractive({
 			settings,
@@ -160,7 +163,7 @@ export async function interactiveCommand(args: string[], io: CliIO, options: Cli
 		return finish(options.signal?.aborted && code === 0 ? EXIT_SIGINT : code);
 	} catch (error) {
 		const payload = toErrorPayload(error);
-		printError(io, payload);
+		printError(io, payload, settings.redact);
 		return finish(exitCodeFor(payload.code));
 	} finally {
 		dispose();
@@ -175,11 +178,11 @@ export async function settingsScreenCommand(io: CliIO, options: CliOptions, stdi
 	ensureNexoDirs(paths);
 	const settings = createSettings({ paths, cwd: options.cwd ?? process.cwd(), env, models: options.models ?? builtinModels() });
 	openLogger(settings, paths, "settings");
-	const dispose = installCrashHandlers({ proc: options.proc ?? process, restore: restoreTerminal, stderr: io.stderr, exit: options.exit ?? ((code) => process.exit(code)) });
+	const dispose = installCrashHandlers({ proc: options.proc ?? process, restore: restoreTerminal, redact: settings.redact, stderr: io.stderr, exit: options.exit ?? ((code) => process.exit(code)) });
 	try {
 		const result = await runSettingsScreen({ settings, terminal: options.terminal, signal: options.signal });
 		if (result.error) {
-			printError(io, result.error);
+			printError(io, result.error, settings.redact);
 			return exitCodeFor(result.error.code);
 		}
 		return result.completed ? 0 : 1;
