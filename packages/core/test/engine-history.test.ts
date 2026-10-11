@@ -28,7 +28,7 @@ describe("engine history and session links", () => {
 		const earlier = fauxAssistantMessage("First answer.");
 		const result = await createEngine(env.deps).run({
 			instruction: "Second question",
-			history: [{ role: "system", content: "dropped" }, user("First question"), earlier],
+			history: [{ role: "system", content: "dropped", timestamp: 1 }, user("First question"), earlier],
 		});
 		expect(result.status).toBe("succeeded");
 		expect(seen[0]).toBe("user:First question");
