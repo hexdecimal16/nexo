@@ -988,10 +988,11 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 					const first = signals[0];
 					if (!first || input.signal?.aborted) break;
 					const combined: EscalationSignal = { trigger: first.trigger, reason: signals.map((x) => x.reason).join("; ") };
+					// A continuation that fails or runs out of budget keeps the answer that was scored, and the model that wrote it;
+					// an abort still aborts the run.
+					const before: { output: string; status: RunStatus; error: ErrorPayload | null; active: typeof active } = { output, status, error, active };
 					const escalationSpan = escalate(combined, "end_of_run");
 					if (!escalationSpan) break;
-					// A continuation that fails or runs out of budget keeps the answer that was scored; an abort still aborts the run.
-					const before: { output: string; status: RunStatus; error: ErrorPayload | null } = { output, status, error };
 					let continuationError: ErrorPayload | null = null;
 					try {
 						await drive(continuationPrompt(signals, latestScores));
@@ -1004,6 +1005,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 							output = before.output;
 							status = before.status;
 							error = before.error;
+							active = before.active;
 							budgetExceeded = false;
 						}
 					} finally {
