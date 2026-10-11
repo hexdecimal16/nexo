@@ -9,7 +9,24 @@ import {
 	type Models,
 	normalizeContext,
 } from "@earendil-works/pi-ai";
-import { createModelRegistry, type Effort, type ModelChoice, type ModelRegistry, type ResolvedModel, resolveModel } from "@nexo/router";
+import {
+	createModelRegistry,
+	DEFAULT_ROUTER_POLICY,
+	type Effort,
+	type EscalationBlock,
+	type EscalationSignal,
+	type EscalationTrigger,
+	ESCALATION_BLOCK_REASONS,
+	endOfRunSignals,
+	escalationBlock,
+	isModelAllowed,
+	type ModelChoice,
+	type ModelRegistry,
+	type ResolvedModel,
+	resolveModel,
+	type RouterPolicy,
+	TriggerMonitor,
+} from "@nexo/router";
 import { createLoadSkillTool, formatSkillIndex, type SkillCatalog } from "@nexo/skills";
 import {
 	createArtifactSet,
@@ -54,8 +71,9 @@ import { assistantText, contentText, estimatePromptChars, lastAssistant, recorde
 import { DEFAULT_PLANNER_PROMPT, DEFAULT_SYSTEM_PROMPT, renderSystemPrompt } from "./prompts.ts";
 import { type ApiKeyResolver, createGatedStreamFn } from "./provider-gate.ts";
 import { Recorder } from "./recorder.ts";
-import { planScoring, runScoringRound, type ScoringDeps, summarizeSpans } from "../scoring/runner.ts";
-import { judgeFamilyWarnings, loadJudgeRubric } from "../scoring/sources.ts";
+import { continuationPrompt } from "../scoring/continuation.ts";
+import { planScoring, runScoringRound, runSelfCheck, type ScoringDeps, summarizeSpans } from "../scoring/runner.ts";
+import { judgeFamilyWarnings, loadJudgeRubric, loadRouterPolicy } from "../scoring/sources.ts";
 
 const TOOL_RESULT_INLINE_LIMIT = 32_768;
 const TOOL_RESULT_EXCERPT_CHARS = 8_000;
@@ -98,6 +116,19 @@ export type EngineEvent =
 	| { type: "llm_end"; runId: string; depth: number; costUsd: number; costUnknown: boolean; tokensIn: number; tokensOut: number }
 	| { type: "compaction_start"; runId: string; depth: number }
 	| { type: "compaction_end"; runId: string; depth: number; ok: boolean; costUsd: number }
+	| {
+			type: "escalation";
+			runId: string;
+			depth: number;
+			trigger: EscalationTrigger;
+			reason: string;
+			phase: "mid_run" | "end_of_run";
+			/** False when the escalation was suppressed; `blockedBy` says why. */
+			applied: boolean;
+			blockedBy: EscalationBlock | null;
+			/** `provider/id` of the model the run continues with. */
+			model: string;
+	  }
 	| {
 			type: "score";
 			runId: string;
@@ -163,10 +194,12 @@ export interface RunResult {
 	error?: ErrorPayload;
 	/** The run's new messages in order: the instruction, assistant messages and tool results. Empty when no run started. */
 	messages: Message[];
-	/** The model the run used; null when it failed before resolving one. */
+	/** The model the run ended on (S2 after an escalation); null when it failed before resolving one. */
 	model: RunModelInfo | null;
 	/** The latest scoring round; absent when nothing scored the run. */
 	scores?: ScoreRow[];
+	/** Escalations that took effect. */
+	escalations?: number;
 }
 
 export interface Engine {
@@ -334,6 +367,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	const pin = request.skill ? config.skills.pins[request.skill] : undefined;
 	let resolved: ResolvedModel;
 	let model: Model<Api>;
+	let escalationTarget: Model<Api>;
 	let sharedWorkspace: string | null;
 	let runDir: RunDir;
 	const runId = newId();
@@ -349,6 +383,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		});
 		model = env.registry.get(resolved.provider, resolved.id);
 		resolved = { ...resolved, effort: env.registry.clampEffort(model, resolved.effort) };
+		escalationTarget = env.registry.get(config.models.s2.provider, config.models.s2.id);
 		sharedWorkspace = resolveSharedWorkspace(request, parent);
 		runDir = parent ? parent.runDir.child(runId) : RunDir.create(deps.paths.runs, runId, deps.redact);
 	} catch (error) {
@@ -369,9 +404,15 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	const workspace = sharedWorkspace ?? runDir.workspaceDir;
 	let changeTracker: ChangeTracker | null = parent?.changeTracker ?? null;
 	let artifactSetId: string | null = null;
+	/** The model requests go to; replaced by S2 when an escalation takes effect. */
+	let active = { model, resolved };
+	let escalations = 0;
+	/** Every model that generated part of the run (S1, and S2 after an escalation), for the judge's same-family check. */
+	const usedModels = new Map<string, { provider: string; id: string }>([[`${model.provider}/${model.id}`, { provider: model.provider, id: model.id }]]);
 	/** Every scorer result of the run, and those of its latest round. */
 	const scoreRows: ScoreRow[] = [];
 	let latestScores: ScoreRow[] = [];
+	let policy: RouterPolicy = DEFAULT_ROUTER_POLICY;
 	let rubric = "";
 	// The scorers are fixed before the run starts, so the agent cannot change them by editing a scorer file.
 	const plan = planScoring(env, skill, depth, workspace);
@@ -384,7 +425,13 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		instruction: request.instruction,
 		skill: request.skill ?? null,
 		status,
-		model: { provider: resolved.provider, id: resolved.id, effort: resolved.effort, source: resolved.source, role: resolved.role },
+		model: {
+			provider: active.resolved.provider,
+			id: active.resolved.id,
+			effort: active.resolved.effort,
+			source: active.resolved.source,
+			role: active.resolved.role,
+		},
 		startedAt,
 		endedAt: status === "running" ? null : now().toISOString(),
 		costUsd: ownCost + childCost,
@@ -399,6 +446,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		taskGraphs,
 		...(parent ? {} : { sessionId, turnIndex: request.turnIndex ?? null }),
 		...(scoreRows.length > 0 ? { scores: scoreRows } : {}),
+		escalations,
 	});
 
 	// Setup up to and including the DB row. A failure here leaves no row, only a failed run.json.
@@ -416,6 +464,10 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		snapshot("system_prompt", "default", DEFAULT_SYSTEM_PROMPT, "system_prompt.md");
 		snapshot("planner_prompt", "default", DEFAULT_PLANNER_PROMPT, "planner_prompt.md");
 		if (skill) snapshot("skill", skill.name, skill.content, `skills/${skill.name}/SKILL.md`);
+		const routerPolicy = loadRouterPolicy(db, config, nowIso, deps.redact);
+		policy = routerPolicy.policy;
+		members.push({ kind: "router_policy", name: routerPolicy.artifact.name, artifactId: routerPolicy.artifact.id, version: routerPolicy.artifact.version });
+		runDir.writeArtifact("router_policy.json", routerPolicy.artifact.content);
 		if (plan.specs.some((s) => s.kind === "llm_judge")) {
 			const judgeRubric = loadJudgeRubric(db, config, nowIso, deps.redact);
 			rubric = judgeRubric.rubric;
@@ -490,6 +542,69 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		runDir.writeRunJson(runJson("running", "", null));
 		deps.onEvent?.({ type: "run_start", runId, parentRunId: parent?.runId ?? null, instruction: deps.redact(request.instruction), depth });
 
+		// System 1 -> System 2 escalation (spec §7.2).
+		const monitor = new TriggerMonitor(policy);
+		const blockedOnce = new Set<string>();
+		const escalate = (signal: EscalationSignal, phase: "mid_run" | "end_of_run"): boolean => {
+			if (phase === "mid_run" && active.resolved.role === "s2") return false;
+			const from = `${active.model.provider}/${active.model.id}`;
+			const blockedBy = escalationBlock({
+				escalations,
+				maxEscalations: config.router.maxEscalations,
+				spentFraction: budget.limitUsd > 0 ? budget.spentUsd / budget.limitUsd : 1,
+				cutoff: config.budgets.escalationCutoff,
+				skillAllows: skill?.meta.escalate ?? true,
+				modelAllowed: isModelAllowed("s2", skill?.meta.modelAllowed ?? ["s1", "s2"], { s1: config.models.s1, s2: config.models.s2 }),
+				userPinned: resolved.source === "user",
+			});
+			if (blockedBy) {
+				// A suppressed trigger is recorded once per reason, not on every tool error that re-fires it.
+				const key = `${signal.trigger}:${blockedBy}`;
+				if (blockedOnce.has(key)) return false;
+				blockedOnce.add(key);
+			} else {
+				const s2 = config.models.s2;
+				const userEffort = resolved.effortSource === "user";
+				const effort = env.registry.clampEffort(escalationTarget, userEffort ? resolved.effort : (s2.effort ?? resolved.effort));
+				active = {
+					model: escalationTarget,
+					resolved: { provider: escalationTarget.provider, id: escalationTarget.id, role: "s2", effort, source: "router", effortSource: userEffort ? "user" : "router" },
+				};
+				usedModels.set(`${escalationTarget.provider}/${escalationTarget.id}`, { provider: escalationTarget.provider, id: escalationTarget.id });
+				escalations++;
+			}
+			const to = `${active.model.provider}/${active.model.id}`;
+			const span = recorder.start({
+				kind: "escalation",
+				name: signal.trigger,
+				parentSpanId: rootSpan,
+				model: active.model.id,
+				provider: active.model.provider,
+				tier: active.resolved.role ?? "custom",
+				effort: active.resolved.effort,
+				modelSource: active.resolved.source,
+				attrs: {
+					trigger: signal.trigger,
+					reason: signal.reason,
+					phase,
+					applied: blockedBy === null,
+					blockedBy,
+					blockedReason: blockedBy ? ESCALATION_BLOCK_REASONS[blockedBy] : null,
+					from,
+					to,
+				},
+			});
+			recorder.finish(span, { status: "ok" });
+			deps.onEvent?.({ type: "escalation", runId, depth, trigger: signal.trigger, reason: signal.reason, phase, applied: blockedBy === null, blockedBy, model: to });
+			logger.info(blockedBy ? "escalation suppressed" : "escalated to s2", {
+				trigger: signal.trigger,
+				reason: signal.reason,
+				blocked_by: blockedBy,
+				...(blockedBy ? { blocked_reason: ESCALATION_BLOCK_REASONS[blockedBy] } : {}),
+			});
+			return blockedBy === null;
+		};
+
 		// Tools.
 		const toolSpans = new Map<string, string>();
 		const toolPayloadRefs = new Map<string, string>();
@@ -511,6 +626,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				onLoad: (s) => {
 					ensureManualArtifact(db, "skill", s.name, deps.redact(s.content), now().toISOString());
 					runDir.writeArtifact(`skills/${s.name}/SKILL.md`, s.content);
+					const hint = monitor.skillLoaded(s.name, s.meta.model);
+					if (hint) escalate(hint, "mid_run");
 				},
 			}),
 		];
@@ -642,13 +759,15 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			initialState: { systemPrompt, model, thinkingLevel: resolved.effort, tools, messages: history },
 			toolExecution: "parallel",
 			prepareRequest: async ({ context, model: requestModel }) => {
+				const target = active.model;
 				const chars = requestChars(context.messages, context.tools ?? tools);
-				const estimate = estimateCallCostUsd(requestModel, overrides, chars, config.budgets.estimateOutputTokens);
+				const estimate = estimateCallCostUsd(target, overrides, chars, config.budgets.estimateOutputTokens);
 				if (!budget.canAfford(estimate)) {
 					budgetExceeded = true;
 					runAgent.abort();
 				}
-				return undefined;
+				if (requestModel.provider === target.provider && requestModel.id === target.id) return undefined;
+				return { model: target, thinkingLevel: active.resolved.effort };
 			},
 			transformContext: async (messages) => withBudgetLine(messages, budgetLine(budget)),
 			beforeToolCall: async ({ toolCall, args }, signal) => {
@@ -685,13 +804,13 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 						if (llmSpan) recorder.finish(llmSpan, { status: "error", attrs: { reason: "superseded by a new assistant message" } });
 						llmSpan = recorder.start({
 							kind: "llm_call",
-							name: model.id,
+							name: active.model.id,
 							parentSpanId: turnSpan ?? rootSpan,
-							model: model.id,
-							provider: model.provider,
-							tier: resolved.role ?? "custom",
-							effort: resolved.effort,
-							modelSource: resolved.source,
+							model: active.model.id,
+							provider: active.model.provider,
+							tier: active.resolved.role ?? "custom",
+							effort: active.resolved.effort,
+							modelSource: active.resolved.source,
 						});
 					}
 					break;
@@ -703,7 +822,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				case "message_end": {
 					if (event.message.role !== "assistant" || !llmSpan) break;
 					const msg = event.message as AssistantMessage;
-					const priced = chargeCall(model, msg);
+					const priced = chargeCall(active.model, msg);
 					const content = deps.redact(recordedContent(msg));
 					const contentJson = JSON.stringify(content);
 					const contentRef = contentJson.length > TOOL_RESULT_INLINE_LIMIT ? runDir.writeToolOutput(llmSpan, contentJson) : null;
@@ -745,19 +864,30 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 						preview: deps.redact(text).slice(0, TOOL_END_PREVIEW_CHARS),
 					});
 					const spanId = toolSpans.get(event.toolCallId);
-					if (!spanId) break;
-					const payloadRef = toolPayloadRefs.get(event.toolCallId) ?? null;
-					recorder.finish(spanId, {
-						status: event.isError ? "error" : "ok",
-						payloadRef,
-						attrs: { durationMs: event.durationMs, result: payloadRef ? undefined : deps.redact(text) },
-					});
+					if (spanId) {
+						const payloadRef = toolPayloadRefs.get(event.toolCallId) ?? null;
+						recorder.finish(spanId, {
+							status: event.isError ? "error" : "ok",
+							payloadRef,
+							attrs: { durationMs: event.durationMs, result: payloadRef ? undefined : deps.redact(text) },
+						});
+					}
+					const failures = monitor.toolResult(event.isError);
+					if (failures) escalate(failures, "mid_run");
 					break;
 				}
-				case "turn_end":
+				case "turn_end": {
 					if (turnSpan) recorder.finish(turnSpan, { status: "ok" });
 					turnSpan = null;
+					const calls = event.message.role === "assistant" ? (event.message as AssistantMessage).content : [];
+					const argsOf = (id: string) => {
+						const call = calls.find((b) => b.type === "toolCall" && b.id === id);
+						return JSON.stringify(call?.type === "toolCall" ? call.arguments : null);
+					};
+					const stagnation = monitor.turnEnd(event.toolResults.map((r) => `${r.toolName}\u0000${argsOf(r.toolCallId)}\u0000${contentText(r.content)}`));
+					if (stagnation) escalate(stagnation, "mid_run");
 					break;
+				}
 				default:
 					break;
 			}
@@ -766,7 +896,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		/** Sends one prompt (the instruction, or a continuation), retries retryable provider errors, and sets status and output. */
 		const drive = async (text: string): Promise<void> => {
 			await runAgent.prompt(text);
-			const providerCfg = config.providers[model.provider] ?? {};
+			const providerCfg = config.providers[active.model.provider] ?? {};
 			const maxRetries = providerCfg.maxRetries ?? 3;
 			const baseDelay = providerCfg.retryBaseDelayMs ?? 1000;
 			for (let attempt = 1; ; attempt++) {
@@ -803,8 +933,9 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			status = "aborted";
 		} else {
 			await drive(request.instruction);
-			// Scoring (spec §7.1 step 5). Scorer failures are recorded on the scores and never change the run's status.
-			if (status === "succeeded" && (plan.specs.length > 0 || plan.specError !== null)) {
+			// Scoring (spec §7.1 step 5): each failing round may start one S2 continuation, up to router.maxEscalations.
+			const selfCheckOn = policy.triggers.self_check.enabled;
+			if (status === "succeeded" && (plan.specs.length > 0 || plan.specError !== null || selfCheckOn)) {
 				const scoring: ScoringDeps = {
 					env,
 					runId,
@@ -815,19 +946,33 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 					budget,
 					charge: chargeCall,
 					rubric,
-					generators: () => [{ provider: model.provider, id: model.id }],
+					generators: () => [...usedModels.values()],
 					signal: input.signal,
 				};
-				const scoreInput = {
-					runId,
-					instruction: request.instruction,
-					finalOutput: output,
-					runDir: runDir.root,
-					workspace,
-					trajectory: summarizeSpans(listSpans(db, runId)),
-				};
-				latestScores = await runScoringRound(scoring, plan, scoreInput, 0);
-				scoreRows.push(...latestScores);
+				for (let round = 0; status === "succeeded" && !input.signal?.aborted; round++) {
+					const scoreInput = {
+						runId,
+						instruction: request.instruction,
+						finalOutput: output,
+						runDir: runDir.root,
+						workspace,
+						trajectory: summarizeSpans(listSpans(db, runId)),
+					};
+					const selfCheck = selfCheckOn ? await runSelfCheck(scoring, active.model, active.resolved.effort, active.resolved.role ?? "custom", scoreInput) : null;
+					latestScores = await runScoringRound(scoring, plan, scoreInput, round);
+					scoreRows.push(...latestScores);
+					const judge = latestScores.find((r) => r.scorerType === "llm_judge" && r.status === "ok");
+					const signals = endOfRunSignals(policy, {
+						selfCheck,
+						failedDeterministic: latestScores.filter((r) => r.scorerKind === "deterministic" && r.status === "ok" && r.passed === false).map((r) => r.scorerName),
+						judgeScore: judge?.value ?? null,
+					});
+					const first = signals[0];
+					if (!first || input.signal?.aborted) break;
+					const combined: EscalationSignal = { trigger: first.trigger, reason: signals.map((x) => x.reason).join("; ") };
+					if (!escalate(combined, "end_of_run")) break;
+					await drive(continuationPrompt(signals, latestScores));
+				}
 				if (input.signal?.aborted) status = "aborted";
 			}
 		}
@@ -870,7 +1015,18 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	const finalJson = runJson(status, output, safeError);
 	attempt("writing run.json", () => runDir.writeRunJson(finalJson));
 	attempt("updating run row", () =>
-		updateRun(db, runId, { status, endedAt: finalJson.endedAt, costUsd: totalCost, costUnknown, tokensIn, tokensOut, error: safeError }),
+		updateRun(db, runId, {
+			status,
+			endedAt: finalJson.endedAt,
+			costUsd: totalCost,
+			costUnknown,
+			tokensIn,
+			tokensOut,
+			error: safeError,
+			modelFinal: `${active.resolved.provider}/${active.resolved.id}`,
+			tierFinal: active.resolved.role,
+			escalations,
+		}),
 	);
 	attempt("run_end event", () => deps.onEvent?.({ type: "run_end", runId, depth, status, costUsd: totalCost }));
 	logger.info("run finished", { status, cost_usd: totalCost });
@@ -884,8 +1040,9 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		costUnknown,
 		...(safeError ? { error: safeError } : {}),
 		messages,
-		model: modelInfo(model, resolved),
+		model: modelInfo(active.model, active.resolved),
 		...(scoreRows.length > 0 ? { scores: latestScores } : {}),
+		escalations,
 	};
 }
 
