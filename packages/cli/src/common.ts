@@ -72,9 +72,10 @@ export function exitCodeFor(code: NexoErrorCode | undefined): number {
 	}
 }
 
-export function printError(io: CliIO, error: ErrorPayload): void {
-	io.stderr.write(`error [${error.code}]: ${error.message}\n`);
-	if (error.hint) io.stderr.write(`hint: ${error.hint}\n`);
+/** Prints an error; `redact` (the settings' live redactor) is applied to the message and hint so a stored key cannot leak. */
+export function printError(io: CliIO, error: ErrorPayload, redact: (text: string) => string = (text) => text): void {
+	io.stderr.write(`error [${error.code}]: ${redact(error.message)}\n`);
+	if (error.hint) io.stderr.write(`hint: ${redact(error.hint)}\n`);
 }
 
 export function usageError(message: string): NexoError {

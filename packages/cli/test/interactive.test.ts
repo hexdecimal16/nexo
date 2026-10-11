@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
-import { createModels, fauxProvider } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDb, resolveNexoPaths, upsertSessionRow } from "@nexo/store";
 import { FakeTerminal, KEY, until } from "../../tui/test/fake-terminal.ts";
@@ -41,8 +41,9 @@ function home(config?: unknown): { env: NodeJS.ProcessEnv; cwd: string; home: st
 	return { env: { NEXO_HOME: join(root, "home") }, cwd: root, home: join(root, "home") };
 }
 
-function fauxModels() {
+function fauxModels(responses: ReturnType<typeof fauxAssistantMessage>[] = []) {
 	const faux = fauxProvider({ models: FAUX_MODELS });
+	faux.setResponses(responses);
 	const models = createModels();
 	models.setProvider(faux.provider);
 	return models;
@@ -157,8 +158,12 @@ describe("routing", () => {
 		const h = home(roles);
 		// create a real session first
 		const terminal1 = new FakeTerminal();
-		const first = runCli([], io(), { ...h, models: fauxModels(), stdio: ttyStdio(), terminal: terminal1, proc: new EventEmitter() as never });
+		const first = runCli([], io(), { ...h, models: fauxModels([fauxAssistantMessage("first reply")]), stdio: ttyStdio(), terminal: terminal1, proc: new EventEmitter() as never });
 		await until(() => terminal1.started && terminal1.output().includes("nexo session"));
+		terminal1.type("hello there");
+		terminal1.send(KEY.enter);
+		await until(() => expect(terminal1.output()).toContain("first reply"));
+		await until(() => !terminal1.output().includes("running…") || terminal1.output().lastIndexOf("running…") < terminal1.output().lastIndexOf("first reply"));
 		terminal1.send(KEY.ctrlD);
 		await first;
 		const db = openDb(resolveNexoPaths(h.env).db);
@@ -386,13 +391,124 @@ describe("nexo settings", () => {
 
 	it("set-key on a terminal cancels on Ctrl-C without storing anything", async () => {
 		const h = home(roles);
-		const stdio = ttyStdio({ setRawMode: () => {} });
+		const raw: boolean[] = [];
+		const stdio = ttyStdio({ setRawMode: (on: boolean) => raw.push(on) });
 		const t = io();
 		const done = runCli(["settings", "set-key", "faux"], t, { ...h, models: fauxModels(), stdio });
 		await until(() => expect(t.err()).toContain("API key for faux"));
 		(stdio.stdin as unknown as PassThrough).write("abc\x03");
 		expect(await done).toBe(EXIT_SIGINT);
+		expect(raw).toEqual([true, false]);
 		expect(existsSync(join(h.home, "credentials.json"))).toBe(false);
+	});
+});
+
+describe("signals and prompts", () => {
+	it("a SIGTERM at the piped set-key prompt stops reading and returns the SIGINT code", async () => {
+		const h = home(roles);
+		const stdin = new PassThrough();
+		const ac = new AbortController();
+		const done = runCli(["settings", "set-key", "faux"], io(), { ...h, models: fauxModels(), stdio: { stdin, stdout: {}, stderr: {} } as never, signal: ac.signal });
+		await new Promise((r) => setTimeout(r, 30));
+		ac.abort();
+		expect(await done).toBe(EXIT_SIGINT);
+		expect(stdin.isPaused()).toBe(true);
+		expect(existsSync(join(h.home, "credentials.json"))).toBe(false);
+	});
+
+	it("a signal at the hidden prompt restores raw mode and cancels", async () => {
+		const h = home(roles);
+		const raw: boolean[] = [];
+		const stdio = ttyStdio({ setRawMode: (on: boolean) => raw.push(on) });
+		const ac = new AbortController();
+		const t = io();
+		const done = runCli(["settings", "set-key", "faux"], t, { ...h, models: fauxModels(), stdio, signal: ac.signal });
+		await until(() => expect(t.err()).toContain("API key for faux"));
+		ac.abort();
+		expect(await done).toBe(EXIT_SIGINT);
+		expect(raw).toEqual([true, false]);
+	});
+
+	it("end of input at the hidden prompt cancels and restores raw mode", async () => {
+		const h = home(roles);
+		const raw: boolean[] = [];
+		const stdio = ttyStdio({ setRawMode: (on: boolean) => raw.push(on) });
+		const t = io();
+		const done = runCli(["settings", "set-key", "faux"], t, { ...h, models: fauxModels(), stdio });
+		await until(() => expect(t.err()).toContain("API key for faux"));
+		(stdio.stdin as unknown as PassThrough).end();
+		expect(await done).toBe(EXIT_SIGINT);
+		expect(raw).toEqual([true, false]);
+	});
+
+	it("validates the provider before prompting and never echoes a secret-looking one", async () => {
+		const h = home(roles);
+		const stdio = ttyStdio({ setRawMode: () => {} });
+		let t = io();
+		expect(await runCli(["settings", "set-key", "nosuchprovider"], t, { ...h, models: fauxModels(), stdio })).toBe(2);
+		expect(t.err()).not.toContain("API key for");
+		const leaky = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123";
+		t = io();
+		expect(await runCli(["settings", "set-key", leaky], t, { ...h, models: fauxModels(), stdio })).toBe(2);
+		expect(t.out() + t.err()).not.toContain(leaky);
+		expect(t.err()).not.toContain("API key for");
+	});
+
+	it("passes the signal to the resume picker, which cancels on abort", async () => {
+		const h = home(roles);
+		addSession(h, "01SESSIONAAAAAAAAAAAAAAAAA");
+		const ac = new AbortController();
+		let received: AbortSignal | undefined;
+		const lineAsker = {
+			ask: (_q: string, signal?: AbortSignal) =>
+				new Promise<string | null>((resolve) => {
+					received = signal;
+					signal?.addEventListener("abort", () => resolve(null));
+				}),
+		};
+		const terminal = new FakeTerminal();
+		const done = runCli(["--resume"], io(), { ...h, models: fauxModels(), stdio: ttyStdio(), terminal, signal: ac.signal, lineAsker });
+		await until(() => received !== undefined);
+		ac.abort();
+		expect(await done).toBe(EXIT_SIGINT);
+		expect(terminal.started).toBe(false);
+	});
+
+	it("redacts a stored key in crash output and in interactive errors", async () => {
+		const h = home(roles);
+		const key = "sk-live-9876543210zyxwvu";
+		expect(await runCli(["settings", "set-key", "faux"], io(), { ...h, models: fauxModels(), stdio: pipedStdio(`${key}\n`) })).toBe(0);
+		const terminal = new FakeTerminal();
+		const proc = new EventEmitter();
+		const exit = vi.fn();
+		const t = io();
+		const ac = new AbortController();
+		const done = runCli([], t, { ...h, models: fauxModels(), stdio: ttyStdio(), terminal, exit, signal: ac.signal, proc: proc as never });
+		await until(() => terminal.started && terminal.output().includes("nexo session"));
+		proc.emit("uncaughtException", new Error(`request failed with ${key}`));
+		expect(t.err()).toContain("nexo crashed");
+		expect(t.err()).not.toContain(key);
+		expect(exit).toHaveBeenCalledWith(1);
+		expect(terminal.stopped).toBe(true);
+		ac.abort();
+		await done;
+	});
+});
+
+describe("empty sessions", () => {
+	it("leaves no session behind when nothing was said, and hides 0-turn rows from the list", async () => {
+		const h = home(roles);
+		const terminal = new FakeTerminal();
+		const done = runCli([], io(), { ...h, models: fauxModels(), stdio: ttyStdio(), terminal, proc: new EventEmitter() as never });
+		await until(() => terminal.started && terminal.output().includes("nexo session"));
+		terminal.send(KEY.ctrlD);
+		await done;
+		const paths = resolveNexoPaths(h.env);
+		expect(readdirSync(paths.sessions)).toEqual([]);
+		addSession(h, "01EMPTYEMPTYEMPTYEMPTYEMP", { turns: 0 });
+		const t = io();
+		expect(await runCli(["sessions"], t, { ...h, models: fauxModels() })).toBe(0);
+		expect(t.out()).toContain("No sessions");
 	});
 });
 

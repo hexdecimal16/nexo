@@ -7,6 +7,7 @@ import {
 	type FeedbackRow,
 	getSpent,
 	latestSessionRunId,
+	deleteSessionRow,
 	listSessionRows,
 	maxSessionTurn,
 	newId,
@@ -327,13 +328,20 @@ export class Session {
 		return recordFeedback(this.deps.db, { runId, verdict, comment, nowIso: this.env.now().toISOString(), redact: this.env.deps.redact });
 	}
 
-	/** Marks the session closed and releases its lock; `resumeSession` reopens it. Throws CONFLICT while a turn runs. */
+	/** Marks the session closed and releases its lock; a session that never ran a turn is deleted instead; `resumeSession` reopens it. Throws CONFLICT while a turn runs. */
 	close(): void {
 		if (this.busy) {
 			throw new NexoError({ code: "CONFLICT", message: "A turn is running", hint: "Abort the turn (its signal) and wait for it to finish before closing" });
 		}
 		if (this.state.status === "closed") return;
 		this.state.status = "closed";
+		if (this.state.turns === 0 && this.state.costUsd === 0 && !this.state.lastRunId) {
+			// Nothing happened: leave no empty session behind.
+			this.lock.release();
+			this.dir.remove();
+			deleteSessionRow(this.deps.db, this.id);
+			return;
+		}
 		this.save();
 		this.lock.release();
 	}
@@ -489,9 +497,9 @@ export function resumeSession(deps: SessionDeps, id: string): Session {
 	return openSession(deps, dir, state, dir.readTranscript(), lock);
 }
 
-/** Indexed sessions, most recently updated first. Throws INVALID_REQUEST for a limit outside 1..1000. */
+/** Indexed sessions that ran at least one turn, most recently updated first. Throws INVALID_REQUEST for a limit outside 1..1000. */
 export function listSessions(db: Db, options: { limit?: number } = {}): SessionSummary[] {
 	const limit = options.limit ?? 20;
 	if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw invalid(`limit must be an integer from 1 to 1000, got ${limit}`);
-	return listSessionRows(db, { limit });
+	return listSessionRows(db, { limit, withTurns: true });
 }

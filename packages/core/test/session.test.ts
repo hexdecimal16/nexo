@@ -396,8 +396,10 @@ describe("session fixes", () => {
 	});
 
 	it("locks an open session against a second opener and takes over a stale lock", async () => {
-		const { deps, cwd } = sessionEnv();
+		const { env, deps, cwd } = sessionEnv();
+		env.faux.setResponses([fauxAssistantMessage("ok")]);
 		const session = createSession(deps, { cwd });
+		await session.turn("hello");
 		const err = (() => {
 			try {
 				resumeSession(deps, session.id);
@@ -429,6 +431,27 @@ describe("session fixes", () => {
 		await pending;
 		session.close();
 		expect(session.status).toBe("closed");
+	});
+});
+
+describe("empty sessions", () => {
+	it("deletes a session that never ran a turn when it closes, and hides 0-turn sessions from listSessions", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		const empty = createSession(deps, { cwd });
+		const dir = empty.dirPath;
+		expect(getSessionRow(deps.db, empty.id)).toBeDefined();
+		empty.close();
+		expect(existsSync(dir)).toBe(false);
+		expect(getSessionRow(deps.db, empty.id)).toBeUndefined();
+
+		env.faux.setResponses([fauxAssistantMessage("hi")]);
+		const used = createSession(deps, { cwd });
+		await used.turn("hello");
+		used.close();
+		expect(existsSync(used.dirPath)).toBe(true);
+		const open = createSession(deps, { cwd });
+		expect(listSessions(deps.db).map((s) => s.id)).toEqual([used.id]);
+		open.close();
 	});
 });
 
@@ -516,9 +539,10 @@ describe("session state", () => {
 
 	it("lists sessions most recently updated first", async () => {
 		const { env, deps, cwd } = sessionEnv();
-		env.faux.setResponses([fauxAssistantMessage("ok")]);
+		env.faux.setResponses([fauxAssistantMessage("ok"), fauxAssistantMessage("ok")]);
 		const a = createSession(deps, { cwd });
 		const b = createSession(deps, { cwd });
+		await b.turn("older");
 		await a.turn("latest");
 		expect(listSessions(deps.db).map((s) => s.id)).toEqual([a.id, b.id]);
 		expect(listSessions(deps.db, { limit: 1 })).toHaveLength(1);
