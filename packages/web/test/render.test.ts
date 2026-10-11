@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { CostResponse, RunDetailResponse, RunSummary, Span, SpanNode } from "../public/lib/api-types.ts";
-import { renderError, statusBadge } from "../public/lib/common-view.ts";
+import { renderError, sessionLink, statusBadge } from "../public/lib/common-view.ts";
 import { costQuery, renderCostTable, renderDimensionOptions } from "../public/lib/cost-view.ts";
 import { filePath, parseUnifiedDiff, renderFile, renderListing } from "../public/lib/files-view.ts";
 import { durationMs, formatDuration, formatUsd } from "../public/lib/format.ts";
 import { esc, html } from "../public/lib/html.ts";
 import { createPoller, MAX_POLL_BACKOFF_MS, POLL_MS, pollDelay } from "../public/lib/poller.ts";
 import { renderChildren, renderFeedbackForm, renderRunHeader, shouldPoll } from "../public/lib/run-view.ts";
-import { renderRunRows, renderStatusOptions, runsQuery } from "../public/lib/runs-view.ts";
+import { renderRunRows, renderSessionFilter, renderStatusOptions, runsQuery } from "../public/lib/runs-view.ts";
 import { findSpan, renderSpanDetail, renderSpanTree } from "../public/lib/span-view.ts";
 import { renderTimeline, timelineRows } from "../public/lib/timeline.ts";
 
@@ -41,6 +41,9 @@ function summary(overrides: Partial<RunSummary> = {}): RunSummary {
 		childCount: 0,
 		verdict: null,
 		error: null,
+		sessionId: null,
+		turnIndex: null,
+		sessionTitle: null,
 		...overrides,
 	};
 }
@@ -105,10 +108,20 @@ describe("runs view", () => {
 	});
 
 	it("builds list queries; the review tab asks for reviewed=false", () => {
-		expect(runsQuery({ tab: "review", status: "", skill: " ", since: "" }, null)).toBe("/api/runs?reviewed=false&limit=50");
-		expect(runsQuery({ tab: "all", status: "failed", skill: "a b", since: "2026-10-01" }, "c&d", 10)).toBe(
+		expect(runsQuery({ tab: "review", status: "", skill: " ", since: "", session: "" }, null)).toBe("/api/runs?reviewed=false&limit=50");
+		expect(runsQuery({ tab: "all", status: "failed", skill: "a b", since: "2026-10-01", session: "" }, "c&d", 10)).toBe(
 			"/api/runs?status=failed&skill=a+b&since=2026-10-01&limit=10&cursor=c%26d",
 		);
+		expect(runsQuery({ tab: "all", status: "", skill: "", since: "", session: "s&1" }, null)).toBe("/api/runs?session=s%261&limit=50");
+	});
+
+	it("shows the session filter with an escaped title and a link that clears it", () => {
+		const markup = renderSessionFilter("s&1", XSS).value;
+		expectInert(markup);
+		expect(markup).toContain("s&amp;1");
+		expect(markup).toContain(`href="/"`);
+		expect(renderSessionFilter("", null).value).toBe("");
+		expect(sessionLink("a b")).toBe("/?session=a%20b");
 	});
 
 	it("builds the status filter options from /api/meta", () => {
@@ -138,6 +151,14 @@ describe("run view", () => {
 		const markup = renderRunHeader(detail(), NOW).value;
 		expectInert(markup);
 		expect(markup).toContain("effort low · source skill");
+	});
+
+	it("links a session turn to its session's runs", () => {
+		const markup = renderRunHeader(detail({ run: summary({ sessionId: "s1", turnIndex: 3, sessionTitle: XSS }) }), NOW).value;
+		expectInert(markup);
+		expect(markup).toContain(`href="/?session=s1"`);
+		expect(markup).toContain("· turn 3");
+		expect(renderRunHeader(detail(), NOW).value).not.toContain("?session=");
 	});
 
 	it("warns about a deleted directory and unknown cost", () => {

@@ -32,6 +32,10 @@ export interface RunSummary {
 	childCount: number;
 	verdict: Verdict | null;
 	error: ApiErrorBody | null;
+	/** Session link of a session turn; null for other runs. */
+	sessionId: string | null;
+	turnIndex: number | null;
+	sessionTitle: string | null;
 }
 
 export interface RunListResponse {

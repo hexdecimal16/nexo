@@ -1,5 +1,5 @@
 import type { Feedback, ReadOnlyInfo, RunDetailResponse, RunStatus, RunSummary } from "./api-types.ts";
-import { renderError, runLink, statusBadge, verdictBadge } from "./common-view.ts";
+import { renderError, runLink, sessionLink, statusBadge, verdictBadge } from "./common-view.ts";
 import { durationMs, formatDuration, formatTime, formatUsd, shortId, truncate } from "./format.ts";
 import { html, type SafeHtml } from "./html.ts";
 
@@ -20,6 +20,7 @@ export function renderRunHeader(detail: RunDetailResponse, nowMs: number): SafeH
 		<span class="${run.costUnknown ? "warn" : ""}">${formatUsd(run.costUsd, run.costUnknown)}</span>
 		${model ? html`<span class="mono">${model.provider}/${model.id} · effort ${model.effort} · source ${model.source}${model.role ? ` · ${model.role}` : ""}</span>` : ""}
 		${run.skill ? html`<span>skill ${run.skill}</span>` : ""}
+		${run.sessionId ? html`<span><a href="${sessionLink(run.sessionId)}">session ${truncate(run.sessionTitle || run.sessionId, 60)}</a>${run.turnIndex !== null ? ` · turn ${run.turnIndex}` : ""}</span>` : ""}
 	</div>
 	${detail.dirMissing ? html`<div class="error" role="alert"><strong>Run directory missing</strong> The index still has this run, but its directory was deleted. Files and run.json are unavailable.<div class="hint">Run nexo reindex to drop runs whose directory is gone.</div></div>` : ""}
 	${run.costUnknown ? html`<p class="warn">Some LLM calls in this run have no price; the cost shown leaves them out.</p>` : ""}

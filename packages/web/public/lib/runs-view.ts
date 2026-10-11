@@ -1,5 +1,5 @@
 import type { RunStatus, RunSummary } from "./api-types.ts";
-import { runLink, statusBadge, verdictBadge } from "./common-view.ts";
+import { runLink, sessionLink, statusBadge, verdictBadge } from "./common-view.ts";
 import { durationMs, formatDuration, formatTime, formatUsd, truncate } from "./format.ts";
 import { html, type SafeHtml } from "./html.ts";
 
@@ -10,6 +10,8 @@ export interface RunFilters {
 	status: string;
 	skill: string;
 	since: string;
+	/** Session id from the page's `?session=` parameter; empty for all runs. */
+	session: string;
 }
 
 export const PAGE_SIZE = 50;
@@ -17,6 +19,7 @@ export const PAGE_SIZE = 50;
 /** API path for one page of the runs list. The review tab asks for finished runs without feedback. */
 export function runsQuery(filters: RunFilters, cursor: string | null, limit: number = PAGE_SIZE): string {
 	const params = new URLSearchParams();
+	if (filters.session) params.set("session", filters.session);
 	if (filters.tab === "review") params.set("reviewed", "false");
 	if (filters.status) params.set("status", filters.status);
 	if (filters.skill.trim()) params.set("skill", filters.skill.trim());
@@ -39,6 +42,12 @@ export function renderRunRows(runs: RunSummary[], nowMs: number): SafeHtml {
 		<td>${verdictBadge(run.verdict)}</td>
 	</tr>`,
 	)}`;
+}
+
+/** The active session filter, with a link back to all runs; empty without one. */
+export function renderSessionFilter(sessionId: string, title: string | null): SafeHtml {
+	if (!sessionId) return html``;
+	return html`<p class="session-filter">Turns of session <a class="mono" href="${sessionLink(sessionId)}">${title || sessionId}</a> <span class="muted mono">${sessionId}</span> · <a href="/">show all runs</a></p>`;
 }
 
 /** `<option>`s for the status filter, from the statuses in `/api/meta`; the first option means any status. */

@@ -53,6 +53,15 @@ describe("GET /api/runs", () => {
 		expect(second.nextCursor).toBeNull();
 	});
 
+	it("filters by session and reports each turn's session", async () => {
+		const body = (await get("/api/runs?session=01SESSION0000000000000001")).json() as RunListResponse;
+		expect(body.runs.map((r) => r.id)).toEqual([fx.running.id]);
+		expect(body.runs[0]).toMatchObject({ sessionId: "01SESSION0000000000000001", turnIndex: 2, sessionTitle: `Chat ${XSS}` });
+		expect(((await get("/api/runs?session=unknown")).json() as RunListResponse).runs).toEqual([]);
+		const detail = (await get(`/api/runs/${fx.running.id}`)).json() as RunDetailResponse;
+		expect(detail.run).toMatchObject({ sessionId: "01SESSION0000000000000001", turnIndex: 2 });
+	});
+
 	it("filters by status and skill", async () => {
 		expect(((await get("/api/runs?status=running")).json() as RunListResponse).runs.map((r) => r.id)).toEqual([fx.running.id]);
 		expect(((await get("/api/runs?skill=report")).json() as RunListResponse).runs.map((r) => r.id)).toEqual([fx.root.id]);
