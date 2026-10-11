@@ -6,6 +6,8 @@ import {
 	type CommandRunner,
 	commandScorer,
 	containsScorer,
+	DATA_BLOCK_NOTE,
+	dataBlock,
 	humanScorer,
 	type JudgeCaller,
 	judgeScorer,
@@ -158,7 +160,7 @@ async function chargedCompletion(
 	const maxRetries = providerCfg.maxRetries ?? 3;
 	const baseDelay = providerCfg.retryBaseDelayMs ?? 1000;
 	// The reply is capped at the output tokens the estimate assumes, so a verbose reply cannot cost more than was reserved.
-	const maxTokens = Math.min(config.budgets.estimateOutputTokens, model.maxTokens);
+	const maxTokens = model.maxTokens > 0 ? Math.min(config.budgets.estimateOutputTokens, model.maxTokens) : config.budgets.estimateOutputTokens;
 	let costUsd = 0;
 	let costUnknown = false;
 	for (let attempt = 1; ; attempt++) {
@@ -413,4 +415,36 @@ export async function runScoringRound(deps: ScoringDeps, plan: ScoringPlan, inpu
 		}
 	}
 	return rows;
+}
+
+const SELF_CHECK_SYSTEM = `You review your own answer before it is returned. Rate how completely and correctly the answer carries out the instruction.
+${DATA_BLOCK_NOTE}
+Reply with only a JSON object: {"score": <number from 0 to 1>, "reason": "<one sentence>"}`;
+
+/**
+ * Asks the run's current model to rate its final answer (the `self_check` trigger). Returns the score, or null when the
+ * call fails or the reply has no score in 0..1; a failed self-check never escalates.
+ */
+export async function runSelfCheck(deps: ScoringDeps, model: Model<Api>, effort: Effort, role: string, input: ScoreInput): Promise<number | null> {
+	const signal = deps.signal ?? new AbortController().signal;
+	try {
+		const { text } = await chargedCompletion(
+			deps,
+			model,
+			{
+				system: SELF_CHECK_SYSTEM,
+				user: `# Instruction\n${dataBlock("instruction", input.instruction)}\n\n# Your final answer\n${dataBlock("final_answer", input.finalOutput.slice(-20_000) || "(empty)")}`,
+				effort,
+			},
+			{ kind: "self_check", name: model.id, parentSpanId: deps.runSpanId, tier: role, attrs: {} },
+			signal,
+		);
+		const match = /"score"\s*:\s*(-?\d+(?:\.\d+)?)/.exec(text);
+		const score = match ? Number(match[1]) : Number.NaN;
+		return Number.isFinite(score) && score >= 0 && score <= 1 ? score : null;
+	} catch (error) {
+		if (signal.aborted) throw error;
+		deps.env.deps.logger.warn("self-check failed", { run_id: deps.runId, error });
+		return null;
+	}
 }
