@@ -196,7 +196,7 @@ describe("routing", () => {
 		addSession(h, "01SESSIONAAAAAAAAAAAAAAAAA");
 		const t2 = io();
 		const terminal = new FakeTerminal();
-		expect(await runCli(["--resume"], t2, { ...h, models: fauxModels(), stdio: ttyStdio(), terminal, lineAsker: { ask: async () => "" } })).toBe(EXIT_SIGINT);
+		expect(await runCli(["--resume"], t2, { ...h, models: fauxModels(), stdio: ttyStdio(), terminal, lineAsker: { ask: async () => "" } })).toBe(0);
 		expect(terminal.started).toBe(false);
 		expect(await runCli(["--resume"], io(), { ...h, models: fauxModels(), stdio: ttyStdio(), terminal, lineAsker: { ask: async () => "9" } })).toBe(2);
 	});

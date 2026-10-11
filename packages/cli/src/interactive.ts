@@ -78,7 +78,7 @@ export function parseInteractiveArgs(args: string[]): InteractiveArgs {
 
 const PICKER_LIMIT = 20;
 
-/** A numbered list on stderr and one question; null means the user cancelled. */
+/** A numbered list on stderr and one question; "" means a deliberate cancel (blank answer), null means the input ended or was aborted. */
 async function pickSession(io: CliIO, asker: LineAsker, rows: ReturnType<typeof listSessions>, signal?: AbortSignal): Promise<string | null> {
 	io.stderr.write("Recent sessions:\n");
 	rows.forEach((row, i) => {
@@ -86,8 +86,9 @@ async function pickSession(io: CliIO, asker: LineAsker, rows: ReturnType<typeof 
 		io.stderr.write(`  ${String(i + 1).padStart(2)}. ${row.id}  ${title}  (${row.turns} turns, ${row.updatedAt.slice(0, 16).replace("T", " ")})\n`);
 	});
 	const answer = await asker.ask(`Resume which session? [1-${rows.length}, Enter to cancel] `, signal);
-	const trimmed = answer?.trim() ?? "";
-	if (trimmed === "") return null;
+	if (answer === null) return null;
+	const trimmed = answer.trim();
+	if (trimmed === "") return "";
 	const index = /^\d+$/.test(trimmed) ? Number(trimmed) : 0;
 	const row = rows[index - 1];
 	if (!row) throw usageError(`"${escapeControl(trimmed).slice(0, 40)}" is not a number from 1 to ${rows.length}`);
@@ -123,6 +124,7 @@ export async function interactiveCommand(args: string[], io: CliIO, options: Cli
 				asker.close?.();
 			}
 			if (resumeId === null) return EXIT_SIGINT;
+			if (resumeId === "") return 0;
 		}
 		if (!getSessionRow(db, resumeId)) throw sessionNotFound(resumeId);
 	}

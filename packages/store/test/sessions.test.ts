@@ -65,6 +65,15 @@ describe("SessionDir", () => {
 		expect(lines[1]).toEqual({ type: "compaction", turnIndex: 2, summary: "s", replacedThroughTurn: 1 });
 	});
 
+	it("starts appended lines on a fresh line after a crash-truncated last line", () => {
+		const root = mkdtempSync(join(tmpdir(), "nexo-sessions-"));
+		const dir = SessionDir.create(root, "s1", redact);
+		dir.appendTranscript([{ type: "compaction", turnIndex: 1, summary: "a", replacedThroughTurn: 0 }]);
+		appendFileSync(join(dir.root, "transcript.jsonl"), '{"type":"mess');
+		dir.appendTranscript([{ type: "compaction", turnIndex: 2, summary: "b", replacedThroughTurn: 1 }]);
+		expect(dir.readTranscript().map((l) => (l as { turnIndex: number }).turnIndex)).toEqual([1, 2]);
+	});
+
 	it("keeps opaque provider fields intact while redacting secrets in the transcript", () => {
 		const root = mkdtempSync(join(tmpdir(), "nexo-sessions-"));
 		const dir = SessionDir.create(root, "s1", redact);

@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SQLInputValue } from "node:sqlite";
 import { NexoError, type Redactor } from "@nexo/telemetry";
@@ -260,9 +260,25 @@ export class SessionDir {
 	appendTranscript(lines: readonly TranscriptLine[]): void {
 		if (lines.length === 0) return;
 		try {
-			appendFileSync(this.transcriptFile, lines.map((line) => `${JSON.stringify(redactPreservingOpaque(this.redact, line))}\n`).join(""));
+			const body = lines.map((line) => `${JSON.stringify(redactPreservingOpaque(this.redact, line))}\n`).join("");
+			appendFileSync(this.transcriptFile, this.endsMidLine() ? `\n${body}` : body);
 		} catch (cause) {
 			throw new NexoError({ code: "STORE_IO", message: `Cannot append to ${this.transcriptFile}`, retryable: true, cause });
+		}
+	}
+
+	/** True when the transcript is non-empty and its last byte is not a newline (a crash cut the last line short). */
+	private endsMidLine(): boolean {
+		if (!existsSync(this.transcriptFile)) return false;
+		const size = statSync(this.transcriptFile).size;
+		if (size === 0) return false;
+		const fd = openSync(this.transcriptFile, "r");
+		try {
+			const last = Buffer.alloc(1);
+			readSync(fd, last, 0, 1, size - 1);
+			return last[0] !== 0x0a;
+		} finally {
+			closeSync(fd);
 		}
 	}
 
