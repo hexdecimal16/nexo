@@ -69,8 +69,8 @@ export function parseRouterPolicy(text: string, source: string): RouterPolicy {
 	let raw: unknown;
 	try {
 		raw = JSON.parse(text);
-	} catch (cause) {
-		throw new NexoError({ code: "CONFIG_INVALID", message: `Router policy ${source} is not valid JSON: ${(cause as Error).message}`, context: { source }, cause });
+	} catch {
+		throw new NexoError({ code: "CONFIG_INVALID", message: `Router policy ${source} is not valid JSON`, hint: "Write a JSON object", context: { source } });
 	}
 	const policy = withDefaults(raw);
 	if (!Value.Check(RouterPolicySchema, policy)) {

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -71,10 +71,62 @@ describe("scoring config", () => {
 		expect(loadConfig({ paths: home.paths, cwd: home.cwd }).config.scoring.scorersOrigin).toBe("user");
 	});
 
+	it("records project origin only when the project config itself defines scorers", () => {
+		const { paths, cwd } = setup({ models, scoring: { scorers: [{ kind: "contains", text: "x" }] } });
+		mkdirSync(join(cwd, ".nexo"), { recursive: true });
+		writeFileSync(join(cwd, ".nexo", "config.json"), JSON.stringify({ scoring: { passThreshold: 0.7 } }));
+		expect(loadConfig({ paths, cwd }).config.scoring.scorersOrigin).toBe("user");
+	});
+
+	it("keeps scorersOrigin out of the config hash", () => {
+		const a = setup({ models });
+		const b = setup({ models, scoring: { scorersOrigin: "project" } });
+		expect(loadConfig({ paths: a.paths, cwd: a.cwd }).hash).toBe(loadConfig({ paths: b.paths, cwd: b.cwd }).hash);
+	});
+
+	describe("file: sources from the project config", () => {
+		function project(scoring: unknown, router?: unknown) {
+			const ctx = setup({ models });
+			mkdirSync(join(ctx.cwd, ".nexo"), { recursive: true });
+			writeFileSync(join(ctx.cwd, ".nexo", "config.json"), JSON.stringify({ scoring, ...(router ? { router } : {}) }));
+			return ctx;
+		}
+		it("refuses $NEXO_HOME, ~, parent-relative, absolute-outside and symlinked-out paths", () => {
+			const ctx = project({ rubric: "file:$NEXO_HOME/credentials.json" });
+			writeFileSync(join(ctx.paths.home, "credentials.json"), "{}");
+			expect(configError(() => loadConfig(ctx)).message).toContain("/scoring/rubric");
+			for (const rubric of ["file:~/.ssh/id_ed25519", "file:../outside.md", "file:/etc/passwd"]) {
+				const c = project({ rubric });
+				writeFileSync(join(c.root, "outside.md"), "secret");
+				expect(configError(() => loadConfig(c)).message).toContain("/scoring/rubric");
+			}
+			const link = project({ rubric: "file:link.md" });
+			writeFileSync(join(link.root, "target.md"), "secret");
+			symlinkSync(join(link.root, "target.md"), join(link.cwd, "link.md"));
+			expect(configError(() => loadConfig(link)).message).toContain("points outside");
+			const pol = project({}, { policy: "file:../p.json" });
+			expect(configError(() => loadConfig(pol)).message).toContain("/router/policy");
+		});
+		it("accepts a file inside the project, and a user-level file elsewhere", () => {
+			const ctx = project({ rubric: "file:rubric.md" });
+			writeFileSync(join(ctx.cwd, "rubric.md"), "grade");
+			expect(loadConfig(ctx).config.scoring.rubric).toMatch(/^file:.*rubric\.md$/);
+			const user = setup({ models, scoring: { rubric: "file:$NEXO_HOME/r.md" } });
+			expect(loadConfig({ paths: user.paths, cwd: user.cwd }).config.scoring.rubric).toBe(`file:${join(user.paths.home, "r.md")}`);
+		});
+	});
+
 	it("names the judge key and warns about a judge from the s1 or s2 family", () => {
 		const config = { models: { ...models, judge: [{ provider: "openrouter", id: "openai/gpt-y" }, { provider: "google", id: "gemini-x" }] } } as unknown as NexoConfig;
 		expect(judgeKey(config)).toBe("openrouter/openai/gpt-y+google/gemini-x");
 		expect(judgeFamilyWarnings(config)).toEqual([expect.stringContaining("Judge openrouter/openai/gpt-y is from the same model family (openai) as openai/gpt-x")]);
+	});
+
+	it("groups one judge matching both s1 and s2 into one warning", () => {
+		const config = { models: { s1: { provider: "openai", id: "gpt-a" }, s2: { provider: "openai", id: "gpt-b" }, judge: [{ provider: "openai", id: "gpt-j" }] } } as unknown as NexoConfig;
+		const warnings = judgeFamilyWarnings(config);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("openai/gpt-a and openai/gpt-b");
 	});
 });
 
@@ -110,4 +162,31 @@ describe("router policy and judge rubric artifacts", () => {
 		expect(configError(() => loadJudgeRubric(db, { ...config, scoring: { ...config.scoring, rubric: `file:${join(dir, "empty.md")}` } }, "2026-10-11T00:00:00.000Z", redact)).message).toContain("empty");
 	});
 
+	it("redacts a file: rubric, reuses an unchanged version and versions a changed one", () => {
+		const db = openDb(":memory:");
+		const dir = mkdtempSync(join(tmpdir(), "nexo-rub-"));
+		const file = join(dir, "r.md");
+		const config = base();
+		const cfg = { ...config, scoring: { ...config.scoring, rubric: `file:${file}` } };
+		writeFileSync(file, "grade with key sk-ant-abcdefghijklmnopqrstuvwxyz");
+		const v1 = loadJudgeRubric(db, cfg, "2026-10-11T00:00:00.000Z", redact);
+		expect(v1.artifact.content).toContain("[REDACTED]");
+		expect(v1.artifact.content).not.toContain("sk-ant-");
+		expect(loadJudgeRubric(db, cfg, "2026-10-11T00:00:01.000Z", redact).artifact.id).toBe(v1.artifact.id);
+		writeFileSync(file, "new criteria");
+		expect(loadJudgeRubric(db, cfg, "2026-10-11T00:00:02.000Z", redact).artifact.version).toBe(2);
+	});
+
+	it("rejects an oversized or non-regular file: source without echoing content", () => {
+		const db = openDb(":memory:");
+		const dir = mkdtempSync(join(tmpdir(), "nexo-big-"));
+		writeFileSync(join(dir, "big.md"), "x".repeat(300 * 1024));
+		writeFileSync(join(dir, "p.json"), "SECRET-TEXT not json");
+		const config = base();
+		const rubric = (f: string) => loadJudgeRubric(db, { ...config, scoring: { ...config.scoring, rubric: `file:${f}` } }, "2026-10-11T00:00:00.000Z", redact);
+		expect(configError(() => rubric(join(dir, "big.md"))).message).toContain("larger than");
+		expect(configError(() => rubric(dir)).message).toContain("not a regular file");
+		const err = configError(() => loadRouterPolicy(db, { ...config, router: { ...config.router, policy: `file:${join(dir, "p.json")}` } }, "2026-10-11T00:00:00.000Z", redact));
+		expect(JSON.stringify([err.message, err.hint])).not.toContain("SECRET-TEXT");
+	});
 });

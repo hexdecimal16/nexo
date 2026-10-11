@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, relative, resolve, isAbsolute } from "node:path";
 import { NexoError } from "@nexo/telemetry";
 import { parseScorerSpecs } from "@nexo/scorers";
 import type { NexoPaths } from "@nexo/store";
@@ -100,10 +100,42 @@ function expandFileSource(source: string, paths: NexoPaths, cwd: string): string
 	return source.startsWith("file:") ? `file:${expandDir(source.slice("file:".length), paths, cwd)}` : source;
 }
 
-function definesScorers(layer: unknown): boolean {
+/**
+ * A `file:` source from the project config (a cloned repo): relative to the project root only, no `~` or `$NEXO_HOME`,
+ * and the real path must stay inside the project root, so a repo cannot point nexo at credentials or other files.
+ */
+function projectFileSource(source: string, key: string, cwd: string): string {
+	if (!source.startsWith("file:")) return source;
+	const requested = source.slice("file:".length);
+	const refuse = (why: string): never => {
+		throw new NexoError({
+			code: "CONFIG_INVALID",
+			message: `Invalid configuration:\n  ${key} ${why}`,
+			hint: `A ./.nexo/config.json file: source must be a file inside the project directory; set ${key} in ~/.nexo/config.json to use a file elsewhere`,
+			context: { key },
+		});
+	};
+	if (requested.startsWith("~") || requested.startsWith("$")) return refuse("must not use ~ or $NEXO_HOME in a project config");
+	let real: string;
+	try {
+		real = realpathSync(resolve(cwd, requested));
+	} catch {
+		return refuse("does not name an existing file");
+	}
+	const rel = relative(realpathSync(cwd), real);
+	if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return refuse("points outside the project directory");
+	return `file:${real}`;
+}
+
+function definesKey(layer: unknown, section: "scoring" | "router", key: string): boolean {
 	if (typeof layer !== "object" || layer === null) return false;
-	const scoring = (layer as { scoring?: unknown }).scoring;
-	return typeof scoring === "object" && scoring !== null && "scorers" in scoring;
+	const value = (layer as Record<string, unknown>)[section];
+	return typeof value === "object" && value !== null && key in value;
+}
+
+/** True when the project config supplies `section.key` and no CLI override replaces it. */
+function fromProject(projectLayer: unknown, overrides: unknown, section: "scoring" | "router", key: string): boolean {
+	return definesKey(projectLayer, section, key) && !definesKey(overrides, section, key);
 }
 
 /** An llm_judge scorer needs a judge model; throws CONFIG_INVALID naming the first such entry. */
@@ -145,15 +177,21 @@ export function loadConfig(options: LoadConfigOptions): LoadedConfig {
 		});
 	}
 
-	const hash = createHash("sha256").update(stableStringify(merged)).digest("hex").slice(0, 16);
+	const hashed = structuredClone(merged);
+	delete (hashed.scoring as { scorersOrigin?: unknown }).scorersOrigin;
+	const hash = createHash("sha256").update(stableStringify(hashed)).digest("hex").slice(0, 16);
 	const config = merged as NexoConfig;
 	parseScorerSpecs(config.scoring.scorers, "/scoring/scorers");
 	assertJudgeConfigured(config);
-	// Project-level scorer specs come from a file in the working directory (a cloned repo); command scorers from them pass the bash tool policy.
+	// Values from ./.nexo/config.json come from a file in the working directory (a cloned repo), so they are marked or confined.
 	const projectLayer = sources.includes(projectFile) ? layers[sources.indexOf(projectFile)] : undefined;
-	config.scoring.scorersOrigin = definesScorers(projectLayer) && !definesScorers(options.overrides) ? "project" : "user";
+	config.scoring.scorersOrigin = fromProject(projectLayer, options.overrides, "scoring", "scorers") ? "project" : "user";
 	config.skills.dirs = config.skills.dirs.map((d) => expandDir(d, options.paths, options.cwd));
-	config.router.policy = expandFileSource(config.router.policy, options.paths, options.cwd);
-	config.scoring.rubric = expandFileSource(config.scoring.rubric, options.paths, options.cwd);
+	config.router.policy = fromProject(projectLayer, options.overrides, "router", "policy")
+		? projectFileSource(config.router.policy, "/router/policy", options.cwd)
+		: expandFileSource(config.router.policy, options.paths, options.cwd);
+	config.scoring.rubric = fromProject(projectLayer, options.overrides, "scoring", "rubric")
+		? projectFileSource(config.scoring.rubric, "/scoring/rubric", options.cwd)
+		: expandFileSource(config.scoring.rubric, options.paths, options.cwd);
 	return { config, sources, hash };
 }
