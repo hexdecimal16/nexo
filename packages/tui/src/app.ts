@@ -90,14 +90,18 @@ function textOf(content: unknown): string {
 	return content.map((b) => (b && typeof b === "object" && (b as { type?: string }).type === "text" ? String((b as { text?: unknown }).text ?? "") : "")).join("");
 }
 
-/** `score 0.82 ✓` for the latest scoring round of a turn (mean of the scorers that answered); null when nothing scored it. */
+/**
+ * `score 0.82 ✓` for the latest scoring round of a turn (mean of the scorers that answered), followed by `· N failed`
+ * when some scorers failed; null when nothing scored it.
+ */
 export function scoreSummary(result: Pick<RunResult, "scores">): string | null {
 	const scores = result.scores ?? [];
 	if (scores.length === 0) return null;
 	const answered = scores.filter((s) => s.status === "ok" && s.value !== null);
 	if (answered.length === 0) return "score failed";
 	const mean = answered.reduce((sum, s) => sum + (s.value ?? 0), 0) / answered.length;
-	return `score ${mean.toFixed(2)} ${answered.every((s) => s.passed) ? "✓" : "✗"}`;
+	const failed = scores.filter((s) => s.status === "failed").length;
+	return `score ${mean.toFixed(2)} ${answered.every((s) => s.passed) ? "✓" : "✗"}${failed > 0 ? ` · ${failed} failed` : ""}`;
 }
 
 /** Runs the chat UI: the conversation, the editor, the footer, approvals, slash commands and the settings screen. */

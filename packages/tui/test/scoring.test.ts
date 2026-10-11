@@ -40,4 +40,11 @@ describe("scores and escalations in the chat", () => {
 		expect(scoreSummary({ scores: [scoreRow("r", { value: 0.5, passed: false })] })).toBe("score 0.50 ✗");
 		expect(scoreSummary({ scores: [scoreRow("r", { status: "failed", value: null, passed: null })] })).toBe("score failed");
 	});
+
+	it("counts failed scorers next to the mean of those that answered", () => {
+		const failed = scoreRow("r", { status: "failed", value: null, passed: null });
+		expect(scoreSummary({ scores: [scoreRow("r", { value: 1 }), failed] })).toBe("score 1.00 ✓ · 1 failed");
+		expect(scoreSummary({ scores: [scoreRow("r", { value: 0.5, passed: false }), failed, failed] })).toBe("score 0.50 ✗ · 2 failed");
+		expect(scoreSummary({ scores: [failed, failed] })).toBe("score failed");
+	});
 });
