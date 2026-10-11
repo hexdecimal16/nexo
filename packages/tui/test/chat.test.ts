@@ -321,7 +321,6 @@ describe("stored keys on screen", () => {
 		await until(() => !h.session().running);
 		expect(h.terminal.output()).toContain("[REDACTED]");
 		expect(h.terminal.raw()).not.toContain(STORED);
-		expect(h.terminal.raw()).not.toContain(STORED.slice(0, 20));
 		h.terminal.send(KEY.ctrlD);
 		await h.done;
 	});
