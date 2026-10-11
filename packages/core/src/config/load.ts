@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { NexoError } from "@nexo/telemetry";
+import { parseScorerSpecs } from "@nexo/scorers";
 import type { NexoPaths } from "@nexo/store";
 import { Value } from "typebox/value";
 import { ConfigSchema, DEFAULT_CONFIG, type DeepPartial, type NexoConfig } from "./schema.ts";
@@ -94,6 +95,30 @@ function expandDir(dir: string, paths: NexoPaths, cwd: string): string {
 	return resolve(cwd, dir);
 }
 
+/** `file:<path>` with the path made absolute (like skill dirs); `artifact:…` unchanged. */
+function expandFileSource(source: string, paths: NexoPaths, cwd: string): string {
+	return source.startsWith("file:") ? `file:${expandDir(source.slice("file:".length), paths, cwd)}` : source;
+}
+
+function definesScorers(layer: unknown): boolean {
+	if (typeof layer !== "object" || layer === null) return false;
+	const scoring = (layer as { scoring?: unknown }).scoring;
+	return typeof scoring === "object" && scoring !== null && "scorers" in scoring;
+}
+
+/** An llm_judge scorer needs a judge model; throws CONFIG_INVALID naming the first such entry. */
+function assertJudgeConfigured(config: NexoConfig): void {
+	const index = config.scoring.scorers.findIndex((s) => s.kind === "llm_judge");
+	if (index < 0 || (config.models.judge ?? []).length > 0) return;
+	const path = `/scoring/scorers/${index}`;
+	throw new NexoError({
+		code: "CONFIG_INVALID",
+		message: `Invalid configuration:\n  ${path} is an llm_judge scorer, but models.judge is not set`,
+		hint: 'Set models.judge, for example [{"provider":"google","id":"<model-id>"}], or remove the llm_judge scorer',
+		context: { path },
+	});
+}
+
 /** The project config file of a working directory. */
 export function projectConfigPath(cwd: string): string {
 	return join(cwd, ".nexo", "config.json");
@@ -122,6 +147,13 @@ export function loadConfig(options: LoadConfigOptions): LoadedConfig {
 
 	const hash = createHash("sha256").update(stableStringify(merged)).digest("hex").slice(0, 16);
 	const config = merged as NexoConfig;
+	parseScorerSpecs(config.scoring.scorers, "/scoring/scorers");
+	assertJudgeConfigured(config);
+	// Project-level scorer specs come from a file in the working directory (a cloned repo); command scorers from them pass the bash tool policy.
+	const projectLayer = sources.includes(projectFile) ? layers[sources.indexOf(projectFile)] : undefined;
+	config.scoring.scorersOrigin = definesScorers(projectLayer) && !definesScorers(options.overrides) ? "project" : "user";
 	config.skills.dirs = config.skills.dirs.map((d) => expandDir(d, options.paths, options.cwd));
+	config.router.policy = expandFileSource(config.router.policy, options.paths, options.cwd);
+	config.scoring.rubric = expandFileSource(config.scoring.rubric, options.paths, options.cwd);
 	return { config, sources, hash };
 }

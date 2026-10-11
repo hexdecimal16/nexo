@@ -1,3 +1,4 @@
+import { ScorerSpecSchema } from "@nexo/scorers";
 import { type Static, Type } from "typebox";
 
 /** Written out literally so the static type is the union of effort names; a test checks it accepts exactly `EFFORTS`. */
@@ -19,6 +20,8 @@ const ModelRefSchema = Type.Object({ ref: Type.Union([Type.Literal("s1"), Type.L
 const PolicyActionSchema = Type.Union([Type.Literal("allow"), Type.Literal("ask"), Type.Literal("deny")]);
 const LooseSection = Type.Object({}, { additionalProperties: true });
 const Usd = Type.Number({ exclusiveMinimum: 0 });
+/** `artifact:<kind>` (the active artifact of that kind, seeded with the built-in default) or `file:<path>`. */
+const ArtifactSource = (kind: string) => Type.String({ pattern: `^(artifact:${kind}|file:.+)$` });
 
 export const ConfigSchema = Type.Object(
 	{
@@ -44,7 +47,20 @@ export const ConfigSchema = Type.Object(
 			),
 		),
 		router: Type.Object(
-			{ policy: Type.String({ minLength: 1 }), maxEscalations: Type.Integer({ minimum: 0 }) },
+			{ policy: ArtifactSource("router_policy"), maxEscalations: Type.Integer({ minimum: 0 }) },
+			{ additionalProperties: false },
+		),
+		scoring: Type.Object(
+			{
+				enabled: Type.Boolean(),
+				scorers: Type.Array(ScorerSpecSchema),
+				rubric: ArtifactSource("judge_rubric"),
+				passThreshold: Type.Number({ minimum: 0, maximum: 1 }),
+				commandTimeoutMs: Type.Integer({ minimum: 100 }),
+				subagents: Type.Boolean(),
+				/** Set by loadConfig: "project" when ./.nexo/config.json supplied `scorers`. A value in a config file is ignored. */
+				scorersOrigin: Type.Optional(Type.Union([Type.Literal("user"), Type.Literal("project")])),
+			},
 			{ additionalProperties: false },
 		),
 		budgets: Type.Object(
@@ -128,6 +144,14 @@ export type DeepPartial<T> = T extends readonly (infer _U)[]
 export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 	providers: {},
 	router: { policy: "artifact:router_policy", maxEscalations: 1 },
+	scoring: {
+		enabled: true,
+		scorers: [],
+		rubric: "artifact:judge_rubric",
+		passThreshold: 0.6,
+		commandTimeoutMs: 120_000,
+		subagents: false,
+	},
 	budgets: {
 		perRunUsd: 0.5,
 		perSessionUsd: 5,
