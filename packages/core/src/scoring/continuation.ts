@@ -1,4 +1,5 @@
 import type { EscalationSignal } from "@nexo/router";
+import { DATA_BLOCK_NOTE, dataBlock } from "@nexo/scorers";
 import type { ScoreRow } from "@nexo/store";
 
 /** Longest rationale quoted per failed check in the continuation prompt. */
@@ -14,11 +15,12 @@ export function continuationPrompt(signals: readonly EscalationSignal[], scores:
 		...signals.map((s) => `- ${s.trigger}: ${s.reason}`),
 	];
 	if (failed.length > 0) {
-		lines.push("", "Failed checks:");
+		// Rationales quote judge text and command output, which the agent's own work can influence.
+		lines.push("", "Failed checks:", DATA_BLOCK_NOTE);
 		for (const s of failed) {
 			const value = s.value === null ? "" : ` (score ${s.value.toFixed(2)})`;
 			const rationale = s.rationale.length > RATIONALE_CHARS ? `…${s.rationale.slice(-RATIONALE_CHARS)}` : s.rationale;
-			lines.push(`- ${s.scorerName} [${s.scorerType}]${value}:`, ...rationale.split("\n").map((l) => `  ${l}`));
+			lines.push(`- ${s.scorerName} [${s.scorerType}]${value}:`, dataBlock("check", rationale));
 		}
 	}
 	lines.push("", "Fix the problems, then give your complete final answer again.");
