@@ -164,6 +164,24 @@ describe("scoreLines", () => {
 	});
 });
 
+describe("nexo ui and the judge", () => {
+	it("serves the configured judge's calibration and same-family warnings", async () => {
+		const h = home({ models: { s1: { provider: "google", id: "gemini-a" }, s2: { provider: "faux", id: "fast" }, judge: [{ provider: "google", id: "gemini-x" }] } });
+		seed(h, [[true, "not_done"]]);
+		const t = io();
+		const ac = new AbortController();
+		const running = runCli(["ui", "--port", "0"], t, { ...h, signal: ac.signal });
+		for (let i = 0; i < 100 && !t.out().includes("token="); i++) await new Promise((r) => setTimeout(r, 10));
+		const url = /nexo UI: (\S+)/.exec(t.out())?.[1] ?? "";
+		const body = (await (await fetch(new URL("/api/judge/calibration", url))).json()) as { judgeKey: string; warnings: string[]; current: { cases: number } };
+		expect(body.judgeKey).toBe("google/gemini-x");
+		expect(body.warnings).toEqual([expect.stringContaining("same model family (google) as google/gemini-a")]);
+		expect(body.current.cases).toBe(1);
+		ac.abort();
+		expect(await running).toBe(0);
+	});
+});
+
 describe("nexo run with scorers", () => {
 	it("prints each score and the escalation count after the run", async () => {
 		const h = home({ models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "strong" } }, providers: { faux: { retryBaseDelayMs: 0 } }, scoring: { scorers: [{ kind: "contains", name: "says-done", text: "DONE" }] } });

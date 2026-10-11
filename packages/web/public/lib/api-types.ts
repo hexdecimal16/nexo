@@ -36,6 +36,59 @@ export interface RunSummary {
 	sessionId: string | null;
 	turnIndex: number | null;
 	sessionTitle: string | null;
+	/** The latest scoring round: mean value and all-passed verdict of the scorers that answered; null when never scored. */
+	score: RunScore | null;
+}
+
+export interface RunScore {
+	value: number | null;
+	passed: boolean | null;
+	scorers: number;
+	failedScorers: number;
+}
+
+export interface ScoreCriterion {
+	name: string;
+	passed: boolean;
+	note: string;
+}
+
+/** One scorer result of one scoring round (round 0 first; each S2 continuation adds a round). */
+export interface Score {
+	id: string;
+	runId: string;
+	round: number;
+	scorerKind: "deterministic" | "judge" | "human";
+	scorerType: string;
+	scorerName: string;
+	status: "ok" | "failed";
+	value: number | null;
+	passed: boolean | null;
+	rationale: string;
+	criteria: ScoreCriterion[] | null;
+	details: Record<string, unknown>;
+	error: ApiErrorBody | null;
+	model: string | null;
+	costUsd: number;
+	costUnknown: boolean;
+	createdAt: string;
+}
+
+/** An `escalation` span of the run: a trigger that switched to S2, or was suppressed. */
+export interface Escalation {
+	spanId: string;
+	at: string;
+	trigger: string;
+	reason: string;
+	phase: string;
+	applied: boolean;
+	blockedBy: string | null;
+	/** Why a blocked trigger was suppressed. */
+	blockedReason: string | null;
+	from: string | null;
+	to: string | null;
+	/** Set when the S2 continuation failed and the previous answer was kept. */
+	continuationError: { code: string; message: string } | null;
 }
 
 export interface RunListResponse {
@@ -91,6 +144,11 @@ export interface RunDetailResponse {
 	feedback: Feedback[];
 	/** Latest verdict of each child run that has one, keyed by child run id. */
 	childFeedback: Record<string, Feedback>;
+	/** Every score of the run, by round. */
+	scores: Score[];
+	escalations: Escalation[];
+	/** True when the latest judge verdict and the latest human verdict disagree. */
+	judgeDisagrees: boolean;
 }
 
 export interface Span {
@@ -181,4 +239,42 @@ export interface MetaResponse {
 	runStatuses: RunStatus[];
 	costDimensions: CostDimension[];
 	readOnly: ReadOnlyInfo | null;
+}
+
+export interface ConfusionMatrix {
+	bothPass: number;
+	judgePassHumanFail: number;
+	judgeFailHumanPass: number;
+	bothFail: number;
+}
+
+export interface Calibration {
+	id: string;
+	judgeKey: string;
+	cases: number;
+	agreements: number;
+	accuracy: number | null;
+	kappa: number | null;
+	matrix: ConfusionMatrix;
+	createdAt: string;
+}
+
+export interface Disagreement {
+	runId: string;
+	instruction: string;
+	judgePassed: boolean;
+	verdict: Verdict;
+	comment: string;
+}
+
+export interface JudgeCalibrationResponse {
+	/** The configured judge (`models.judge` keys joined with `+`); null without a judge or a config. */
+	judgeKey: string | null;
+	/** Same-family warnings for the configured judge. */
+	warnings: string[];
+	/** Agreement on the current verdicts, computed for this request (not stored). */
+	current: { cases: number; agreements: number; accuracy: number | null; kappa: number | null; matrix: ConfusionMatrix } | null;
+	/** Stored `nexo eval judge` results for the configured judge (all judges without one), newest first. */
+	history: Calibration[];
+	disagreements: Disagreement[];
 }
