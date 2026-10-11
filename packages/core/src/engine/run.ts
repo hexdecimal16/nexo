@@ -48,7 +48,7 @@ import { estimateCallCostUsd, priceUsage } from "../cost/pricing.ts";
 import { classifyProviderError, contextOverflowError, retryAfterMs, toolErrorText, withToolErrorCodes } from "./errors.ts";
 import { assistantText, contentText, estimatePromptChars, lastAssistant, recordedContent, withBudgetLine } from "./messages.ts";
 import { DEFAULT_PLANNER_PROMPT, DEFAULT_SYSTEM_PROMPT, renderSystemPrompt } from "./prompts.ts";
-import { createGatedStreamFn } from "./provider-gate.ts";
+import { type ApiKeyResolver, createGatedStreamFn } from "./provider-gate.ts";
 import { Recorder } from "./recorder.ts";
 
 const TOOL_RESULT_INLINE_LIMIT = 32_768;
@@ -74,6 +74,8 @@ export interface EngineDeps {
 	now?: () => Date;
 	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 	onEvent?: (event: EngineEvent) => void;
+	/** API key per provider for model requests (settings: environment variable, then credentials file). */
+	resolveApiKey?: ApiKeyResolver;
 }
 
 /** Longest tool result text carried by a `tool_end` event. */
@@ -247,7 +249,7 @@ export function createEngineEnv(deps: EngineDeps): EngineEnv {
 		sleep: deps.sleep ?? defaultSleep,
 		registry: createModelRegistry(deps.models),
 		policy: createPolicy(deps.config.tools),
-		streamFn: createGatedStreamFn(deps.models, limits),
+		streamFn: createGatedStreamFn(deps.models, limits, deps.resolveApiKey),
 	};
 	const recovered = recoverCrashedRuns(deps.db, isPidAlive, now().toISOString());
 	if (recovered.length > 0) deps.logger.warn("marked crashed runs as aborted", { run_ids: recovered });

@@ -1,9 +1,9 @@
 import type { Models } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { createEngine, type DeepPartial, type Engine, type EngineEvent, loadConfig, type NexoConfig } from "@nexo/core";
+import { createEngine, createSettings, type DeepPartial, type Engine, type EngineEvent, type NexoConfig, type Settings } from "@nexo/core";
 import { loadSkills, type SkillCatalog } from "@nexo/skills";
 import { type Db, ensureNexoDirs, type NexoPaths, openDb, resolveNexoPaths } from "@nexo/store";
-import { createLogger, createRedactor, type Redactor } from "@nexo/telemetry";
+import { createLogger, type Redactor } from "@nexo/telemetry";
 import type { Prompter } from "@nexo/tools";
 
 export interface Runtime {
@@ -13,6 +13,7 @@ export interface Runtime {
 	skills: SkillCatalog;
 	engine: Engine;
 	redact: Redactor;
+	settings: Settings;
 }
 
 export interface RuntimeOptions {
@@ -27,8 +28,10 @@ export interface RuntimeOptions {
 export function createRuntime(options: RuntimeOptions): Runtime {
 	const paths = resolveNexoPaths(options.env);
 	ensureNexoDirs(paths);
-	const { config, hash } = loadConfig({ paths, cwd: options.cwd, overrides: options.overrides });
-	const redact = createRedactor(config.redaction.patterns);
+	const models = options.models ?? builtinModels();
+	const settings = createSettings({ paths, cwd: options.cwd, env: options.env, models, overrides: options.overrides });
+	const { config, hash } = settings.loadConfig();
+	const redact = settings.redact;
 	const logger = createLogger({ dir: paths.logs, component: "cli", redact });
 	const db = openDb(paths.db);
 	const skills = loadSkills(config.skills.dirs);
@@ -38,12 +41,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 		configHash: hash,
 		paths,
 		db,
-		models: options.models ?? builtinModels(),
+		models,
 		logger,
 		redact,
 		prompter: options.prompter,
 		skills,
 		onEvent: options.onEvent,
+		resolveApiKey: settings.resolveApiKey,
 	});
-	return { paths, config, db, skills, engine, redact };
+	return { paths, config, db, skills, engine, redact, settings };
 }
