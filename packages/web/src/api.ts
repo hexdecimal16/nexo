@@ -1,8 +1,15 @@
-import { closeSync, constants, createReadStream, existsSync, fstatSync, lstatSync, openSync, readdirSync, readSync, type Stats, statSync } from "node:fs";
+import { closeSync, constants, createReadStream, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readSync, type Stats, statSync } from "node:fs";
 import type { ServerResponse } from "node:http";
-import { relative, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 import {
 	agreementStats,
+	approveOptimRun,
+	checkPromotion,
+	getArtifact,
+	getOptimRun,
+	listOptimCandidates,
+	listOptimRuns,
+	type OptimRunRow,
 	confusionMatrix,
 	COST_DIMENSIONS,
 	costReport,
@@ -63,6 +70,11 @@ import type {
 	MemoryListResponse,
 	MemoryRetireResponse,
 	MetaResponse,
+	OptimApproveResponse,
+	OptimDetailResponse,
+	OptimListResponse,
+	OptimReport,
+	OptimRunItem,
 	PlaybookItem,
 	PlaybookListResponse,
 	PlaybookResponse,
@@ -89,6 +101,8 @@ export interface ApiContext {
 	judge: { key: string | null; warnings: string[] };
 	/** `learning.enabled` of the loaded config: verdicts then store human lessons and enqueue learn jobs. */
 	learning: { enabled: boolean };
+	/** `optimize.minJudgeKappa` of the loaded config, for the approval gate. */
+	optimize: { minJudgeKappa: number };
 }
 
 function requireRun(db: Db, id: string): RunRow {
@@ -440,6 +454,56 @@ export function retirePlaybookItemResponse(ctx: ApiContext, name: string, key: s
 	});
 	const item = getPlaybookItem(ctx.db, skill, key) as PlaybookItemRow;
 	return { item: itemView(ctx, item), version: version ? versionView(version) : null };
+}
+
+function optimItem(ctx: ApiContext, run: OptimRunRow): OptimRunItem {
+	return {
+		...run,
+		baseVersion: getArtifact(ctx.db, run.baseArtifactId)?.version ?? null,
+		bestVersion: run.bestArtifactId ? (getArtifact(ctx.db, run.bestArtifactId)?.version ?? null) : null,
+	};
+}
+
+function requireOptimRun(ctx: ApiContext, id: string): OptimRunRow {
+	const run = getOptimRun(ctx.db, id);
+	if (!run) throw new NexoError({ code: "NOT_FOUND", message: `Optimization ${id} does not exist`, context: { optimRunId: id } });
+	return run;
+}
+
+/** The optimization's report.json; null when there is none or it cannot be read. */
+function readOptimReport(run: OptimRunRow): OptimReport | null {
+	if (!run.reportRef) return null;
+	try {
+		return JSON.parse(readFileSync(join(run.dirPath, run.reportRef), "utf8")) as OptimReport;
+	} catch {
+		return null;
+	}
+}
+
+/** `GET /api/optim`: optimizations, newest first. */
+export function optimListResponse(ctx: ApiContext): OptimListResponse {
+	return { runs: listOptimRuns(ctx.db, { limit: 100 }).map((run) => optimItem(ctx, run)) };
+}
+
+/** `GET /api/optim/{id}`: the optimization, its candidates (lineage), its holdout report and whether it can be approved. */
+export function optimDetailResponse(ctx: ApiContext, id: string): OptimDetailResponse {
+	const run = requireOptimRun(ctx, id);
+	return {
+		run: optimItem(ctx, run),
+		candidates: listOptimCandidates(ctx.db, id).map((c) => {
+			const artifact = getArtifact(ctx.db, c.artifactId);
+			return { ...c, version: artifact?.version ?? null, artifactStatus: artifact?.status ?? null };
+		}),
+		report: readOptimReport(run),
+		promotion: checkPromotion(ctx.db, run, ctx.optimize.minJudgeKappa),
+	};
+}
+
+/** `POST /api/optim/{id}/approve`: a user action; refused with 409 (state) or 403 (judge-only evidence with low κ). */
+export function approveOptimResponse(ctx: ApiContext, id: string): OptimApproveResponse {
+	requireOptimRun(ctx, id);
+	const { promoted, replaced } = approveOptimRun(ctx.db, id, { minJudgeKappa: ctx.optimize.minJudgeKappa, nowIso: ctx.now().toISOString() });
+	return { promoted: versionView(promoted), replaced: replaced ? versionView(replaced) : null, run: optimItem(ctx, requireOptimRun(ctx, id)) };
 }
 
 /** `GET /api/learn/jobs?status=&limit=`: job counts by status and the newest jobs. */
