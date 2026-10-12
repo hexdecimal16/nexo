@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { type Effort, isEffort } from "@nexo/router";
 import { type ErrorPayload, NexoError, toErrorPayload } from "@nexo/telemetry";
 import { parseSkillFile } from "./frontmatter.ts";
@@ -34,6 +35,9 @@ export interface SkillCatalog {
 }
 
 const NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/** Skills shipped with nexo; load it before the configured dirs so a user skill of the same name replaces one. */
+export const BUNDLED_SKILLS_DIR = fileURLToPath(new URL("../bundled", import.meta.url));
 
 function invalid(filePath: string, message: string): NexoError {
 	return new NexoError({ code: "SKILL_INVALID", message: `${filePath}: ${message}`, context: { filePath } });
