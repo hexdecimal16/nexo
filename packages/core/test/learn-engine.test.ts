@@ -96,6 +96,31 @@ describe("memory in run context", () => {
 	});
 });
 
+describe("query embedding", () => {
+	it("is skipped, uncharged, when the retrieval scopes have no live memory", async () => {
+		const server = await embeddingServer();
+		try {
+			const env = makeEnv({
+				config: {
+					models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "slow" }, embedding: { provider: "acme", id: "e1", baseUrl: server.baseUrl } },
+					pricingOverrides: { "acme/e1": { input: 100, output: 0 } },
+				},
+			});
+			env.deps.resolveApiKey = () => "acme-key-123456";
+			addMemory(env.deps.db, { scope: "skill:deploy", type: "fact", content: "alpha fact", importance: 0.5, source: "user" }, env.deps.redact, NOW());
+			capture(env, [fauxAssistantMessage("done")]);
+			const result = await createEngine(env.deps).run({ instruction: "alpha question" });
+			expect(result.status).toBe("succeeded");
+			expect(server.requests).toEqual([]);
+			const spans = listSpans(env.deps.db, result.trajectoryId as string);
+			expect(spans.some((s) => s.kind === "embedding_call")).toBe(false);
+			expect(spans.find((s) => s.kind === "memory_read")?.attrs).toMatchObject({ candidates: 0, selected: [] });
+		} finally {
+			await server.close();
+		}
+	});
+});
+
 describe("playbooks in skills", () => {
 	it("appends the active playbook to a --skill run and snapshots it with the run's artifacts", async () => {
 		const env = makeEnv({ skills: { ci: skillMd("ci", {}) } });

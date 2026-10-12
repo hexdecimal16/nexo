@@ -1,6 +1,6 @@
 import { memoryBlock, type RetrieveOptions, retrieveMemories } from "@nexo/memory";
 import { dataBlock } from "@nexo/scorers";
-import { type ArtifactRow, getActiveArtifact, listPlaybookItems, type PlaybookItemRow, renderPlaybook } from "@nexo/store";
+import { type ArtifactRow, getActiveArtifact, hasLiveMemories, listPlaybookItems, type PlaybookItemRow, renderPlaybook } from "@nexo/store";
 import { toErrorPayload } from "@nexo/telemetry";
 import type { NexoConfig } from "../config/schema.ts";
 import { type ChargedCallDeps, embedCharged } from "./caller.ts";
@@ -24,8 +24,8 @@ function rankOptions(config: NexoConfig, now: Date): Pick<RetrieveOptions, "weig
 }
 
 /**
- * Retrieval at run start (spec §8.3): embeds the instruction when `models.embedding` is set (charged to the run through
- * `deps`; a failure falls back to FTS relevance), ranks the live memories of `scopes`, and records a `memory_read` span
+ * Retrieval at run start (spec §8.3): embeds the instruction when `models.embedding` is set and `scopes` have a live
+ * memory (charged to the run through `deps`; a failure falls back to FTS relevance), ranks the live memories of `scopes`, and records a `memory_read` span
  * with the chosen ids and scores. Never throws for a retrieval problem: the run goes on without memories.
  */
 export async function retrieveRunMemories(deps: ChargedCallDeps, instruction: string, scopes: readonly string[]): Promise<RunMemoryContext> {
@@ -36,7 +36,7 @@ export async function retrieveRunMemories(deps: ChargedCallDeps, instruction: st
 	let embeddingError: unknown = null;
 	try {
 		const endpoint = embeddingEndpoint(config);
-		if (endpoint && instruction.trim()) {
+		if (endpoint && instruction.trim() && hasLiveMemories(db, scopes)) {
 			try {
 				const [vector] = await embedCharged({ ...deps, parentSpanId: spanId }, endpoint, [instruction.slice(0, 8000)], "query");
 				if (vector) embedding = { model: endpoint.model, vector };

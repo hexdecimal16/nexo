@@ -219,6 +219,13 @@ export function liveMemories(db: Db, scopes: readonly string[]): MemoryRow[] {
 		.map(decode);
 }
 
+/** True when any of `scopes` has a live memory. */
+export function hasLiveMemories(db: Db, scopes: readonly string[]): boolean {
+	if (scopes.length === 0) return false;
+	const marks = scopes.map(() => "?").join(", ");
+	return db.prepare(`SELECT 1 FROM memories WHERE scope IN (${marks}) AND superseded_by IS NULL AND retired_at IS NULL LIMIT 1`).get(...scopes) !== undefined;
+}
+
 /** The chain of memories this one replaced, newest first (its history). */
 export function memoryHistory(db: Db, id: string): MemoryRow[] {
 	const out: MemoryRow[] = [];
