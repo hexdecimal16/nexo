@@ -49,6 +49,8 @@ export interface RunJson {
 	scores?: ScoreRow[];
 	/** System 1 → System 2 escalations that took effect. */
 	escalations?: number;
+	/** The optimization this run is a rollout of (or the optimizer's own run); absent or null otherwise. */
+	optimRunId?: string | null;
 }
 
 const SUBDIRS = ["artifacts", "context", "workspace", "tool_outputs", "scores", "subagents"] as const;
