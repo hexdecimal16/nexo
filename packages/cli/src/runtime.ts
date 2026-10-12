@@ -1,6 +1,6 @@
 import type { Models } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { createConfiguredMcpHub, createEngine, createSettings, type DeepPartial, type Engine, type EngineEvent, type NexoConfig, type Settings } from "@nexo/core";
+import { createConfiguredMcpHub, createEngine, createSettings, type DeepPartial, type Engine, type EngineEvent, type LearnEvent, LearnWorker, type NexoConfig, type Settings } from "@nexo/core";
 import type { McpHub } from "@nexo/mcp";
 import { BUNDLED_SKILLS_DIR, loadSkills, type SkillCatalog } from "@nexo/skills";
 import { type Db, ensureNexoDirs, type NexoPaths, openDb, resolveNexoPaths } from "@nexo/store";
@@ -25,6 +25,8 @@ export interface Runtime {
 	settings: Settings;
 	/** The configured MCP servers, null when there are none. Close it when done, or the servers keep the process alive. */
 	mcp: McpHub | null;
+	/** Runs pending learn jobs in this process (`nexo learn`, the drain after `nexo run`). */
+	learner: LearnWorker;
 }
 
 export interface RuntimeOptions {
@@ -34,6 +36,8 @@ export interface RuntimeOptions {
 	models?: Models;
 	overrides?: DeepPartial<NexoConfig>;
 	onEvent?: (event: EngineEvent) => void;
+	/** Receives the learn worker's job events. */
+	onLearnEvent?: (event: LearnEvent) => void;
 }
 
 export function createRuntime(options: RuntimeOptions): Runtime {
@@ -62,5 +66,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 		resolveApiKey: settings.resolveApiKey,
 		...(mcp ? { mcp } : {}),
 	});
-	return { paths, config, db, skills, engine, redact, logger, settings, mcp };
+	return { paths, config, db, skills, engine, redact, logger, settings, mcp, learner: new LearnWorker(engine.env, options.onLearnEvent ? { onEvent: options.onLearnEvent } : {}) };
 }

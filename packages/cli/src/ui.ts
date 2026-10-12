@@ -1,7 +1,27 @@
-import { judgeFamilyWarnings, judgeKey, loadConfig, type NexoConfig } from "@nexo/core";
-import { ensureNexoDirs, isPidAlive, openDb, recoverCrashedRuns, resolveNexoPaths } from "@nexo/store";
+import type { Models } from "@earendil-works/pi-ai";
+import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { createEngineEnv, createSettings, judgeFamilyWarnings, judgeKey, LearnWorker, loadConfig, type NexoConfig } from "@nexo/core";
+import { BUNDLED_SKILLS_DIR, loadSkills } from "@nexo/skills";
+import { type Db, ensureNexoDirs, isPidAlive, type NexoPaths, openDb, recoverCrashedRuns, resolveNexoPaths } from "@nexo/store";
 import { createRedactor, NexoError } from "@nexo/telemetry";
+import { nonInteractivePrompter } from "@nexo/tools";
 import { type ReadOnlyInfo, startWebServer } from "@nexo/web";
+import { openLogger } from "./runtime.ts";
+
+/** How often `nexo ui` looks for pending learn jobs (new runs and verdicts from the UI or other processes). */
+export const UI_LEARN_POLL_MS = 5000;
+
+/** A learn worker for the UI process: same models, keys and redaction as `nexo run`; null when learning is off. */
+function uiLearner(options: { env: NodeJS.ProcessEnv; cwd: string; models?: Models }, paths: NexoPaths, db: Db): LearnWorker | null {
+	const models = options.models ?? builtinModels();
+	const settings = createSettings({ paths, cwd: options.cwd, env: options.env, models });
+	const { config, hash } = settings.loadConfig();
+	if (!config.learning.enabled) return null;
+	const logger = openLogger(settings, paths, "ui");
+	const skills = loadSkills([BUNDLED_SKILLS_DIR, ...config.skills.dirs]);
+	const env = createEngineEnv({ config, configHash: hash, paths, db, models, logger, redact: settings.redact, prompter: nonInteractivePrompter, skills, resolveApiKey: settings.resolveApiKey });
+	return new LearnWorker(env);
+}
 
 export const DEFAULT_UI_PORT = 4317;
 
@@ -39,7 +59,7 @@ export function configUiPort(value: unknown): number {
  * Without a loadable config the UI still starts, but read-only: the API refuses verdicts with CONFIG_INVALID, because
  * comments must not be stored without the user's redaction patterns.
  */
-export async function runUi(options: { env: NodeJS.ProcessEnv; cwd: string; port?: string; io: UiIO; signal?: AbortSignal }): Promise<number> {
+export async function runUi(options: { env: NodeJS.ProcessEnv; cwd: string; port?: string; io: UiIO; signal?: AbortSignal; models?: Models }): Promise<number> {
 	const flagPort = options.port === undefined ? undefined : parsePort(options.port, DEFAULT_UI_PORT);
 	const paths = resolveNexoPaths(options.env);
 	ensureNexoDirs(paths);
@@ -60,16 +80,23 @@ export async function runUi(options: { env: NodeJS.ProcessEnv; cwd: string; port
 	let server: Awaited<ReturnType<typeof startWebServer>>;
 	try {
 		const judge = config ? { key: judgeKey(config), warnings: judgeFamilyWarnings(config) } : undefined;
-		server = await startWebServer({ db, redact: createRedactor(patterns), port, readOnly, judge });
+		server = await startWebServer({ db, redact: createRedactor(patterns), port, readOnly, judge, learning: { enabled: config?.learning.enabled ?? false } });
 	} catch (error) {
 		db.close();
 		throw error;
 	}
+	// Learn jobs from runs, sessions and UI verdicts run here in the background (spec §8.1).
+	const learner = config ? uiLearner(options, paths, db) : null;
+	learner?.kick();
+	const poll = learner ? setInterval(() => learner.kick(), UI_LEARN_POLL_MS) : null;
+	poll?.unref();
 	options.io.stdout.write(`nexo UI: ${server.url}?token=${server.token}\nPress Ctrl-C to stop.\n`);
 	await new Promise<void>((resolve) => {
 		if (!options.signal || options.signal.aborted) return resolve();
 		options.signal.addEventListener("abort", () => resolve(), { once: true });
 	});
+	if (poll) clearInterval(poll);
+	await learner?.stop();
 	await server.close();
 	db.close();
 	options.io.stderr.write("nexo UI stopped\n");

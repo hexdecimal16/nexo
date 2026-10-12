@@ -6,6 +6,7 @@ import { NexoError, toErrorPayload } from "@nexo/telemetry";
 import { nonInteractivePrompter, type Prompter } from "@nexo/tools";
 import { type CliIO, type CliOptions, EXIT_SIGINT, EXIT_SIGTERM, exitCodeFor, printError, USAGE, usageError } from "./common.ts";
 import { evalCommand } from "./eval.ts";
+import { learnCommand, learnEventLine, memoryCommand, playbookCommand } from "./learn.ts";
 import { createTtyPrompter } from "./prompter.ts";
 import { createTtyLineAsker, isInteractiveTerminal, type LineAsker, promptReview } from "./review.ts";
 import { createRuntime } from "./runtime.ts";
@@ -117,6 +118,10 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 			if (event.type === "tool_start") io.stderr.write(`${"  ".repeat(event.depth)}  · ${event.toolName}\n`);
 			if (event.type === "escalation" && event.applied) io.stderr.write(escalationLine(event.depth, event.model, event.trigger, event.reason));
 		},
+		onLearnEvent: (event) => {
+			const line = learnEventLine(event);
+			if (line) io.stderr.write(`learn${line.slice(1)}\n`);
+		},
 	});
 
 	for (const warning of judgeFamilyWarnings(runtime.config)) io.stderr.write(`warning: ${escapeControl(warning)}\n`);
@@ -147,12 +152,21 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 	if (asker && result.trajectoryId) {
 		if (options.signal?.aborted) return EXIT_SIGINT;
 		try {
-			await promptReview({ asker, db: runtime.db, runId: result.trajectoryId, redact: runtime.redact, io, signal: options.signal });
+			await promptReview({ asker, db: runtime.db, runId: result.trajectoryId, redact: runtime.redact, io, signal: options.signal, learn: runtime.config.learning.enabled });
 		} catch (error) {
 			if (!(error instanceof NexoError)) throw error;
 			printError(io, error.toPayload());
 		}
 		if (options.signal?.aborted) return EXIT_SIGINT;
+	}
+	// Learn from this run now, bounded by learning.drainAfterRunMs; a learning failure never changes the exit code.
+	const drainMs = runtime.config.learning.enabled ? runtime.config.learning.drainAfterRunMs : 0;
+	if (drainMs > 0) {
+		try {
+			await runtime.learner.drain({ deadlineMs: drainMs, signal: options.signal });
+		} catch (error) {
+			runtime.logger.warn("learning after the run failed", { error });
+		}
 	}
 	if (result.status === "succeeded") return 0;
 	return result.error ? exitCodeFor(result.error.code) : 1;
@@ -202,13 +216,19 @@ export async function runCli(argv: string[], io: CliIO, options: CliOptions = {}
 				return reindexCommand(io, options);
 			case "eval":
 				return evalCommand(rest, io, options);
+			case "learn":
+				return await learnCommand(rest, io, options);
+			case "memory":
+				return memoryCommand(rest, io, options);
+			case "playbook":
+				return playbookCommand(rest, io, options);
 			case "sessions":
 				return sessionsCommand(rest, io, options);
 			case "settings":
 				return rest.length === 0 ? await settingsScreenCommand(io, options, stdio) : await settingsCommand(rest, io, options, stdio);
 			case "ui": {
 				const { values } = parseArgs({ args: rest, options: { port: { type: "string" } } });
-				return await runUi({ env: options.env ?? process.env, cwd: options.cwd ?? process.cwd(), port: values.port, io, signal: options.signal });
+				return await runUi({ env: options.env ?? process.env, cwd: options.cwd ?? process.cwd(), port: values.port, io, signal: options.signal, models: options.models });
 			}
 			case "help":
 			case "--help":

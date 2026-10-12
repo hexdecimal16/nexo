@@ -52,6 +52,13 @@ export const USAGE = `Usage:
   nexo cost [--by model|tier|day|run|skill] [--since YYYY-MM-DD]
   nexo reindex
   nexo eval judge [--judge <provider/id[+provider/id…]>]   judge-vs-human agreement and Cohen's κ
+  nexo learn [--retry]                     run pending learn jobs (--retry: failed ones with attempts left too)
+  nexo memory list [--scope user|global|skill:<name>] [--type fact|preference|lesson|workflow] [--all]
+  nexo memory add <text...> [--scope …] [--type …] [--importance 0..1]
+  nexo memory retire <id>
+  nexo playbook show <skill> [--all]
+  nexo playbook add <skill> <text...>
+  nexo playbook retire <skill> <key>
   nexo ui [--port <n>]
 `;
 

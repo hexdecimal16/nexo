@@ -96,7 +96,7 @@ export function createTtyLineAsker(input: NodeJS.ReadableStream, output: NodeJS.
  * The post-run review prompt (spec §7.1 step 6). A verdict is written through `recordFeedback`; skip, Ctrl-C, end of
  * input or three unrecognised answers leave the run unreviewed, so it appears in the UI review queue.
  */
-export async function promptReview(options: { asker: LineAsker; db: Db; runId: string; redact: Redactor; io: ReviewIO; signal?: AbortSignal; now?: () => Date }): Promise<ReviewChoice> {
+export async function promptReview(options: { asker: LineAsker; db: Db; runId: string; redact: Redactor; io: ReviewIO; signal?: AbortSignal; now?: () => Date; learn?: boolean }): Promise<ReviewChoice> {
 	try {
 		return await askAndRecord(options);
 	} finally {
@@ -104,7 +104,7 @@ export async function promptReview(options: { asker: LineAsker; db: Db; runId: s
 	}
 }
 
-async function askAndRecord(options: { asker: LineAsker; db: Db; runId: string; redact: Redactor; io: ReviewIO; signal?: AbortSignal; now?: () => Date }): Promise<ReviewChoice> {
+async function askAndRecord(options: { asker: LineAsker; db: Db; runId: string; redact: Redactor; io: ReviewIO; signal?: AbortSignal; now?: () => Date; learn?: boolean }): Promise<ReviewChoice> {
 	const { asker, io, signal } = options;
 	let choice: ReviewChoice | null = null;
 	for (let attempt = 0; attempt < 3 && choice === null; attempt++) {
@@ -127,6 +127,7 @@ async function askAndRecord(options: { asker: LineAsker; db: Db; runId: string; 
 		comment,
 		nowIso: (options.now ?? (() => new Date()))().toISOString(),
 		redact: options.redact,
+		learn: options.learn === true,
 	});
 	io.stderr.write(`Recorded verdict: ${choice === "done" ? "done" : "not done"}.\n`);
 	return choice;
