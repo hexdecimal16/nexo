@@ -234,5 +234,5 @@ export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 	pricingOverrides: {},
 	redaction: { patterns: [] },
 	memory: { enabled: true, maxTokens: 1500, weights: { relevance: 1, importance: 0.5, recency: 0.3 }, tauDays: 14, topK: 20 },
-	learning: { enabled: true, maxPlaybookItems: 50, perJobUsd: 0.05, staleMinutes: 10, drainAfterRunMs: 30_000 },
+	learning: { enabled: true, maxPlaybookItems: 50, perJobUsd: 0.15, staleMinutes: 10, drainAfterRunMs: 30_000 },
 };

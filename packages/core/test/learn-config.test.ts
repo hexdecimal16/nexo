@@ -23,7 +23,7 @@ describe("memory and learning config", () => {
 	it("fills the spec §9 defaults and resolves the reflector to s1", () => {
 		const config = load({ models })();
 		expect(config.memory).toEqual({ enabled: true, maxTokens: 1500, weights: { relevance: 1, importance: 0.5, recency: 0.3 }, tauDays: 14, topK: 20 });
-		expect(config.learning).toEqual({ enabled: true, maxPlaybookItems: 50, perJobUsd: 0.05, staleMinutes: 10, drainAfterRunMs: 30_000 });
+		expect(config.learning).toEqual({ enabled: true, maxPlaybookItems: 50, perJobUsd: 0.15, staleMinutes: 10, drainAfterRunMs: 30_000 });
 		expect(DEFAULT_CONFIG.learning.maxPlaybookItems).toBe(50);
 		expect(reflectorModelSpec(config)).toEqual(models.s1);
 		expect(reflectorModelSpec({ ...config, models: { ...config.models, reflector: { ref: "s2" } } })).toEqual(models.s2);
