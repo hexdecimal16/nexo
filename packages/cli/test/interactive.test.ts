@@ -328,6 +328,10 @@ describe("nexo settings", () => {
 		expect((await run("set", "memory.enabled", "false")).code).toBe(0);
 		expect((await run("set", "learning.perJobUsd", "0.3")).code).toBe(0);
 		expect((await run("set", "memory.maxTokens", "900")).code).toBe(0);
+		expect((await run("set", "optimize.patience", "8")).code).toBe(0);
+		expect(await run("get", "optimize.patience")).toEqual({ code: 0, out: "8" });
+		expect(file().optimize).toEqual({ patience: 8 });
+		expect(await run("reset", "optimize.patience")).toEqual({ code: 0, out: "optimize.patience = 5" });
 		expect(file().memory).toEqual({ enabled: false, maxTokens: 900 });
 		expect(await run("reset", "models.judge")).toEqual({ code: 0, out: "models.judge = unset" });
 		expect(file().models.judge).toBeUndefined();
@@ -340,6 +344,7 @@ describe("nexo settings", () => {
 			["set", "memory.enabled", "maybe"],
 			["set", "scoring.judge", "maybe"],
 			["set", "memory.maxTokens", "-1"],
+			["set", "optimize.minCases", "2"],
 			["reset"],
 			["reset", "nope.key"],
 			["reset", "a", "b"],
