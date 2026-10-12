@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { NexoError, type Redactor } from "@nexo/telemetry";
-import type { Db } from "./db.ts";
+import { type Db, transaction } from "./db.ts";
 import { invalidRequest, runNotFound } from "./errors.ts";
 import { newId } from "./ids.ts";
 import { syncJudgeDisagreement } from "./judge-calibration.ts";
@@ -113,18 +113,21 @@ export function recordFeedback(db: Db, input: FeedbackInput): FeedbackRow {
 		comment: input.redact(comment.trim()),
 		createdAt: input.nowIso,
 	};
-	db.prepare("INSERT INTO feedback (id, run_id, verdict, comment, created_at) VALUES (?, ?, ?, ?, ?)").run(
-		row.id,
-		row.runId,
-		row.verdict,
-		row.comment,
-		row.createdAt,
-	);
-	syncJudgeDisagreement(db, run.id, input.nowIso);
-	if (input.learn) {
-		if (row.verdict === "not_done") storeHumanLesson(db, run, row.comment, input.redact, input.nowIso);
-		enqueueLearnJob(db, { runId: run.id, trigger: "feedback" }, input.nowIso);
-	}
+	// The verdict, its eval case, the human lesson and the learn job are stored together or not at all.
+	transaction(db, () => {
+		db.prepare("INSERT INTO feedback (id, run_id, verdict, comment, created_at) VALUES (?, ?, ?, ?, ?)").run(
+			row.id,
+			row.runId,
+			row.verdict,
+			row.comment,
+			row.createdAt,
+		);
+		syncJudgeDisagreement(db, run.id, input.nowIso);
+		if (input.learn) {
+			if (row.verdict === "not_done") storeHumanLesson(db, run, row.comment, input.redact, input.nowIso);
+			enqueueLearnJob(db, { runId: run.id, trigger: "feedback" }, input.nowIso);
+		}
+	});
 	const latest = latestFeedback(db, run.id) ?? row;
 	writeHumanVerdict(run.dirPath, { verdict: latest.verdict, comment: latest.comment, createdAt: latest.createdAt });
 	return row;

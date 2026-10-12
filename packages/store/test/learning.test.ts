@@ -23,6 +23,7 @@ import {
 	insertSpan,
 	listArtifactVersions,
 	listLearnJobs,
+	latestFeedback,
 	listMemories,
 	MAX_LEARN_ATTEMPTS,
 	listPlaybookItems,
@@ -310,6 +311,16 @@ describe("feedback with learning", () => {
 			expect.objectContaining({ scope: "skill:deploy", type: "lesson", source: "human", importance: 1, sourceRunId: run.id, content: 'The user marked "Ship v2" not done: You skipped the changelog' }),
 		]);
 		expect(listLearnJobs(db, { runId: run.id })).toEqual([expect.objectContaining({ trigger: "feedback", status: "pending" })]);
+	});
+
+	it("stores the verdict, the human lesson and the job together or not at all", () => {
+		const db = openDb(":memory:");
+		const run = runRow({ status: "succeeded" });
+		insertRun(db, run);
+		db.exec("CREATE TRIGGER no_jobs BEFORE INSERT ON learn_jobs BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END;");
+		expect(() => recordFeedback(db, { runId: run.id, verdict: "not_done", comment: "wrong file", nowIso: NOW, redact, learn: true })).toThrow("disk I/O error");
+		expect(latestFeedback(db, run.id)).toBeUndefined();
+		expect(listMemories(db)).toEqual([]);
 	});
 
 	it("writes no lesson for done, an empty comment or learning off", () => {
