@@ -2,10 +2,11 @@ import { BudgetStop, type CandidateRef } from "@nexo/optimize";
 import { describe, expect, it } from "vitest";
 import { getRun, getSpent, insertCandidateArtifact, insertRun, listSpans, RunDir } from "@nexo/store";
 import { runRow } from "../../store/test/fixtures.ts";
+import { estimateCallCostUsd } from "../src/cost/pricing.ts";
 import { createOptimAdapter, rolloutQuality } from "../src/optimize/adapter.ts";
 import type { TestEnv } from "./helpers.ts";
 import { evalCase, optimContext, optimEnv, route, SKILL_HEAD } from "./optimize-helpers.ts";
-import { verdict } from "./scoring-helpers.ts";
+import { judges, verdict } from "./scoring-helpers.ts";
 
 const signal = new AbortController().signal;
 
@@ -145,5 +146,40 @@ describe("reflection proposals", () => {
 		expect(await adapter.proposeNewTexts?.(parent, { body: [] }, ["body"], signal)).toBeNull();
 		expect(events[0]).toMatch(/did not match its schema after one repair/);
 		expect(events[1]).toMatch(/equals the current text/);
+	});
+});
+
+describe("holdout reserve and panel refusals", () => {
+	it("keeps the holdout reserve untouched in the loop phase: judge-rubric judgements and reflections stop with BudgetStop", async () => {
+		const env = optimEnv();
+		route(env, { judge: () => verdict(0.9), reflect: () => JSON.stringify({ text: "New text.", rationale: "r" }) });
+		const run = sourceRun(env, "Write notes", "GOOD notes");
+		const rubric = optimContext(env, "judge_rubric", { budgetUsd: 1 });
+		rubric.ctx.phase = "loop";
+		rubric.ctx.reserveUsd = 1;
+		const ref = { id: "base", artifactId: rubric.base.id, texts: { rubric: "Grade the work." } };
+		await expect(createOptimAdapter(rubric.ctx).evaluate([evalCase("g", "Write notes", { sourceRunId: run, expected: "done" })], ref, false, signal)).rejects.toMatchObject({ name: "BudgetStop", reason: "budget_usd" });
+		expect(rubric.ctx.budget.spentUsd).toBe(0);
+		const skill = optimContext(env, "skill:ci-fix", { budgetUsd: 1 });
+		skill.ctx.phase = "loop";
+		skill.ctx.reserveUsd = 1;
+		const parent: CandidateRef = { id: "base", artifactId: skill.base.id, texts: { body: "Run the linter.\n" } };
+		await expect(createOptimAdapter(skill.ctx).proposeNewTexts?.(parent, { body: [] }, ["body"], signal)).rejects.toMatchObject({ name: "BudgetStop", reason: "budget_usd" });
+		expect(skill.ctx.budget.spentUsd).toBe(0);
+		skill.ctx.phase = "final";
+		expect(await createOptimAdapter(skill.ctx).proposeNewTexts?.(parent, { body: [] }, ["body"], signal)).toEqual({ body: "New text." });
+	});
+
+	it("stops with BudgetStop when one member of a judge panel is refused although the other answered", async () => {
+		const env = optimEnv(judges("gemini-judge", "gpt-judge"));
+		route(env, { judge: () => verdict(0.9) });
+		const run = sourceRun(env, "Write notes", "GOOD notes");
+		const { ctx, base, engineEnv } = optimContext(env, "judge_rubric", { budgetUsd: 1 });
+		// Leaves room for one judge call but not two.
+		const model = engineEnv.registry.get("faux", "gemini-judge");
+		const estimate = estimateCallCostUsd(model, env.deps.config.pricingOverrides, 4000, env.deps.config.budgets.estimateOutputTokens);
+		ctx.budget.charge(1 - estimate * 1.5);
+		const ref = { id: "base", artifactId: base.id, texts: { rubric: "Grade the work." } };
+		await expect(createOptimAdapter(ctx).evaluate([evalCase("g", "Write notes", { sourceRunId: run, expected: "done" })], ref, false, signal)).rejects.toMatchObject({ name: "BudgetStop" });
 	});
 });
