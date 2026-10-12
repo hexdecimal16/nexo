@@ -36,6 +36,8 @@ export interface RunSummary {
 	sessionId: string | null;
 	turnIndex: number | null;
 	sessionTitle: string | null;
+	/** The optimization a rollout belongs to; null for ordinary runs (which are the only ones the runs list shows). */
+	optimRunId: string | null;
 	/** The latest scoring round: mean value and all-passed verdict of the scorers that answered; null when never scored. */
 	score: RunScore | null;
 }
@@ -382,4 +384,134 @@ export interface LearnJob {
 export interface LearnJobsResponse {
 	counts: Record<LearnJobStatus, number>;
 	jobs: LearnJob[];
+}
+
+export type OptimStatus = "running" | "succeeded" | "failed" | "aborted";
+
+/** One candidate's result on one eval case. */
+export interface CaseScore {
+	quality: number;
+	costUsd: number;
+}
+
+export interface OptimRun {
+	id: string;
+	target: string;
+	status: OptimStatus;
+	stopReason: string | null;
+	budgetUsd: number;
+	budgetRollouts: number | null;
+	spentUsd: number;
+	rollouts: number;
+	merge: boolean;
+	seed: number;
+	baseArtifactId: string;
+	bestArtifactId: string | null;
+	dirPath: string;
+	reportRef: string | null;
+	judgeKey: string | null;
+	judgeOnly: boolean | null;
+	holdoutBefore: number | null;
+	holdoutAfter: number | null;
+	promotion: "approved" | "rolled_back" | null;
+	replacedArtifactId: string | null;
+	promotedAt: string | null;
+	pid: number | null;
+	error: ApiErrorBody | null;
+	createdAt: string;
+	endedAt: string | null;
+}
+
+/** An optimization with the version numbers of its base and best candidate. */
+export interface OptimRunItem extends OptimRun {
+	baseVersion: number | null;
+	bestVersion: number | null;
+}
+
+export interface OptimListResponse {
+	runs: OptimRunItem[];
+}
+
+export interface OptimCandidate {
+	id: string;
+	optimRunId: string;
+	artifactId: string;
+	parentIds: string[];
+	iteration: number;
+	origin: "seed" | "reflect" | "merge";
+	component: string | null;
+	minibatch: { caseIds: string[]; parent: CaseScore[]; child: CaseScore[] } | null;
+	perCase: Record<string, CaseScore>;
+	meanScore: number | null;
+	meanCostUsd: number | null;
+	accepted: boolean;
+	createdAt: string;
+	/** The candidate's artifact version and status; null when the artifact is missing. */
+	version: number | null;
+	artifactStatus: "active" | "candidate" | "retired" | null;
+}
+
+export interface DiffLine {
+	op: "same" | "add" | "del";
+	text: string;
+}
+
+export interface OptimReportCase {
+	caseId: string;
+	input: string;
+	before: CaseScore;
+	after: CaseScore;
+	outcome: "win" | "loss" | "tie";
+}
+
+/** report.json of an optimization (spec §8.2.5): the holdout split only. */
+export interface OptimReport {
+	optimRunId: string;
+	target: string;
+	baseArtifactId: string;
+	bestArtifactId: string;
+	improved: boolean;
+	holdout: { cases: OptimReportCase[]; before: CaseScore; after: CaseScore; wins: number; losses: number; ties: number };
+	diff: DiffLine[];
+	lineage: {
+		candidateId: string;
+		artifactId: string;
+		parentIds: string[];
+		iteration: number;
+		origin: "seed" | "reflect" | "merge";
+		component: string | null;
+		accepted: boolean;
+		meanScore: number | null;
+		meanCostUsd: number | null;
+		minibatch: { parent: number; child: number } | null;
+	}[];
+	evidence: { judgeOnly: boolean; humanScored: boolean; judgeKey: string | null; kappa: number | null; minJudgeKappa: number };
+	stopReason: string;
+	spentUsd: number;
+	rollouts: number;
+	iterations: number;
+	merges: number;
+	mergeNote: string | null;
+	createdAt: string;
+}
+
+/** Whether the best candidate may be approved now, and why not. */
+export interface PromotionState {
+	allowed: boolean;
+	error: ApiErrorBody | null;
+	kappa: number | null;
+}
+
+export interface OptimDetailResponse {
+	run: OptimRunItem;
+	candidates: OptimCandidate[];
+	/** null while running, after an abort or failure, or when report.json is missing or unreadable. */
+	report: OptimReport | null;
+	promotion: PromotionState;
+}
+
+export interface OptimApproveResponse {
+	promoted: PlaybookVersion;
+	replaced: PlaybookVersion | null;
+	run: OptimRunItem;
 }
