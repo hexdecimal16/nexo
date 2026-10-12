@@ -191,4 +191,16 @@ describe("runGepa", () => {
 		const result = await run(h, { body: "v1" }, { merge: true, patience: 5 });
 		expect(result.merges).toBe(0);
 	});
+
+	it("throws when the adapter returns a different number of scores than cases, on the minibatch and on the pareto split", async () => {
+		for (const size of [MINIBATCH_SIZE, PARETO.length]) {
+			const h = harness([{ body: "v3" }]);
+			const evaluate = h.adapter.evaluate.bind(h.adapter);
+			h.adapter.evaluate = async (batch, candidate, traces, signal) => {
+				const result = await evaluate(batch, candidate, traces, signal);
+				return batch.length === size ? { ...result, scores: result.scores.slice(1) } : result;
+			};
+			await expect(run(h, { body: "v1" })).rejects.toThrow(/returned \d+ scores for \d+ cases/);
+		}
+	});
 });

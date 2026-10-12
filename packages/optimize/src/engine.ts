@@ -136,9 +136,14 @@ export async function runGepa(options: GepaOptions): Promise<GepaResult> {
 		nodes.set(ref.id, { id: ref.id, parentIds });
 		texts.set(ref.id, ref.texts);
 	};
+	const evaluate = async (batch: readonly EvalCase[], ref: CandidateRef, captureTraces: boolean): Promise<EvaluationBatch> => {
+		const result = await adapter.evaluate(batch, ref, captureTraces, signal);
+		if (result.scores.length !== batch.length) throw new Error(`the adapter returned ${result.scores.length} scores for ${batch.length} cases`);
+		return result;
+	};
 	const evaluatePareto = async (ref: CandidateRef): Promise<Record<string, CaseScore>> => {
-		const result = await adapter.evaluate(options.pareto, ref, false, signal);
-		return Object.fromEntries(options.pareto.map((c, i) => [c.id, result.scores[i] ?? { quality: 0, costUsd: 0 }]));
+		const result = await evaluate(options.pareto, ref, false);
+		return Object.fromEntries(options.pareto.map((c, i) => [c.id, result.scores[i] as CaseScore]));
 	};
 
 	try {
@@ -162,7 +167,7 @@ export async function runGepa(options: GepaOptions): Promise<GepaResult> {
 			const component = options.components[componentIndex++ % options.components.length] as string;
 			emit({ type: "iteration", iteration: iterations, parentId, component });
 			const batch = sampleWithoutReplacement(options.feedback, MINIBATCH_SIZE, rng);
-			const parentEval = await adapter.evaluate(batch, parent, true, signal);
+			const parentEval = await evaluate(batch, parent, true);
 			const dataset = adapter.makeReflectiveDataset(parent, parentEval, [component]);
 			const proposed = await propose(parent, dataset, [component], signal);
 			if (!proposed) {
@@ -178,7 +183,7 @@ export async function runGepa(options: GepaOptions): Promise<GepaResult> {
 			}
 			const child = callbacks.createCandidate({ parentIds: [parentId], texts: childTexts, iteration: iterations, origin: "reflect", component });
 			remember(child, [parentId]);
-			const childEval = await adapter.evaluate(batch, child, false, signal);
+			const childEval = await evaluate(batch, child, false);
 			const parentQuality = meanQuality(parentEval.scores);
 			const childQuality = meanQuality(childEval.scores);
 			const accepted = childQuality > parentQuality + EPS;
