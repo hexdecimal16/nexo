@@ -278,3 +278,108 @@ export interface JudgeCalibrationResponse {
 	history: Calibration[];
 	disagreements: Disagreement[];
 }
+export type MemoryType = "fact" | "preference" | "lesson" | "workflow";
+export type MemorySource = "ace" | "human" | "user";
+
+export interface Memory {
+	id: string;
+	scope: string;
+	type: MemoryType;
+	content: string;
+	importance: number;
+	source: MemorySource;
+	sourceRunId: string | null;
+	supersededBy: string | null;
+	retiredAt: string | null;
+	createdAt: string;
+	lastUsedAt: string | null;
+}
+
+export interface MemoryListResponse {
+	memories: Memory[];
+}
+
+export interface MemoryDetailResponse {
+	memory: Memory;
+	/** The memories this one replaced, newest first. */
+	history: Memory[];
+}
+
+export interface MemoryRetireResponse {
+	memory: Memory;
+}
+
+export interface PlaybookSummary {
+	skill: string;
+	activeItems: number;
+	version: number | null;
+	origin: "manual" | "ace" | "gepa" | null;
+}
+
+export interface PlaybookListResponse {
+	playbooks: PlaybookSummary[];
+}
+
+export interface PlaybookHistoryEntry {
+	id: string;
+	itemId: string;
+	action: "add" | "update" | "retire" | "helpful" | "harmful" | "prune";
+	content: string | null;
+	actor: "ace" | "human" | "user";
+	runId: string | null;
+	createdAt: string;
+}
+
+export interface PlaybookItem {
+	id: string;
+	skill: string;
+	key: string;
+	content: string;
+	helpful: number;
+	harmful: number;
+	source: "ace" | "human";
+	status: "active" | "retired";
+	sourceRunId: string | null;
+	createdAt: string;
+	updatedAt: string;
+	history: PlaybookHistoryEntry[];
+}
+
+export interface PlaybookVersion {
+	id: string;
+	version: number;
+	origin: "manual" | "ace" | "gepa";
+	status: "active" | "candidate" | "retired";
+	createdAt: string;
+}
+
+export interface PlaybookResponse {
+	skill: string;
+	items: PlaybookItem[];
+	/** Every artifact version, newest first. */
+	versions: PlaybookVersion[];
+}
+
+export interface PlaybookRetireResponse {
+	item: PlaybookItem;
+	version: PlaybookVersion | null;
+}
+
+export type LearnJobStatus = "pending" | "running" | "succeeded" | "failed";
+
+export interface LearnJob {
+	id: string;
+	runId: string;
+	kind: string;
+	trigger: "run_end" | "feedback";
+	status: LearnJobStatus;
+	attempts: number;
+	lastError: ApiErrorBody | null;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface LearnJobsResponse {
+	counts: Record<LearnJobStatus, number>;
+	jobs: LearnJob[];
+}
