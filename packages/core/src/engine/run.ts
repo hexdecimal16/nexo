@@ -28,13 +28,14 @@ import {
 	TriggerMonitor,
 } from "@nexo/router";
 import type { McpHub } from "@nexo/mcp";
-import { createLoadSkillTool, formatSkillIndex, type SkillCatalog } from "@nexo/skills";
+import { createLoadSkillTool, formatSkillIndex, parseSkillFile, type Skill, type SkillCatalog } from "@nexo/skills";
 import {
+	type ArtifactKind,
+	type ArtifactRow,
 	createArtifactSet,
 	type ArtifactSetMember,
 	type Db,
 	enqueueLearnJob,
-	ensureManualArtifact,
 	getActiveArtifact,
 	insertRun,
 	isPidAlive,
@@ -43,6 +44,7 @@ import {
 	newId,
 	type NexoPaths,
 	recoverCrashedRuns,
+	resolveSourcedArtifact,
 	RunDir,
 	sessionRunDirs,
 	type RunJson,
@@ -248,6 +250,19 @@ export interface ParentLink {
 	changeTracker: ChangeTracker | null;
 	parentRemainingFraction: number;
 	sessionId: string | null;
+	optimRunId: string | null;
+}
+
+/** Makes a root run an optimization rollout (spec §8.2): isolated, charged to the optimization, never learned from. */
+export interface RolloutOptions {
+	/** The optimization; recorded on the run and its run.json, and spend is also charged to `optim:<id>`. */
+	optimRunId: string;
+	/** Where the rollout's run directory is created (`~/.nexo/optim/<id>/rollouts`). */
+	runsRoot: string;
+	/** The candidate version the run uses instead of the version a normal run would use for its kind and name. */
+	candidate: ArtifactRow;
+	/** The case's reference answer and feedback, shown to the run's scorers. */
+	reference?: string;
 }
 
 export interface ExecuteInput {
@@ -262,6 +277,8 @@ export interface ExecuteInput {
 	memoryContext?: RunMemoryContext;
 	/** Called with what retrieval at run start chose (not called when `memoryContext` was given). */
 	onMemoryContext?: (context: RunMemoryContext) => void;
+	/** Set for an optimization rollout (root runs only). */
+	rollout?: RolloutOptions;
 }
 
 /** Context handed to extra tool factories (the spawn tool) for the run being built. */
@@ -280,6 +297,7 @@ export interface RunToolContext {
 	recordTaskGraph: (record: TaskGraphRecord) => void;
 	addChildCost: (usd: number, unknown: boolean) => void;
 	sessionId: string | null;
+	optimRunId: string | null;
 }
 
 export type ExtraToolsFactory = (ctx: RunToolContext) => AgentTool<any>[];
@@ -382,6 +400,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	const { request, budget, parent } = input;
 	const depth = parent ? parent.depth : 0;
 	const sessionId = parent ? parent.sessionId : (request.sessionId ?? null);
+	const rollout = parent ? undefined : input.rollout;
+	const optimRunId = parent ? parent.optimRunId : (rollout?.optimRunId ?? null);
 
 	// Resolve skill, model and workspace before creating anything on disk.
 	const skill = request.skill ? deps.skills.skills.get(request.skill) : undefined;
@@ -412,8 +432,9 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		model = env.registry.get(resolved.provider, resolved.id);
 		resolved = { ...resolved, effort: env.registry.clampEffort(model, resolved.effort) };
 		escalationTarget = env.registry.get(config.models.s2.provider, config.models.s2.id);
-		sharedWorkspace = resolveSharedWorkspace(request, parent);
-		runDir = parent ? parent.runDir.child(runId) : RunDir.create(deps.paths.runs, runId, deps.redact);
+		// A rollout always works in its own run workspace, never in a --workspace directory.
+		sharedWorkspace = rollout ? null : resolveSharedWorkspace(request, parent);
+		runDir = parent ? parent.runDir.child(runId) : RunDir.create(rollout?.runsRoot ?? deps.paths.runs, runId, deps.redact);
 	} catch (error) {
 		return failedResult(deps.redact, error);
 	}
@@ -452,6 +473,23 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	let memoryContext: RunMemoryContext = emptyMemoryContext();
 	/** Charges calls made for memory (the query embedding) to this run; set once the run span exists. */
 	let memoryDeps: ChargedCallDeps | null = null;
+	/** The version a run uses for an artifact with a source: the rollout's candidate, else the sourced version (spec D2). */
+	const versionOf = (kind: ArtifactKind, name: string, source: string, nowIso: string): ArtifactRow =>
+		rollout && rollout.candidate.kind === kind && rollout.candidate.name === name
+			? rollout.candidate
+			: resolveSourcedArtifact(db, kind, name, deps.redact(source), nowIso);
+	/** The text a run uses: the source itself while its manual mirror is in use, else the promoted or candidate text. */
+	const textOf = (artifact: ArtifactRow, source: string): string => (artifact.origin === "manual" ? source : artifact.content);
+	/** A skill with the body of the version this run uses. */
+	const effectiveSkill = (s: Skill, nowIso: string): { skill: Skill; artifact: ArtifactRow } => {
+		const artifact = versionOf("skill", s.name, s.content, nowIso);
+		if (artifact.origin === "manual") return { skill: s, artifact };
+		return { skill: { ...s, content: artifact.content, body: parseSkillFile(artifact.content, s.filePath).body }, artifact };
+	};
+	let systemPromptText = DEFAULT_SYSTEM_PROMPT;
+	let plannerPromptText = DEFAULT_PLANNER_PROMPT;
+	/** The `--skill` skill with the body this run uses. */
+	let runSkill: Skill | undefined = skill;
 
 	const recorder = new Recorder({ db, runDir, runId, now, redact: deps.redact });
 	const runJson = (status: RunStatus, output: string, error: ErrorPayload | null): RunJson => ({
@@ -483,6 +521,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		...(parent ? {} : { sessionId, turnIndex: request.turnIndex ?? null }),
 		...(scoreRows.length > 0 ? { scores: scoreRows } : {}),
 		escalations,
+		...(optimRunId ? { optimRunId } : {}),
 	});
 
 	// Setup up to and including the DB row. A failure here leaves no row, only a failed run.json.
@@ -492,14 +531,22 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		// Snapshot the exact artifacts this run uses.
 		const nowIso = now().toISOString();
 		const members: ArtifactSetMember[] = [];
-		const snapshot = (kind: ArtifactSetMember["kind"], name: string, content: string, relPath: string) => {
-			const a = ensureManualArtifact(db, kind, name, deps.redact(content), nowIso);
-			members.push({ kind, name, artifactId: a.id, version: a.version });
+		/** Adds the version to the run's artifact set and writes the text the run uses into `artifacts/`. */
+		const snapshot = (artifact: ArtifactRow, content: string, relPath: string) => {
+			members.push({ kind: artifact.kind, name: artifact.name, artifactId: artifact.id, version: artifact.version });
 			runDir.writeArtifact(relPath, content);
 		};
-		snapshot("system_prompt", "default", DEFAULT_SYSTEM_PROMPT, "system_prompt.md");
-		snapshot("planner_prompt", "default", DEFAULT_PLANNER_PROMPT, "planner_prompt.md");
-		if (skill) snapshot("skill", skill.name, skill.content, `skills/${skill.name}/SKILL.md`);
+		const systemVersion = versionOf("system_prompt", "default", DEFAULT_SYSTEM_PROMPT, nowIso);
+		systemPromptText = textOf(systemVersion, DEFAULT_SYSTEM_PROMPT);
+		snapshot(systemVersion, systemPromptText, "system_prompt.md");
+		const plannerVersion = versionOf("planner_prompt", "default", DEFAULT_PLANNER_PROMPT, nowIso);
+		plannerPromptText = textOf(plannerVersion, DEFAULT_PLANNER_PROMPT);
+		snapshot(plannerVersion, plannerPromptText, "planner_prompt.md");
+		if (skill) {
+			const effective = effectiveSkill(skill, nowIso);
+			runSkill = effective.skill;
+			snapshot(effective.artifact, effective.skill.content, `skills/${skill.name}/SKILL.md`);
+		}
 		if (skill && startPlaybook?.content.trim()) {
 			members.push({ kind: "playbook", name: skill.name, artifactId: startPlaybook.id, version: startPlaybook.version });
 			runDir.writeArtifact(`playbooks/${skill.name}.md`, startPlaybook.content);
@@ -540,6 +587,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			error: null,
 			sessionId: parent ? null : sessionId,
 			turnIndex: parent ? null : (request.turnIndex ?? null),
+			optimRunId,
 		});
 	} catch (caught) {
 		logger.error("run setup failed", { error: caught });
@@ -681,8 +729,9 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			}),
 			createLoadSkillTool({
 				catalog: deps.skills,
+				// Records the version in use (sourced, promoted or the rollout's candidate) and serves its body.
+				resolve: (s) => effectiveSkill(s, now().toISOString()).skill,
 				onLoad: (s) => {
-					ensureManualArtifact(db, "skill", s.name, deps.redact(s.content), now().toISOString());
 					runDir.writeArtifact(`skills/${s.name}/SKILL.md`, s.content);
 					const hint = monitor.skillLoaded(s.name, s.meta.model);
 					if (hint) escalate(hint, "mid_run");
@@ -713,6 +762,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				costUnknown ||= unknown;
 			},
 			sessionId,
+			optimRunId,
 		};
 		for (const factory of extraToolFactories) baseTools.push(...factory(toolCtx));
 		if (deps.mcp) baseTools.push(...(await deps.mcp.tools()));
@@ -726,7 +776,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			budget,
 			signal: input.signal ?? new AbortController().signal,
 			charge: (usd, unknown) => {
-				recordSpend(db, rootRunId, usd, now(), sessionId);
+				recordSpend(db, rootRunId, usd, now(), sessionId, optimRunId);
 				ownCost += usd;
 				costUnknown ||= unknown;
 			},
@@ -742,12 +792,12 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		if (memoryContext.block) runDir.writeContext("memories.md", memoryContext.block);
 
 		const systemPrompt = renderSystemPrompt({
-			systemPrompt: DEFAULT_SYSTEM_PROMPT,
-			plannerPrompt: tools.some((t) => t.name === "spawn") ? DEFAULT_PLANNER_PROMPT : null,
+			systemPrompt: systemPromptText,
+			plannerPrompt: tools.some((t) => t.name === "spawn") ? plannerPromptText : null,
 			workspace,
 			skillIndex: formatSkillIndex(deps.skills),
-			activeSkill: skill
-				? { name: skill.name, body: startPlaybookSection ? `${skill.body}\n\n${startPlaybookSection}` : skill.body }
+			activeSkill: runSkill
+				? { name: runSkill.name, body: startPlaybookSection ? `${runSkill.body}\n\n${startPlaybookSection}` : runSkill.body }
 				: undefined,
 			memories: memoryContext.block,
 		});
@@ -764,7 +814,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		const chargeCall = (callModel: Model<Api>, msg: AssistantMessage) => {
 			const priced = priceUsage(callModel, msg.usage, overrides);
 			budget.charge(priced.costUsd);
-			recordSpend(db, rootRunId, priced.costUsd, now(), sessionId);
+			recordSpend(db, rootRunId, priced.costUsd, now(), sessionId, optimRunId);
 			ownCost += priced.costUsd;
 			costUnknown ||= priced.costUnknown;
 			tokensIn += msg.usage.input + msg.usage.cacheRead + msg.usage.cacheWrite;
@@ -1048,6 +1098,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 						runDir: runDir.root,
 						workspace,
 						trajectory: summarizeSpans(listSpans(db, runId)),
+						...(rollout?.reference ? { reference: rollout.reference } : {}),
 					};
 					// The self-check only feeds escalation, so it is skipped when an escalation could not happen anyway.
 					const selfCheck = selfCheckOn && currentBlock() === null ? await runSelfCheck(scoring, active.model, active.resolved.effort, active.resolved.role ?? "custom", scoreInput) : null;
@@ -1150,8 +1201,9 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			escalations,
 		}),
 	);
-	// Online learning (spec §7.1 step 6, §8.1): a root run that was not interrupted gets a reflect job; it runs later, in a worker.
-	if (!parent && config.learning.enabled && status !== "aborted") {
+	// Online learning (spec §7.1 step 6, §8.1): a root run that was not interrupted gets a reflect job; it runs later, in a
+	// worker. Optimization rollouts are never learned from.
+	if (!parent && !optimRunId && config.learning.enabled && status !== "aborted") {
 		attempt("enqueueing the learn job", () => enqueueLearnJob(db, { runId, trigger: "run_end" }, now().toISOString()));
 	}
 	attempt("run_end event", () => deps.onEvent?.({ type: "run_end", runId, depth, status, costUsd: totalCost }));

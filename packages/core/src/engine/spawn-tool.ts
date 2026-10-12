@@ -76,6 +76,7 @@ async function runSpawn(
 					changeTracker: ctx.changeTracker,
 					parentRemainingFraction,
 					sessionId: ctx.sessionId,
+					optimRunId: ctx.optimRunId,
 				},
 			});
 			ctx.addChildCost(result.costUsd, result.costUnknown);

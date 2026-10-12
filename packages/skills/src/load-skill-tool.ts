@@ -8,6 +8,8 @@ const LoadSkillParams = Type.Object({
 
 export interface LoadSkillToolOptions {
 	catalog: SkillCatalog;
+	/** The skill as this run uses it (a promoted or candidate body); called before `onLoad` and `appendix`. */
+	resolve?: (skill: Skill) => Skill;
 	onLoad?: (skill: Skill) => void;
 	/** Text appended to the skill body (its playbook and skill memories); an empty string appends nothing. */
 	appendix?: (skill: Skill) => string;
@@ -29,7 +31,8 @@ export function createLoadSkillTool(options: LoadSkillToolOptions): AgentTool<ty
 		description: "Load a skill's full instructions by name. Call this before following a skill.",
 		parameters: LoadSkillParams,
 		execute: async (_toolCallId, params) => {
-			const skill = options.catalog.skills.get(params.name);
+			const found = options.catalog.skills.get(params.name);
+			const skill = found && options.resolve ? options.resolve(found) : found;
 			if (!skill) {
 				const available = [...options.catalog.skills.keys()].join(", ") || "(none)";
 				return {
