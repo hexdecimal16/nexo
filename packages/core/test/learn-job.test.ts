@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
 	addMemory,
@@ -93,14 +94,41 @@ describe("reflect job", () => {
 		expect(s.calls()).toBe(1);
 	});
 
-	it("refuses a call whose estimate exceeds learning.perJobUsd", async () => {
-		const env = makeEnv({ config: { learning: { perJobUsd: 0.000001 } } });
+	it("fails before any call with non-retryable BUDGET_EXCEEDED naming learning.perJobUsd when the reflector and curator calls cannot both fit", async () => {
+		// One "slow" call reserves about $0.021 (2048 output tokens at $10/M), so each call fits $0.03 but the two together do not.
+		const env = makeEnv({ config: { models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "slow" }, reflector: { provider: "faux", id: "slow" } }, learning: { perJobUsd: 0.03 } } });
 		const s = script(env, ["Done."]);
 		const { result, learnEnv } = await finishedRun(env);
 		const job = queueJob(env, result.trajectoryId as string, "run_end");
 		await new LearnWorker(learnEnv).drain();
-		expect(getLearnJob(env.deps.db, job.id)?.lastError).toMatchObject({ code: "BUDGET_EXCEEDED", message: expect.stringContaining("reflector") });
+		const error = getLearnJob(env.deps.db, job.id)?.lastError;
+		expect(error).toMatchObject({ code: "BUDGET_EXCEEDED", retryable: false, message: expect.stringContaining("learning.perJobUsd") });
+		const needed = Number(/needs about \$(\d+\.\d+)/.exec(error?.message ?? "")?.[1]);
+		expect(needed).toBeGreaterThan(0.041);
+		expect(needed).toBeLessThan(0.06);
+		expect(error?.hint).toContain("learning.perJobUsd");
 		expect(s.calls()).toBe(1);
+		expect(listSpans(env.deps.db, result.trajectoryId as string).filter((sp) => sp.kind === "learn_call")).toEqual([]);
+	});
+
+	it("caps reflector and curator replies at 2048 output tokens", async () => {
+		const env = makeEnv();
+		const caps: (number | undefined)[] = [];
+		script(env, [
+			"Done.",
+			(_ctx, opts) => {
+				caps.push(opts?.maxTokens);
+				return fauxAssistantMessage(reflection([lesson("Run the linter first")]));
+			},
+			(_ctx, opts) => {
+				caps.push(opts?.maxTokens);
+				return fauxAssistantMessage(delta());
+			},
+		]);
+		const { result, learnEnv } = await finishedRun(env);
+		queueJob(env, result.trajectoryId as string, "run_end");
+		expect((await new LearnWorker(learnEnv).drain()).succeeded).toBe(1);
+		expect(caps).toEqual([2048, 2048]);
 	});
 
 	it("rejects the curator superseding a human lesson and applies the rest", async () => {

@@ -4,11 +4,51 @@ import { NexoError, toErrorPayload } from "@nexo/telemetry";
 import type { Static, TSchema } from "typebox";
 import type { NexoConfig } from "../config/schema.ts";
 import { RunBudget } from "../cost/budget.ts";
-import { priceUsage } from "../cost/pricing.ts";
+import { estimateCallCostUsd, priceUsage } from "../cost/pricing.ts";
 import { runChargedCompletion } from "../engine/charged-completion.ts";
 import type { Recorder } from "../engine/recorder.ts";
 import type { EngineEnv } from "../engine/run.ts";
 import { type EmbeddingEndpoint, embeddingCost, embedTexts, estimateEmbeddingUsd, type FetchLike, reflectorModelSpec } from "./embedder.ts";
+
+/** Output tokens a reflector or curator reply is capped at (and its estimate assumes), at most `budgets.estimateOutputTokens`. */
+export const LEARN_MAX_OUTPUT_TOKENS = 2048;
+
+function learnOutputTokens(config: NexoConfig): number {
+	return Math.min(LEARN_MAX_OUTPUT_TOKENS, config.budgets.estimateOutputTokens);
+}
+
+/** The reserved estimate of one reflector or curator call with a prompt of `promptChars` characters. */
+export function estimateLearnCallUsd(env: EngineEnv, promptChars: number): number {
+	const { config } = env.deps;
+	const spec = reflectorModelSpec(config);
+	return estimateCallCostUsd(env.registry.get(spec.provider, spec.id), config.pricingOverrides, promptChars, learnOutputTokens(config));
+}
+
+/**
+ * Checked before a job spends anything: throws BUDGET_EXCEEDED when `neededUsd` (the reflector and curator estimates) is
+ * more than the job budget. Over `learning.perJobUsd` it is not retryable (only a config change helps); over what is
+ * left of the daily or monthly budget it is retryable.
+ */
+export function ensureLearnBudget(config: NexoConfig, budget: RunBudget, neededUsd: number): void {
+	if (neededUsd <= budget.remainingUsd()) return;
+	const needed = `$${neededUsd.toFixed(4)}`;
+	if (neededUsd > config.learning.perJobUsd) {
+		throw new NexoError({
+			code: "BUDGET_EXCEEDED",
+			message: `A learn job on models.reflector needs about ${needed} for its reflector and curator calls, more than learning.perJobUsd ($${config.learning.perJobUsd})`,
+			retryable: false,
+			hint: `Set learning.perJobUsd to at least ${needed}, or choose a cheaper models.reflector`,
+			context: { neededUsd, perJobUsd: config.learning.perJobUsd },
+		});
+	}
+	throw new NexoError({
+		code: "BUDGET_EXCEEDED",
+		message: `A learn job needs about ${needed} for its reflector and curator calls, more than is left of the daily or monthly budget ($${budget.remainingUsd().toFixed(4)})`,
+		retryable: true,
+		hint: "Run `nexo learn --retry` after the budget resets, or raise the budget",
+		context: { neededUsd, leftUsd: budget.remainingUsd() },
+	});
+}
 
 /**
  * The budget of one learn job: `learning.perJobUsd`, capped by what is left of the daily and monthly budgets. Throws
@@ -58,8 +98,8 @@ function refused(what: string, estimate: number, budget: RunBudget): NexoError {
 }
 
 /**
- * One reflector or curator completion on the `models.reflector` model (`runChargedCompletion`): each attempt reserves
- * its estimate from the job budget and is a `learn_call` span with tier `reflector` or `curator`; the priced reply is
+ * One reflector or curator completion on the `models.reflector` model (`runChargedCompletion`), its reply capped at
+ * LEARN_MAX_OUTPUT_TOKENS: each attempt reserves its estimate from the job budget and is a `learn_call` span with tier `reflector` or `curator`; the priced reply is
  * charged to the job budget and through `deps.charge` (the day and month ledgers).
  */
 export async function learnCompletion(deps: ChargedCallDeps, request: { system: string; user: string; tier: "reflector" | "curator"; purpose: string }): Promise<string> {
@@ -87,6 +127,7 @@ export async function learnCompletion(deps: ChargedCallDeps, request: { system: 
 			system: request.system,
 			user: request.user,
 			effort,
+			outputTokens: learnOutputTokens(config),
 			span: { kind: "learn_call", name: `${request.purpose} ${model.id}`, parentSpanId: deps.parentSpanId, tier: request.tier, attrs: { purpose: request.purpose } },
 		},
 		deps.signal,

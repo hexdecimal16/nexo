@@ -33,7 +33,7 @@ import { NexoError, toErrorPayload } from "@nexo/telemetry";
 import { Recorder } from "../engine/recorder.ts";
 import type { EngineEnv } from "../engine/run.ts";
 import { summarizeSpans } from "../scoring/runner.ts";
-import { type ChargedCallDeps, embedCharged, learnBudget, ledgerCharge, structuredLearnCall } from "./caller.ts";
+import { type ChargedCallDeps, embedCharged, ensureLearnBudget, estimateLearnCallUsd, learnBudget, ledgerCharge, structuredLearnCall } from "./caller.ts";
 import { embeddingEndpoint, type FetchLike } from "./embedder.ts";
 
 /** Memories without a vector that one job embeds before reflecting (user-added and older memories catch up this way). */
@@ -106,6 +106,32 @@ export async function runLearnJob(env: EngineEnv, job: LearnJobRow, options: { w
 		},
 	};
 	try {
+		const spans = listSpans(db, run.id);
+		const skills = skillsUsed(run.skill, spans);
+		const playbooks = skills.map((name) => ({ name, items: listPlaybookItems(db, name).map((i) => ({ key: i.key, source: i.source, content: i.content })) }));
+		const scores = listScores(db, run.id);
+		const lastRound = Math.max(-1, ...scores.map((s) => s.round));
+		let output = "";
+		try {
+			output = readRunJson(run.dirPath).output ?? "";
+		} catch {
+			output = "";
+		}
+		const feedback = latestFeedback(db, run.id);
+		const reflectorUser = reflectorPrompt({
+			instruction: run.instruction,
+			status: run.status,
+			output,
+			trajectory: renderTrajectory(summarizeSpans(spans), 6000),
+			scores: scores
+				.filter((s) => s.round === lastRound)
+				.map((s) => ({ name: s.scorerName, status: s.status, value: s.value, passed: s.passed, rationale: s.rationale })),
+			verdict: feedback ? { verdict: feedback.verdict, comment: feedback.comment } : null,
+			skills: playbooks,
+		});
+		// Before anything is spent: the reflector call and a curator call at least its system prompt long must fit the budget.
+		ensureLearnBudget(config, budget, estimateLearnCallUsd(env, REFLECTOR_SYSTEM.length + reflectorUser.length) + estimateLearnCallUsd(env, CURATOR_SYSTEM.length));
+
 		const endpoint = embeddingEndpoint(config);
 		if (endpoint) {
 			const missing = memoriesWithoutEmbedding(db, endpoint.model, EMBED_BACKFILL_PER_JOB);
@@ -121,33 +147,7 @@ export async function runLearnJob(env: EngineEnv, job: LearnJobRow, options: { w
 			}
 		}
 
-		const spans = listSpans(db, run.id);
-		const skills = skillsUsed(run.skill, spans);
-		const playbooks = skills.map((name) => ({ name, items: listPlaybookItems(db, name).map((i) => ({ key: i.key, source: i.source, content: i.content })) }));
-		const scores = listScores(db, run.id);
-		const lastRound = Math.max(-1, ...scores.map((s) => s.round));
-		let output = "";
-		try {
-			output = readRunJson(run.dirPath).output ?? "";
-		} catch {
-			output = "";
-		}
-		const feedback = latestFeedback(db, run.id);
-		const reflection = await structuredLearnCall(deps, ReflectionSchema, {
-			system: REFLECTOR_SYSTEM,
-			user: reflectorPrompt({
-				instruction: run.instruction,
-				status: run.status,
-				output,
-				trajectory: renderTrajectory(summarizeSpans(spans), 6000),
-				scores: scores
-					.filter((s) => s.round === lastRound)
-					.map((s) => ({ name: s.scorerName, status: s.status, value: s.value, passed: s.passed, rationale: s.rationale })),
-				verdict: feedback ? { verdict: feedback.verdict, comment: feedback.comment } : null,
-				skills: playbooks,
-			}),
-			tier: "reflector",
-		});
+		const reflection = await structuredLearnCall(deps, ReflectionSchema, { system: REFLECTOR_SYSTEM, user: reflectorUser, tier: "reflector" });
 		if (reflection.lessons.length === 0 && reflection.playbookTags.length === 0) {
 			markSucceeded();
 			return { lessons: 0, curation: null, costUsd, costUnknown };

@@ -31,6 +31,8 @@ export interface ChargedCompletionRequest {
 	system: string;
 	user: string;
 	effort: Effort;
+	/** Output tokens the reply is capped at and the estimate assumes; defaults to `budgets.estimateOutputTokens`. */
+	outputTokens?: number;
 	/** The span each attempt is recorded as. */
 	span: { kind: SpanKind; name: string; parentSpanId: string; tier: string; attrs: Record<string, unknown> };
 }
@@ -38,7 +40,7 @@ export interface ChargedCompletionRequest {
 /**
  * One LLM completion outside the agent loop (judge, self-check, reflector, curator). Each attempt reserves its estimate
  * from `payer.budget` (so parallel calls never spend more than the budget together), caps the reply at
- * `budgets.estimateOutputTokens`, streams through the provider gate, releases the reservation, charges the priced reply
+ * `request.outputTokens` (default `budgets.estimateOutputTokens`), streams through the provider gate, releases the reservation, charges the priced reply
  * through `payer.charge` and is recorded as one span. Retryable provider errors are retried like agent turns. Throws
  * `payer.refused(estimate)`, a classified provider error, or INTERNAL on abort.
  */
@@ -54,11 +56,12 @@ export async function runChargedCompletion(
 	const maxRetries = providerCfg.maxRetries ?? 3;
 	const baseDelay = providerCfg.retryBaseDelayMs ?? 1000;
 	// The reply is capped at the output tokens the estimate assumes, so a verbose reply cannot cost more than was reserved.
-	const maxTokens = model.maxTokens > 0 ? Math.min(config.budgets.estimateOutputTokens, model.maxTokens) : config.budgets.estimateOutputTokens;
+	const outputTokens = request.outputTokens ?? config.budgets.estimateOutputTokens;
+	const maxTokens = model.maxTokens > 0 ? Math.min(outputTokens, model.maxTokens) : outputTokens;
 	let costUsd = 0;
 	let costUnknown = false;
 	for (let attempt = 1; ; attempt++) {
-		const estimate = estimateCallCostUsd(model, config.pricingOverrides, request.system.length + request.user.length, config.budgets.estimateOutputTokens);
+		const estimate = estimateCallCostUsd(model, config.pricingOverrides, request.system.length + request.user.length, outputTokens);
 		const reserved = estimate > 0 ? budget.tryReserve(estimate) : budget.canAfford(0);
 		if (!reserved) throw payer.refused(estimate);
 		const spanId = recorder.start({
