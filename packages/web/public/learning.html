@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="nexo-token" content="{{NEXO_TOKEN}}">
+<title>nexo · learning</title>
+<link rel="stylesheet" href="/style.css">
+<script type="module" src="/pages/learning.ts"></script>
+</head>
+<body>
+<nav class="top"><a href="/" class="brand">nexo</a><a href="/">Runs</a><a href="/cost.html">Cost</a><a href="/learning.html">Learning</a><a href="/judge.html">Judge</a></nav>
+<main>
+<h1>Learning</h1>
+<div id="error"></div>
+<section>
+<h2>Memories</h2>
+<form id="memory-filters" class="filters">
+<label>Scope <input name="scope" placeholder="user, global or skill:name"></label>
+<label>Type <select name="type"><option value="">any</option><option>fact</option><option>preference</option><option>lesson</option><option>workflow</option></select></label>
+<label><input type="checkbox" name="all"> include replaced and retired</label>
+<button type="submit">Filter</button>
+</form>
+<div id="memories"></div>
+<div id="memory-history"></div>
+</section>
+<section>
+<h2>Playbooks</h2>
+<div id="playbooks"></div>
+<div id="playbook"></div>
+</section>
+<section>
+<h2>Learn jobs</h2>
+<div id="jobs"></div>
+</section>
+<section>
+<h2>Judge calibration</h2>
+<p>How often the judge agrees with your verdicts: <a href="/judge.html">Judge calibration</a>.</p>
+</section>
+</main>
+</body>
+</html>

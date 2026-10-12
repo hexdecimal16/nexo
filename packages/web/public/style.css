@@ -116,3 +116,11 @@ tr.warn td:first-child::after { content: " ⚠"; }
 .esc-blocked strong { color: var(--muted); }
 .human-priority { margin: 0 0 8px; }
 table.matrix { width: auto; }
+.source-human { color: var(--ok); }
+.source-user { color: var(--accent); }
+.source-ace { color: var(--muted); }
+td.actions { white-space: nowrap; }
+button.danger { color: var(--bad); cursor: pointer; }
+button.link { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer; text-decoration: underline; font: inherit; }
+.playbook-list, .history { padding-left: 18px; margin: 4px 0; }
+tr.retired td { color: var(--muted); }
