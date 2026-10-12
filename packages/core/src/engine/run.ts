@@ -221,6 +221,8 @@ export interface RunResult {
 
 export interface Engine {
 	run(request: RunRequest, signal?: AbortSignal): Promise<RunResult>;
+	/** The engine's run-tree-wide services; a `LearnWorker` built on it shares the provider gate and registry. */
+	readonly env: EngineEnv;
 }
 
 /** Shared, run-tree-wide services. */
@@ -334,6 +336,7 @@ export function createEngine(deps: EngineDeps): Engine {
 	const { now } = env;
 
 	return {
+		env,
 		async run(request, signal) {
 			try {
 				checkAdmission(deps.db, deps.config.budgets, now());
