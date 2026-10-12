@@ -3,14 +3,20 @@ import { calibrateJudge, loadConfig } from "@nexo/core";
 import { ensureNexoDirs, openDb, resolveNexoPaths } from "@nexo/store";
 import { escapeControl } from "@nexo/tui";
 import { type CliIO, type CliOptions, usageError } from "./common.ts";
+import { evalAddCommand, evalListCommand } from "./optimize.ts";
 
 function pct(value: number | null): string {
 	return value === null ? "–" : `${(value * 100).toFixed(1)}%`;
 }
 
-/** `nexo eval judge [--judge <provider/id[+provider/id…]>]`: judge-vs-human agreement, stored for the UI. */
+/**
+ * `nexo eval judge [--judge <provider/id[+provider/id…]>]`: judge-vs-human agreement, stored for the UI.
+ * `nexo eval add …` and `nexo eval list …` manage the optimizer's eval cases.
+ */
 export function evalCommand(args: string[], io: CliIO, options: CliOptions): number {
 	const [sub, ...rest] = args;
+	if (sub === "add") return evalAddCommand(rest, io, options);
+	if (sub === "list") return evalListCommand(rest, io, options);
 	if (sub !== "judge") throw usageError(sub === undefined ? "nexo eval needs a subcommand" : `Unknown eval subcommand "${sub}"`);
 	const { values } = parseArgs({ args: rest, options: { judge: { type: "string" } } });
 	if (values.judge !== undefined && !values.judge.split("+").every((part) => /^[^/+\s]+\/\S+$/.test(part))) {
