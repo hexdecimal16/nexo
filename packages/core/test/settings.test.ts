@@ -245,6 +245,7 @@ describe("config settings", () => {
 			"budgets.perSessionUsd",
 			"budgets.dailyUsd",
 			"budgets.monthlyUsd",
+			"budgets.optimDefaultUsd",
 			"tools.policy.read",
 			"tools.policy.write",
 			"tools.policy.edit",
@@ -262,6 +263,9 @@ describe("config settings", () => {
 			"learning.perJobUsd",
 			"memory.enabled",
 			"memory.maxTokens",
+			"optimize.minCases",
+			"optimize.patience",
+			"optimize.minJudgeKappa",
 		]);
 		for (const s of byKey.values()) expect(s.description.length).toBeGreaterThan(0);
 		expect(settings.getSetting("budgets.monthlyUsd").value).toBe(150);
@@ -671,6 +675,36 @@ describe("judge, scoring and learning settings", () => {
 		}
 		expect(read(f)).toEqual({ learning: { perJobUsd: 0.3 }, memory: { maxTokens: 2000 } });
 		expect(settings.resetSetting("learning.perJobUsd")).toMatchObject({ value: 0.15, source: "default" });
+	});
+
+	it("sets, resets and bounds the optimization settings like the schema", () => {
+		const f = fixture();
+		const settings = createSettings(f.options());
+		const keys = ["budgets.optimDefaultUsd", "optimize.minCases", "optimize.patience", "optimize.minJudgeKappa"] as const;
+		const defaults = [5, 10, 5, 0.6];
+		keys.forEach((key, i) => expect(settings.getSetting(key)).toMatchObject({ value: defaults[i], source: "default" }));
+		const good = ["2.5", "3", "1", "-1"];
+		keys.forEach((key, i) => expect(settings.setSettingFromString(key, good[i] as string)).toMatchObject({ value: Number(good[i]), source: "user" }));
+		expect(settings.setSettingFromString("optimize.minJudgeKappa", "1")).toMatchObject({ value: 1 });
+		expect(settings.setSettingFromString("optimize.minJudgeKappa", "0.75")).toMatchObject({ value: 0.75 });
+		const written = { budgets: { optimDefaultUsd: 2.5 }, optimize: { minCases: 3, patience: 1, minJudgeKappa: 0.75 } };
+		expect(read(f)).toEqual(written);
+		for (const [key, bad] of [
+			["optimize.minCases", "2"],
+			["optimize.minCases", "abc"],
+			["optimize.patience", "0"],
+			["optimize.patience", "1.5"],
+			["optimize.minJudgeKappa", "1.01"],
+			["optimize.minJudgeKappa", "-1.5"],
+			["optimize.minJudgeKappa", "abc"],
+			["budgets.optimDefaultUsd", "0"],
+			["budgets.optimDefaultUsd", "abc"],
+		] as const) {
+			expectCode(() => settings.setSettingFromString(key, bad), "INVALID_REQUEST");
+		}
+		expect(read(f)).toEqual(written);
+		keys.forEach((key, i) => expect(settings.resetSetting(key)).toMatchObject({ value: defaults[i], source: "default" }));
+		expect(read(f)).toEqual({});
 	});
 
 	it("bases the judge guards on the user config alone, not the project config", () => {
