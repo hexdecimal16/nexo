@@ -304,6 +304,50 @@ describe("nexo settings", () => {
 		expect(JSON.parse(readFileSync(join(h.home, "config.json"), "utf8")).budgets.perRunUsd).toBe(0.75);
 	});
 
+	it("gets, sets and resets the judge, scoring and learning settings", async () => {
+		const h = home();
+		const opts = { ...h, models: fauxModels() };
+		const run = async (...argv: string[]): Promise<{ code: number; out: string }> => {
+			const t = io();
+			const code = await runCli(["settings", ...argv], t, opts);
+			return { code, out: t.out().trim() };
+		};
+		const file = () => JSON.parse(readFileSync(join(h.home, "config.json"), "utf8"));
+		expect(await run("set", "models.judge", "faux/fast+faux/slow")).toEqual({ code: 0, out: "models.judge = faux/fast+faux/slow" });
+		expect(await run("get", "models.judge")).toEqual({ code: 0, out: "faux/fast+faux/slow" });
+		expect(file().models.judge).toHaveLength(2);
+		expect(await run("set", "scoring.judge", "on")).toEqual({ code: 0, out: "scoring.judge = on" });
+		expect(file().scoring.scorers).toEqual([{ kind: "llm_judge", name: "quality" }]);
+		expect((await run("set", "scoring.judge", "off")).code).toBe(0);
+		expect(await run("get", "scoring.judge")).toEqual({ code: 0, out: "off" });
+		expect(await run("get", "models.reflector")).toEqual({ code: 0, out: "s1" });
+		expect((await run("set", "models.reflector", "s2")).code).toBe(0);
+		expect(file().models.reflector).toEqual({ ref: "s2" });
+		expect((await run("set", "learning.enabled", "off")).code).toBe(0);
+		expect(file().learning.enabled).toBe(false);
+		expect((await run("set", "memory.enabled", "false")).code).toBe(0);
+		expect((await run("set", "learning.perJobUsd", "0.3")).code).toBe(0);
+		expect((await run("set", "memory.maxTokens", "900")).code).toBe(0);
+		expect(file().memory).toEqual({ enabled: false, maxTokens: 900 });
+		expect(await run("reset", "models.judge")).toEqual({ code: 0, out: "models.judge = unset" });
+		expect(file().models.judge).toBeUndefined();
+		expect(await run("reset", "learning.enabled")).toEqual({ code: 0, out: "learning.enabled = on" });
+		expect(file().learning).toEqual({ perJobUsd: 0.3 });
+		for (const argv of [
+			["set", "models.judge", "nope"],
+			["set", "models.reflector", "garbage"],
+			["set", "learning.enabled", "maybe"],
+			["set", "memory.enabled", "maybe"],
+			["set", "scoring.judge", "maybe"],
+			["set", "memory.maxTokens", "-1"],
+			["reset"],
+			["reset", "nope.key"],
+			["reset", "a", "b"],
+		]) {
+			expect((await run(...argv)).code, argv.join(" ")).toBe(2);
+		}
+	});
+
 	it("rejects unknown keys, invalid values and wrong arity with exit 2", async () => {
 		const h = home(roles);
 		const opts = { ...h, models: fauxModels() };

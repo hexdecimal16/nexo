@@ -5,9 +5,16 @@ import { NexoError } from "@nexo/telemetry";
 import { configErrors, deepMerge, projectConfigPath, readConfigFile } from "../config/load.ts";
 import { DEFAULT_CONFIG } from "../config/schema.ts";
 
-/** How a setting's value is entered: a `provider/model-id` reference, one of fixed values, or a number. */
+/**
+ * How a setting's value is entered: a `provider/model-id` reference, a list of them joined with `+`, a model or role
+ * (`s1`/`s2`), one of fixed values, an on/off switch, a number, or the virtual `scoring.judge` toggle.
+ */
 export type SettingType =
 	| { kind: "model" }
+	| { kind: "models" }
+	| { kind: "modelOrRef" }
+	| { kind: "boolean" }
+	| { kind: "scorerToggle" }
 	| { kind: "enum"; values: readonly string[] }
 	| { kind: "number"; integer: boolean; min?: number; exclusiveMin?: number; max?: number };
 
@@ -38,6 +45,9 @@ export interface SettingView extends SettingDefinition {
 	 */
 	notice: string | null;
 }
+
+/** Values of `boolean` and `scorerToggle` settings as shown and picked. */
+export const ON_OFF = ["on", "off"] as const;
 
 export const PROJECT_OVERRIDE_NOTICE = "overridden by project config";
 
@@ -89,6 +99,33 @@ export const EDITABLE_SETTINGS: readonly SettingDefinition[] = [
 		label: "Parallel subagents",
 		description: "Most subagents one run may have working at the same time",
 		type: { kind: "number", integer: true, min: 1 },
+	},
+	{
+		key: "models.judge",
+		label: "Judge models",
+		description: "Models that judge run quality, as provider/model-id; several joined with + form a panel (a/x+b/y)",
+		type: { kind: "models" },
+	},
+	{
+		key: "scoring.judge",
+		label: "LLM judge scoring",
+		description: "on adds an llm_judge scorer to your user config, off removes it; on needs models.judge set first and does nothing until then",
+		type: { kind: "scorerToggle" },
+	},
+	{
+		key: "models.reflector",
+		label: "Model reflector",
+		description: "Model that writes lessons after a run: s1, s2 or provider/model-id",
+		type: { kind: "modelOrRef" },
+	},
+	{ key: "learning.enabled", label: "Learning", description: "Learn lessons from judged runs (on/off)", type: { kind: "boolean" } },
+	{ key: "learning.perJobUsd", label: "Learning budget per job", description: "Spending cap for one learn job, in USD", type: USD },
+	{ key: "memory.enabled", label: "Memory", description: "Retrieve stored memories into the prompt (on/off)", type: { kind: "boolean" } },
+	{
+		key: "memory.maxTokens",
+		label: "Memory tokens",
+		description: "Most tokens of retrieved memories added to a prompt",
+		type: { kind: "number", integer: true, min: 0 },
 	},
 ];
 
@@ -151,12 +188,45 @@ function leafPaths(def: SettingDefinition): string[][] {
 	return def.type.kind === "model" ? [[...base, "provider"], [...base, "id"]] : [base];
 }
 
+const SCORERS_PATH = ["scoring", "scorers"] as const;
+const JUDGE_PATH = ["models", "judge"] as const;
+
+function scorersOf(layer: unknown): Record<string, unknown>[] {
+	const raw = getPath(layer, SCORERS_PATH);
+	return Array.isArray(raw) ? raw.filter(isPlainObject) : [];
+}
+
+function hasJudgeScorer(layer: unknown): boolean {
+	return scorersOf(layer).some((s) => s.kind === "llm_judge");
+}
+
+function hasJudgeModels(layer: unknown): boolean {
+	const raw = getPath(layer, JUDGE_PATH);
+	return Array.isArray(raw) && raw.length > 0;
+}
+
 function definedIn(layer: unknown, def: SettingDefinition): boolean {
+	if (def.type.kind === "scorerToggle") return hasJudgeScorer(layer);
 	return leafPaths(def).some((p) => getPath(layer, p) !== undefined);
 }
 
+function formatModel(raw: unknown): string | null {
+	return isPlainObject(raw) && typeof raw.provider === "string" && typeof raw.id === "string" ? `${raw.provider}/${raw.id}` : null;
+}
+
 function displayValue(def: SettingDefinition, layer: unknown): SettingValue {
+	if (def.type.kind === "scorerToggle") return hasJudgeScorer(layer) ? "on" : "off";
 	const raw = getPath(layer, segments(def.key));
+	if (def.type.kind === "models") {
+		if (!Array.isArray(raw)) return null;
+		const parts = raw.map(formatModel);
+		return parts.length > 0 && parts.every((p) => p !== null) ? parts.join("+") : null;
+	}
+	if (def.type.kind === "modelOrRef") {
+		if (isPlainObject(raw) && typeof raw.ref === "string") return raw.ref;
+		return formatModel(raw);
+	}
+	if (def.type.kind === "boolean") return typeof raw === "boolean" ? (raw ? "on" : "off") : null;
 	if (def.type.kind === "model") {
 		if (!isPlainObject(raw)) return null;
 		return typeof raw.provider === "string" && typeof raw.id === "string" ? `${raw.provider}/${raw.id}` : null;
@@ -207,23 +277,62 @@ function overrideNotice(def: SettingDefinition, layers: ConfigLayers): string {
 	return `${PROJECT_OVERRIDE_NOTICE}; ${layers.projectFile} has an invalid value: ${errors.map((e) => `${e.path} ${e.message}`).join("; ")}`;
 }
 
+/** Settings whose absent value still means something: the effective value and its source are `default`. */
+const IMPLICIT_DEFAULTS: Record<string, string> = { "models.reflector": "s1" };
+
 export function settingView(def: SettingDefinition, layers: ConfigLayers): SettingView {
-	const overriddenByProject = definedIn(layers.project, def);
+	// Project scorers replace the user's list, so any `scoring.scorers` in the project config overrides the toggle.
+	const overriddenByProject = def.type.kind === "scorerToggle" ? Array.isArray(getPath(layers.project, SCORERS_PATH)) : definedIn(layers.project, def);
+	const implicit = IMPLICIT_DEFAULTS[def.key];
 	const source: SettingSource = overriddenByProject
 		? "project"
 		: definedIn(layers.user, def)
 			? "user"
-			: definedIn(DEFAULT_CONFIG, def)
+			: definedIn(DEFAULT_CONFIG, def) || def.type.kind === "scorerToggle" || implicit !== undefined
 				? "default"
 				: "unset";
 	return {
 		...def,
-		value: displayValue(def, mergedLayers(layers)),
+		value: displayValue(def, mergedLayers(layers)) ?? implicit ?? null,
 		source,
 		userValue: definedIn(layers.user, def) ? displayValue(def, layers.user) : null,
 		overriddenByProject,
 		notice: overriddenByProject ? overrideNotice(def, layers) : null,
 	};
+}
+
+/** `s1`/`s2` as a role ref, anything else as `provider/id` (or a `{provider,id}` / `{ref}` object). */
+function parseModelOrRef(key: string, value: unknown): Record<string, unknown> {
+	if (value === "s1" || value === "s2") return { ref: value };
+	if (isPlainObject(value) && (value.ref === "s1" || value.ref === "s2") && Object.keys(value).length === 1) return { ref: value.ref };
+	try {
+		return parseModel(key, value);
+	} catch {
+		throw invalidRequest(`Invalid value for ${key}: expected "s1", "s2" or "provider/model-id"`, 'Type s1, s2 or "provider/model-id"', { key });
+	}
+}
+
+/** `provider/id` entries joined with `+` (or an array of them); at least one, none empty. */
+function parseModels(key: string, value: unknown): { provider: string; id: string }[] {
+	const parts = typeof value === "string" ? value.split("+").map((p) => p.trim()) : Array.isArray(value) ? value : [];
+	if (parts.length === 0) {
+		throw invalidRequest(`Invalid value for ${key}: expected one or more "provider/model-id" joined with +`, 'For example "google/gemini-x" or "google/a+openai/b"', { key });
+	}
+	try {
+		return parts.map((p) => parseModel(key, p));
+	} catch {
+		throw invalidRequest(`Invalid value for ${key}: expected one or more "provider/model-id" joined with +`, 'For example "google/gemini-x" or "google/a+openai/b"', { key });
+	}
+}
+
+/** `on`/`true` and `off`/`false` (any case) or a JSON boolean. */
+function parseOnOff(key: string, value: unknown): boolean {
+	if (typeof value === "boolean") return value;
+	const text = typeof value === "string" ? value.trim().toLowerCase() : "";
+	if (text === "on" || text === "true") return true;
+	if (text === "off" || text === "false") return false;
+	const pointer = `/${segments(key).join("/")}`;
+	throw invalidRequest(`Invalid value for ${key}: ${pointer} must be on or off`, "Use on, off, true or false", { key, errors: [{ path: pointer, message: "must be on or off" }] });
 }
 
 function parseModel(key: string, value: unknown): { provider: string; id: string } {
@@ -267,6 +376,37 @@ function writeJsonAtomic(file: string, data: unknown): void {
 	}
 }
 
+function parseJudgeToggle(key: string, value: unknown): boolean {
+	if (value === "on" || value === "off") return value === "on";
+	const pointer = `/${segments(key).join("/")}`;
+	throw invalidRequest(`Invalid value for ${key}: ${pointer} must be one of ${ON_OFF.join(", ")}`, undefined, { key, errors: [{ path: pointer, message: `must be one of ${ON_OFF.join(", ")}` }] });
+}
+
+/**
+ * `scoring.judge` edits the user config's `scoring.scorers`: on adds `{ kind: "llm_judge", name: "quality" }` unless an
+ * llm_judge scorer is there, off removes every llm_judge scorer; other scorers stay. A config with an llm_judge scorer
+ * and no `models.judge` fails to load, so on needs a judge model in the effective config.
+ */
+function writeJudgeToggle(def: SettingDefinition, layers: ConfigLayers, userFile: string, on: boolean): SettingView {
+	const user = structuredClone(layers.user);
+	const present = hasJudgeScorer(user);
+	if (on === present) return settingView(def, layers);
+	if (on) {
+		if (!hasJudgeModels(deepMerge(DEFAULT_CONFIG, user, layers.project))) {
+			throw invalidRequest(`Cannot turn ${def.key} on: no judge model is set`, "Set models.judge first (for example google/<model-id>); an llm_judge scorer without one makes the config invalid", { key: def.key });
+		}
+		setPath(user, SCORERS_PATH, [...scorersOf(user), { kind: "llm_judge", name: "quality" }]);
+	} else {
+		const kept = scorersOf(user).filter((s) => s.kind !== "llm_judge");
+		if (kept.length > 0) setPath(user, SCORERS_PATH, kept);
+		else deletePath(user, SCORERS_PATH);
+	}
+	const errors = errorsUnder(deepMerge(DEFAULT_CONFIG, user), "/scoring/scorers");
+	if (errors.length > 0) throw invalidRequest(`Invalid value for ${def.key}: ${errors.map((e) => `${e.path} ${e.message}`).join("; ")}`, undefined, { key: def.key, errors });
+	writeJsonAtomic(userFile, user);
+	return settingView(def, { ...layers, user });
+}
+
 /**
  * Sets one key in the user config. The candidate user config is validated against the config schema on top of the
  * defaults; schema errors at or below the key's path reject the change (INVALID_REQUEST naming each path) and the file
@@ -278,9 +418,16 @@ export function writeSetting(userFile: string, cwd: string, key: string, value: 
 	const def = findSetting(key);
 	const layers = readConfigLayers(userFile, cwd);
 	const user = structuredClone(layers.user);
+	if (def.type.kind === "scorerToggle") return writeJudgeToggle(def, layers, userFile, parseJudgeToggle(key, value));
 	const path = segments(key);
 	const pointer = `/${path.join("/")}`;
-	if (def.type.kind === "model") {
+	if (def.type.kind === "models") {
+		setPath(user, path, parseModels(key, value));
+	} else if (def.type.kind === "modelOrRef") {
+		setPath(user, path, parseModelOrRef(key, value));
+	} else if (def.type.kind === "boolean") {
+		setPath(user, path, parseOnOff(key, value));
+	} else if (def.type.kind === "model") {
 		const model = parseModel(key, value);
 		const existing = getPath(user, path);
 		setPath(user, path, { ...(isPlainObject(existing) ? existing : {}), ...model });
@@ -303,9 +450,13 @@ export function writeSetting(userFile: string, cwd: string, key: string, value: 
 export function resetSetting(userFile: string, cwd: string, key: string): SettingView {
 	const def = findSetting(key);
 	const layers = readConfigLayers(userFile, cwd);
+	if (def.type.kind === "scorerToggle") return writeJudgeToggle(def, layers, userFile, false);
 	if (!definedIn(layers.user, def)) return settingView(def, layers);
 	const user = structuredClone(layers.user);
 	for (const p of leafPaths(def)) deletePath(user, p);
+	if (def.key === "models.judge" && hasJudgeScorer(deepMerge(DEFAULT_CONFIG, user, layers.project)) && !hasJudgeModels(deepMerge(DEFAULT_CONFIG, user, layers.project))) {
+		throw invalidRequest("Cannot reset models.judge while an llm_judge scorer is configured", "Turn scoring.judge off first (or remove the llm_judge scorer)", { key: def.key });
+	}
 	writeJsonAtomic(userFile, user);
 	return settingView(def, { ...layers, user });
 }

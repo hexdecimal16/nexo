@@ -255,6 +255,13 @@ describe("config settings", () => {
 			"tools.nonInteractiveAsk",
 			"session.compactAt",
 			"spawn.maxParallelSubagents",
+			"models.judge",
+			"scoring.judge",
+			"models.reflector",
+			"learning.enabled",
+			"learning.perJobUsd",
+			"memory.enabled",
+			"memory.maxTokens",
 		]);
 		for (const s of byKey.values()) expect(s.description.length).toBeGreaterThan(0);
 		expect(settings.getSetting("budgets.monthlyUsd").value).toBe(150);
@@ -491,5 +498,178 @@ describe("security hardening", () => {
 		}
 		expect(settings.setSettingFromString("budgets.perRunUsd", " 1.25 ").value).toBe(1.25);
 		expect(settings.setSettingFromString("spawn.maxParallelSubagents", "16").value).toBe(16);
+	});
+});
+
+describe("judge, scoring and learning settings", () => {
+	const read = (f: Fixture) => JSON.parse(readFileSync(f.paths.config, "utf8"));
+
+	it("sets, shows and resets models.judge as a +-joined list", () => {
+		const f = fixture();
+		writeJson(f.paths.config, { ui: { theme: "dark" } });
+		const settings = createSettings(f.options());
+		expect(settings.getSetting("models.judge")).toMatchObject({ value: null, source: "unset", type: { kind: "models" } });
+		expect(settings.setSettingFromString("models.judge", "a/x")).toMatchObject({ value: "a/x", source: "user", userValue: "a/x" });
+		expect(read(f).models.judge).toEqual([{ provider: "a", id: "x" }]);
+		expect(settings.setSettingFromString("models.judge", " a/x + b/y ")).toMatchObject({ value: "a/x+b/y" });
+		expect(read(f).models.judge).toEqual([
+			{ provider: "a", id: "x" },
+			{ provider: "b", id: "y" },
+		]);
+		expect(settings.getSetting("models.judge").value).toBe("a/x+b/y");
+		expect(settings.resetSetting("models.judge")).toMatchObject({ value: null, source: "unset" });
+		expect(read(f)).toEqual({ ui: { theme: "dark" } });
+	});
+
+	it("rejects an invalid models.judge entry and writes nothing", () => {
+		const f = fixture();
+		writeJson(f.paths.config, { budgets: { dailyUsd: 7 } });
+		const before = readFileSync(f.paths.config);
+		const settings = createSettings(f.options());
+		for (const bad of ["nope", "", "a/x+", "+a/x", "a/x++b/y", "a/x+nope", "/x", "a/"]) {
+			expectCode(() => settings.setSettingFromString("models.judge", bad), "INVALID_REQUEST");
+		}
+		expectCode(() => settings.setSetting("models.judge", 5), "INVALID_REQUEST");
+		expect(readFileSync(f.paths.config)).toEqual(before);
+	});
+
+	it("turns scoring.judge on and off without touching other scorers", () => {
+		const f = fixture();
+		writeJson(f.paths.config, { models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "slow" }, judge: [{ provider: "a", id: "x" }] }, scoring: { scorers: [{ kind: "command", name: "tests", command: "npm test" }] } });
+		const settings = createSettings(f.options());
+		expect(settings.getSetting("scoring.judge")).toMatchObject({ value: "off", source: "default", type: { kind: "scorerToggle" } });
+		expect(settings.setSettingFromString("scoring.judge", "on")).toMatchObject({ value: "on", source: "user", userValue: "on" });
+		const scorers = () => read(f).scoring.scorers;
+		expect(scorers()).toEqual([
+			{ kind: "command", name: "tests", command: "npm test" },
+			{ kind: "llm_judge", name: "quality" },
+		]);
+		settings.setSetting("scoring.judge", "on");
+		expect(scorers()).toHaveLength(2);
+		expect(settings.setSetting("scoring.judge", "off")).toMatchObject({ value: "off" });
+		expect(scorers()).toEqual([{ kind: "command", name: "tests", command: "npm test" }]);
+		settings.setSetting("scoring.judge", "on");
+		expect(settings.resetSetting("scoring.judge")).toMatchObject({ value: "off" });
+		expect(scorers()).toEqual([{ kind: "command", name: "tests", command: "npm test" }]);
+		expect(settings.loadConfig().config.scoring.scorers).toHaveLength(1);
+	});
+
+	it("off removes every llm_judge scorer and keeps the file clean when none remain", () => {
+		const f = fixture();
+		writeJson(f.paths.config, {
+			models: { judge: [{ provider: "a", id: "x" }] },
+			scoring: { scorers: [{ kind: "llm_judge", name: "one" }, { kind: "llm_judge", name: "two", rubric: "r" }] },
+		});
+		const settings = createSettings(f.options());
+		expect(settings.getSetting("scoring.judge").value).toBe("on");
+		settings.setSetting("scoring.judge", "off");
+		expect(read(f).scoring).toBeUndefined();
+		expect(read(f).models.judge).toHaveLength(1);
+	});
+
+	it("rejects scoring.judge values other than on and off and refuses on without a judge model", () => {
+		const f = fixture();
+		writeJson(f.paths.config, { ui: { theme: "dark" } });
+		const before = readFileSync(f.paths.config);
+		const settings = createSettings(f.options());
+		expectCode(() => settings.setSetting("scoring.judge", "maybe"), "INVALID_REQUEST");
+		expectCode(() => settings.setSetting("scoring.judge", true), "INVALID_REQUEST");
+		const error = expectCode(() => settings.setSetting("scoring.judge", "on"), "INVALID_REQUEST");
+		expect(error.hint).toContain("models.judge");
+		expect(readFileSync(f.paths.config)).toEqual(before);
+		settings.setSetting("models.judge", "a/x");
+		settings.setSetting("scoring.judge", "on");
+		const reset = expectCode(() => settings.resetSetting("models.judge"), "INVALID_REQUEST");
+		expect(reset.hint).toContain("scoring.judge");
+		expect(read(f).models.judge).toHaveLength(1);
+	});
+
+	it("shows the project override notice when the project config supplies scorers", () => {
+		const f = fixture();
+		writeJson(join(f.cwd, ".nexo", "config.json"), { scoring: { scorers: [{ kind: "llm_judge", name: "p" }] } });
+		writeJson(f.paths.config, { models: { judge: [{ provider: "a", id: "x" }] } });
+		const settings = createSettings(f.options());
+		expect(settings.getSetting("scoring.judge")).toMatchObject({ value: "on", source: "project", overriddenByProject: true, notice: "overridden by project config" });
+		expect(settings.setSetting("scoring.judge", "off")).toMatchObject({ value: "on", notice: "overridden by project config" });
+	});
+
+	it("sets models.reflector to a role ref or a model spec", () => {
+		const f = fixture();
+		const settings = createSettings(f.options());
+		expect(settings.getSetting("models.reflector")).toMatchObject({ value: "s1", source: "default", userValue: null, type: { kind: "modelOrRef" } });
+		expect(settings.setSettingFromString("models.reflector", "s2")).toMatchObject({ value: "s2", source: "user" });
+		expect(read(f).models.reflector).toEqual({ ref: "s2" });
+		expect(settings.setSettingFromString("models.reflector", "groq/llama")).toMatchObject({ value: "groq/llama" });
+		expect(read(f).models.reflector).toEqual({ provider: "groq", id: "llama" });
+		settings.setSetting("models.reflector", "s1");
+		expect(read(f).models.reflector).toEqual({ ref: "s1" });
+		expect(settings.resetSetting("models.reflector")).toMatchObject({ value: "s1", source: "default", userValue: null });
+		expect(read(f).models).toBeUndefined();
+	});
+
+	it("rejects a garbage models.reflector and writes nothing", () => {
+		const f = fixture();
+		writeJson(f.paths.config, { budgets: { dailyUsd: 7 } });
+		const before = readFileSync(f.paths.config);
+		const settings = createSettings(f.options());
+		for (const bad of ["s3", "garbage", "", "S1"]) expectCode(() => settings.setSettingFromString("models.reflector", bad), "INVALID_REQUEST");
+		expectCode(() => settings.setSetting("models.reflector", 3), "INVALID_REQUEST");
+		expect(readFileSync(f.paths.config)).toEqual(before);
+	});
+
+	it("sets booleans from on/off/true/false and stores JSON booleans", () => {
+		const f = fixture();
+		const settings = createSettings(f.options());
+		expect(settings.getSetting("learning.enabled")).toMatchObject({ value: "on", source: "default", type: { kind: "boolean" } });
+		for (const [text, stored, shown] of [
+			["off", false, "off"],
+			["true", true, "on"],
+			["false", false, "off"],
+			["on", true, "on"],
+			["ON", true, "on"],
+		] as const) {
+			expect(settings.setSettingFromString("learning.enabled", text)).toMatchObject({ value: shown, source: "user" });
+			expect(read(f).learning.enabled).toBe(stored);
+		}
+		settings.setSetting("memory.enabled", false);
+		expect(read(f).memory.enabled).toBe(false);
+		expect(settings.getSetting("memory.enabled").value).toBe("off");
+		expect(settings.resetSetting("memory.enabled")).toMatchObject({ value: "on", source: "default" });
+		expect(read(f).memory).toBeUndefined();
+	});
+
+	it("rejects non-boolean values for booleans", () => {
+		const f = fixture();
+		writeJson(f.paths.config, { budgets: { dailyUsd: 7 } });
+		const before = readFileSync(f.paths.config);
+		const settings = createSettings(f.options());
+		for (const key of ["learning.enabled", "memory.enabled"]) {
+			for (const bad of ["maybe", "", "1", "yes"]) expectCode(() => settings.setSettingFromString(key, bad), "INVALID_REQUEST");
+			expectCode(() => settings.setSetting(key, 1), "INVALID_REQUEST");
+		}
+		expect(readFileSync(f.paths.config)).toEqual(before);
+	});
+
+	it("sets learning.perJobUsd and memory.maxTokens with the schema's bounds", () => {
+		const f = fixture();
+		const settings = createSettings(f.options());
+		expect(settings.getSetting("learning.perJobUsd")).toMatchObject({ value: 0.15, source: "default" });
+		expect(settings.getSetting("memory.maxTokens")).toMatchObject({ value: 1500, source: "default" });
+		expect(settings.setSettingFromString("learning.perJobUsd", "0.3")).toMatchObject({ value: 0.3, source: "user" });
+		expect(settings.setSettingFromString("memory.maxTokens", "0")).toMatchObject({ value: 0, source: "user" });
+		expect(settings.setSettingFromString("memory.maxTokens", "2000")).toMatchObject({ value: 2000 });
+		expect(read(f)).toEqual({ learning: { perJobUsd: 0.3 }, memory: { maxTokens: 2000 } });
+		for (const [key, bad] of [
+			["learning.perJobUsd", "0"],
+			["learning.perJobUsd", "-1"],
+			["learning.perJobUsd", "abc"],
+			["memory.maxTokens", "-1"],
+			["memory.maxTokens", "1.5"],
+			["memory.maxTokens", "abc"],
+		] as const) {
+			expectCode(() => settings.setSettingFromString(key, bad), "INVALID_REQUEST");
+		}
+		expect(read(f)).toEqual({ learning: { perJobUsd: 0.3 }, memory: { maxTokens: 2000 } });
+		expect(settings.resetSetting("learning.perJobUsd")).toMatchObject({ value: 0.15, source: "default" });
 	});
 });

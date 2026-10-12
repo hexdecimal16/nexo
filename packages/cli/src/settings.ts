@@ -86,7 +86,7 @@ function show(view: SettingView): string {
 	return view.value === null ? "unset" : String(view.value);
 }
 
-/** `nexo settings get|set|set-key`: no TUI, for scripts. Invalid keys and values are usage errors (exit 2). */
+/** `nexo settings get|set|reset|set-key`: no TUI, for scripts. Invalid keys and values are usage errors (exit 2). */
 export async function settingsCommand(args: string[], io: CliIO, options: CliOptions, stdio: CliStdio): Promise<number> {
 	const [sub, ...rest] = args;
 	const env = options.env ?? process.env;
@@ -110,6 +110,13 @@ export async function settingsCommand(args: string[], io: CliIO, options: CliOpt
 			case "set": {
 				if (rest.length !== 2) throw usageError("nexo settings set needs a key and a value");
 				const view = build().setSettingFromString(rest[0] as string, rest[1] as string);
+				io.stdout.write(`${view.key} = ${show(view)}\n`);
+				if (view.notice) io.stderr.write(`note: ${view.notice}\n`);
+				return 0;
+			}
+			case "reset": {
+				if (rest.length !== 1) throw usageError("nexo settings reset needs exactly one key");
+				const view = build().resetSetting(rest[0] as string);
 				io.stdout.write(`${view.key} = ${show(view)}\n`);
 				if (view.notice) io.stderr.write(`note: ${view.notice}\n`);
 				return 0;
@@ -139,7 +146,7 @@ export async function settingsCommand(args: string[], io: CliIO, options: CliOpt
 				return 0;
 			}
 			default:
-				throw usageError(sub === undefined ? "nexo settings needs get, set or set-key (or a terminal for the screen)" : `Unknown settings command "${sub}"`);
+				throw usageError(sub === undefined ? "nexo settings needs get, set, reset or set-key (or a terminal for the screen)" : `Unknown settings command "${sub}"`);
 		}
 	} catch (error) {
 		const payload = toErrorPayload(error);
