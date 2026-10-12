@@ -1,9 +1,11 @@
+import { fauxAssistantMessage, type FauxResponseFactory } from "@earendil-works/pi-ai";
 import { BudgetStop, type CandidateRef } from "@nexo/optimize";
 import { describe, expect, it } from "vitest";
 import { getRun, getSpent, insertCandidateArtifact, insertRun, listSpans, RunDir } from "@nexo/store";
 import { runRow } from "../../store/test/fixtures.ts";
 import { estimateCallCostUsd } from "../src/cost/pricing.ts";
 import { createOptimAdapter, rolloutQuality } from "../src/optimize/adapter.ts";
+import { assertReflectionFits, reflectionOutputTokens, REFLECTION_MAX_OUTPUT_TOKENS } from "../src/optimize/reflect.ts";
 import type { TestEnv } from "./helpers.ts";
 import { evalCase, optimContext, optimEnv, route, SKILL_HEAD } from "./optimize-helpers.ts";
 import { judges, verdict } from "./scoring-helpers.ts";
@@ -181,5 +183,34 @@ describe("holdout reserve and panel refusals", () => {
 		ctx.budget.charge(1 - estimate * 1.5);
 		const ref = { id: "base", artifactId: base.id, texts: { rubric: "Grade the work." } };
 		await expect(createOptimAdapter(ctx).evaluate([evalCase("g", "Write notes", { sourceRunId: run, expected: "done" })], ref, false, signal)).rejects.toMatchObject({ name: "BudgetStop" });
+	});
+});
+
+describe("reflection output size", () => {
+	it("sizes the cap from the current text, between the budget estimate and REFLECTION_MAX_OUTPUT_TOKENS", () => {
+		expect(reflectionOutputTokens(4096, 100)).toBe(4096);
+		expect(reflectionOutputTokens(4096, 15000)).toBe(6024);
+		expect(reflectionOutputTokens(4096, 20000)).toBe(7691);
+		expect(reflectionOutputTokens(4096, 30000)).toBe(REFLECTION_MAX_OUTPUT_TOKENS);
+	});
+
+	it("caps the reflection call at the size the current text needs", async () => {
+		const env = optimEnv();
+		const seen: (number | undefined)[] = [];
+		const factory: FauxResponseFactory = async (_context, options) => {
+			seen.push(options?.maxTokens);
+			return fauxAssistantMessage(JSON.stringify({ text: "New.", rationale: "r" }));
+		};
+		env.faux.setResponses([factory]);
+		const { ctx } = optimContext(env, "skill:ci-fix");
+		const parent: CandidateRef = { id: "base", artifactId: "x", texts: { body: "x".repeat(15000) } };
+		await createOptimAdapter(ctx).proposeNewTexts?.(parent, { body: [] }, ["body"], signal);
+		expect(seen).toEqual([6024]);
+	});
+
+	it("refuses a text whose rewrite cannot fit the limit, naming its length and suggesting a shorter text", () => {
+		const target = { kind: "skill", key: "skill:ci-fix", name: "ci-fix" } as const;
+		expect(() => assertReflectionFits(target, { body: "x".repeat(20000) })).not.toThrow();
+		expect(() => assertReflectionFits(target, { body: "x".repeat(21600) })).toThrow(expect.objectContaining({ code: "INVALID_REQUEST", message: expect.stringContaining("21600 characters"), hint: expect.stringContaining("Shorten") }));
 	});
 });

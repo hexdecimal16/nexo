@@ -87,6 +87,18 @@ describe("nexo optimize", () => {
 		expect(t.err()).toContain("nexo eval add --target skill:ci-fix");
 	});
 
+	it("warns before starting that allowed tools run once per rollout", async () => {
+		const h = setup();
+		for (let i = 1; i <= 12; i++) await runCli(["eval", "add", "--target", "skill:ci-fix", "--input", `Fix CI build ${i}`], io(), h);
+		const run = io();
+		await runCli(["optimize", "--target", "skill:ci-fix", "--budget-usd", "2", "--seed", "7"], run, h);
+		const lines = run.err().split("\n");
+		const notice = lines.findIndex((l) => l.startsWith("notice: rollouts replay past instructions"));
+		expect(notice).toBe(0);
+		expect(lines[notice]).toMatch(/tools set to allow \([^)]*\bread\b/);
+		expect(lines.findIndex((l) => l.startsWith("optimizing skill:ci-fix"))).toBeGreaterThan(notice);
+	});
+
 	it("optimizes, lists, shows with the diff, approves and rolls back", async () => {
 		const h = setup();
 		for (let i = 1; i <= 12; i++) await runCli(["eval", "add", "--target", "skill:ci-fix", "--input", `Fix CI build ${i}`], io(), h);
