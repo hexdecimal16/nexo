@@ -1,10 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { hostname } from "node:os";
-import { claimLearnJob, completeLearnJob, failLearnJob, type LearnJobRow, reclaimStaleLearnJobs, releaseLearnJob } from "@nexo/store";
-import { toErrorPayload } from "@nexo/telemetry";
+import { claimLearnJob, failLearnJob, type LearnJobRow, reclaimStaleLearnJobs, releaseLearnJob } from "@nexo/store";
+import { NexoError, toErrorPayload } from "@nexo/telemetry";
 import type { EngineEnv } from "../engine/run.ts";
 import type { FetchLike } from "./embedder.ts";
-import { type LearnJobOutcome, runLearnJob } from "./job.ts";
+import { LearnClaimLostError, type LearnJobOutcome, runLearnJob } from "./job.ts";
 
 export interface DrainOptions {
 	/** Most jobs to run in this drain. */
@@ -33,10 +33,13 @@ export interface LearnWorkerOptions {
 	onEvent?: (event: LearnEvent) => void;
 }
 
+/** Part of `learning.staleMinutes` a job may run before it is aborted, so it ends before other workers reclaim it. */
+const JOB_DEADLINE_SHARE = 0.8;
+
 /**
  * Runs learn jobs one at a time in this process (spec §8.1: in the background, never blocking or failing a run). Jobs
- * are taken with the store's atomic claim, so several processes can drain one database. With `learning.enabled: false`
- * a drain does nothing.
+ * are taken with the store's atomic claim, so several processes can drain one database; a job that is still running
+ * after 0.8 × `learning.staleMinutes` is aborted and fails. With `learning.enabled: false` a drain does nothing.
  */
 export class LearnWorker {
 	readonly workerId: string;
@@ -45,6 +48,10 @@ export class LearnWorker {
 	private background: Promise<DrainResult> | null = null;
 	private again = false;
 	private readonly stopController = new AbortController();
+	/** The job this worker is running, if any. */
+	private current: LearnJobRow | null = null;
+	/** The id of the job `stop` put back to pending. */
+	private releasedOnStop: string | null = null;
 
 	constructor(env: EngineEnv, options: LearnWorkerOptions = {}) {
 		this.env = env;
@@ -69,23 +76,43 @@ export class LearnWorker {
 			const job = claimLearnJob(db, this.workerId, this.env.now().toISOString());
 			if (!job) break;
 			this.options.onEvent?.({ type: "job_start", job });
+			this.current = job;
+			const deadlineMs = config.learning.staleMinutes * 60_000 * JOB_DEADLINE_SHARE;
+			const deadline = AbortSignal.timeout(deadlineMs);
+			const jobSignal = AbortSignal.any([signal, deadline]);
 			try {
-				const outcome = await runLearnJob(this.env, job, { signal, ...(this.options.fetch ? { fetch: this.options.fetch } : {}) });
-				completeLearnJob(db, job.id, this.workerId, this.env.now().toISOString());
+				const outcome = await runLearnJob(this.env, job, { workerId: this.workerId, signal: jobSignal, ...(this.options.fetch ? { fetch: this.options.fetch } : {}) });
 				result.succeeded++;
 				logger.info("learn job succeeded", { job_id: job.id, run_id: job.runId, lessons: outcome.lessons, cost_usd: outcome.costUsd });
 				this.options.onEvent?.({ type: "job_end", job, ok: true, outcome });
 			} catch (error) {
+				if (error instanceof LearnClaimLostError) {
+					logger.warn("learn job lost its claim; another worker owns it, nothing was written", { job_id: job.id, run_id: job.runId });
+					continue;
+				}
 				if (signal.aborted) {
-					releaseLearnJob(db, job.id, this.workerId, this.env.now().toISOString());
-					result.released++;
+					if (releaseLearnJob(db, job.id, this.workerId, this.env.now().toISOString()) || this.releasedOnStop === job.id) result.released++;
+					else logger.warn("learn job lost its claim while stopping", { job_id: job.id, run_id: job.runId });
 					break;
 				}
-				const payload = redact(toErrorPayload(error));
-				failLearnJob(db, job.id, this.workerId, payload, this.env.now().toISOString());
+				const cause = deadline.aborted
+					? new NexoError({
+							code: "PROVIDER_TIMEOUT",
+							message: `The learn job ran past its deadline of ${Math.round(deadlineMs / 1000)} s (0.8 × learning.staleMinutes)`,
+							retryable: true,
+							hint: "Raise learning.staleMinutes, or retry with `nexo learn --retry`",
+						})
+					: error;
+				const payload = redact(toErrorPayload(cause));
+				if (!failLearnJob(db, job.id, this.workerId, payload, this.env.now().toISOString())) {
+					logger.warn("learn job lost its claim; another worker owns it", { job_id: job.id, run_id: job.runId, error: payload });
+					continue;
+				}
 				result.failed++;
 				logger.warn("learn job failed", { job_id: job.id, run_id: job.runId, error: payload });
 				this.options.onEvent?.({ type: "job_end", job, ok: false, error: { code: payload.code, message: payload.message } });
+			} finally {
+				this.current = null;
 			}
 		}
 		return result;
@@ -124,9 +151,15 @@ export class LearnWorker {
 		while (this.background) await this.background;
 	}
 
-	/** Stops the worker: the running job is aborted and released back to pending. */
+	/**
+	 * Stops the worker: the running job is aborted and put back to pending (attempt not counted) before this returns its
+	 * promise, so the release is written even when the process exits right after. The promise resolves once the aborted
+	 * job has unwound.
+	 */
 	async stop(): Promise<void> {
 		this.stopController.abort();
+		const job = this.current;
+		if (job && releaseLearnJob(this.env.deps.db, job.id, this.workerId, this.env.now().toISOString())) this.releasedOnStop = job.id;
 		await this.idle();
 	}
 }

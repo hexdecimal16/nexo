@@ -12,6 +12,7 @@ import {
 } from "@nexo/memory";
 import { renderTrajectory } from "@nexo/scorers";
 import {
+	completeLearnJob,
 	ftsScores,
 	getRun,
 	isSkillName,
@@ -26,6 +27,7 @@ import {
 	readRunJson,
 	RunDir,
 	type SpanRow,
+	transaction,
 } from "@nexo/store";
 import { NexoError, toErrorPayload } from "@nexo/telemetry";
 import { Recorder } from "../engine/recorder.ts";
@@ -46,6 +48,16 @@ export interface LearnJobOutcome {
 	costUnknown: boolean;
 }
 
+/**
+ * Thrown when the worker no longer holds the job (it was reclaimed or released) at the moment the job would be marked
+ * succeeded; nothing of the job's result is written.
+ */
+export class LearnClaimLostError extends NexoError {
+	constructor(jobId: string, workerId: string) {
+		super({ code: "WRITE_CONFLICT", message: `Learn job ${jobId} is no longer held by worker ${workerId}`, context: { jobId, workerId } });
+	}
+}
+
 /** Skills a run used: its `--skill` and every skill it loaded successfully with load_skill. */
 export function skillsUsed(skill: string | null, spans: readonly SpanRow[]): string[] {
 	const names = new Set<string>();
@@ -60,10 +72,12 @@ export function skillsUsed(skill: string | null, spans: readonly SpanRow[]): str
 /**
  * Runs one reflect job (spec §8.1): reads the run, its latest scores and verdict, asks the reflector for lessons, asks
  * the curator for deltas and applies them through the guarded store. Every model call is a span on the learned run under
- * one `learn` span, and the applied delta is a `memory_write` span. Throws on any failure (the worker records it on the
- * job); the run itself is never changed.
+ * one `learn` span, and the applied delta is a `memory_write` span. The job is marked succeeded for `options.workerId`
+ * in the same transaction that applies the delta, so the delta is applied exactly when the job succeeds; a worker that
+ * lost the claim gets LearnClaimLostError and writes nothing. Throws on any failure (the worker records it on the job);
+ * the run itself is never changed.
  */
-export async function runLearnJob(env: EngineEnv, job: LearnJobRow, options: { signal: AbortSignal; fetch?: FetchLike }): Promise<LearnJobOutcome> {
+export async function runLearnJob(env: EngineEnv, job: LearnJobRow, options: { workerId: string; signal: AbortSignal; fetch?: FetchLike }): Promise<LearnJobOutcome> {
 	const { db, config, redact, logger } = env.deps;
 	const run = getRun(db, job.runId);
 	if (!run) throw new NexoError({ code: "NOT_FOUND", message: `Run ${job.runId} does not exist`, context: { runId: job.runId } });
@@ -75,6 +89,9 @@ export async function runLearnJob(env: EngineEnv, job: LearnJobRow, options: { s
 	let costUsd = 0;
 	let costUnknown = false;
 	const toLedgers = ledgerCharge(db, env.now);
+	const markSucceeded = () => {
+		if (!completeLearnJob(db, job.id, options.workerId, env.now().toISOString())) throw new LearnClaimLostError(job.id, options.workerId);
+	};
 	const deps: ChargedCallDeps = {
 		env,
 		recorder,
@@ -132,6 +149,7 @@ export async function runLearnJob(env: EngineEnv, job: LearnJobRow, options: { s
 			tier: "reflector",
 		});
 		if (reflection.lessons.length === 0 && reflection.playbookTags.length === 0) {
+			markSucceeded();
 			return { lessons: 0, curation: null, costUsd, costUnknown };
 		}
 
@@ -164,19 +182,23 @@ export async function runLearnJob(env: EngineEnv, job: LearnJobRow, options: { s
 				logger.warn("embedding new memories failed; dedup falls back to word overlap", { run_id: run.id, error });
 			}
 		}
+		if (options.signal.aborted) throw new NexoError({ code: "INTERNAL", message: "The learn job was aborted before applying its delta", retryable: true });
 		const writeSpan = recorder.start({ kind: "memory_write", name: "curate", parentSpanId: learnSpan, attrs: { delta: redact(delta) } });
 		let curation: CurationResult;
 		try {
-			curation = applyCuratorDelta(db, {
-				runId: run.id,
-				delta,
-				tags: reflection.playbookTags,
-				skills,
-				maxPlaybookItems: config.learning.maxPlaybookItems,
-				vectors,
-				embeddingModel: endpoint?.model ?? null,
-				redact,
-				nowIso: env.now().toISOString(),
+			curation = transaction(db, () => {
+				markSucceeded();
+				return applyCuratorDelta(db, {
+					runId: run.id,
+					delta,
+					tags: reflection.playbookTags,
+					skills,
+					maxPlaybookItems: config.learning.maxPlaybookItems,
+					vectors,
+					embeddingModel: endpoint?.model ?? null,
+					redact,
+					nowIso: env.now().toISOString(),
+				});
 			});
 		} catch (error) {
 			recorder.finish(writeSpan, { status: "error", attrs: { error: redact(toErrorPayload(error)) } });
