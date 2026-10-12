@@ -14,6 +14,8 @@ import { FakeTerminal, until } from "./fake-terminal.ts";
 export const FAUX_ROLES: DeepPartial<NexoConfig> = {
 	models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "slow" } },
 	providers: { faux: { retryBaseDelayMs: 0 } },
+	// Background learn jobs would take the scripted faux replies meant for later turns.
+	learning: { enabled: false },
 };
 
 export interface Harness {
