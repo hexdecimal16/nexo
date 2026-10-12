@@ -251,6 +251,8 @@ export interface ParentLink {
 	parentRemainingFraction: number;
 	sessionId: string | null;
 	optimRunId: string | null;
+	/** The rollout's candidate, so subagents use it too. */
+	rolloutCandidate: ArtifactRow | null;
 }
 
 /** Makes a root run an optimization rollout (spec §8.2): isolated, charged to the optimization, never learned from. */
@@ -298,6 +300,7 @@ export interface RunToolContext {
 	addChildCost: (usd: number, unknown: boolean) => void;
 	sessionId: string | null;
 	optimRunId: string | null;
+	rolloutCandidate: ArtifactRow | null;
 }
 
 export type ExtraToolsFactory = (ctx: RunToolContext) => AgentTool<any>[];
@@ -401,6 +404,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	const depth = parent ? parent.depth : 0;
 	const sessionId = parent ? parent.sessionId : (request.sessionId ?? null);
 	const rollout = parent ? undefined : input.rollout;
+	const rolloutCandidate = parent ? parent.rolloutCandidate : (rollout?.candidate ?? null);
 	const optimRunId = parent ? parent.optimRunId : (rollout?.optimRunId ?? null);
 
 	// Resolve skill, model and workspace before creating anything on disk.
@@ -475,8 +479,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	let memoryDeps: ChargedCallDeps | null = null;
 	/** The version a run uses for an artifact with a source: the rollout's candidate, else the sourced version (spec D2). */
 	const versionOf = (kind: ArtifactKind, name: string, source: string, nowIso: string): ArtifactRow =>
-		rollout && rollout.candidate.kind === kind && rollout.candidate.name === name
-			? rollout.candidate
+		rolloutCandidate && rolloutCandidate.kind === kind && rolloutCandidate.name === name
+			? rolloutCandidate
 			: resolveSourcedArtifact(db, kind, name, deps.redact(source), nowIso);
 	/** The text a run uses: the source itself while its manual mirror is in use, else the promoted or candidate text. */
 	const textOf = (artifact: ArtifactRow, source: string): string => (artifact.origin === "manual" ? source : artifact.content);
@@ -763,6 +767,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			},
 			sessionId,
 			optimRunId,
+			rolloutCandidate,
 		};
 		for (const factory of extraToolFactories) baseTools.push(...factory(toolCtx));
 		if (deps.mcp) baseTools.push(...(await deps.mcp.tools()));

@@ -153,4 +153,27 @@ describe("rollouts", () => {
 		expect(results.filter((t) => t.includes("TOOL_DENIED"))).toHaveLength(3);
 		expect(prompted).toBe(false);
 	});
+	it("runs a rollout's subagents on the candidate and charges them to the optimization", async () => {
+		const env = makeEnv({ skills: { "ci-fix": SKILL } });
+		const seen = record(env, [
+			fauxAssistantMessage([fauxToolCall("spawn", { tasks: [{ id: "a", instruction: "child task", skill: "ci-fix" }] })]),
+			"child done",
+			"parent done",
+		]);
+		const nowIso = new Date().toISOString();
+		const base = ensureManualArtifact(env.deps.db, "skill", "ci-fix", SKILL, nowIso);
+		const candidate = insertCandidateArtifact(env.deps.db, "skill", "ci-fix", `${SKILL_HEAD}Candidate body only.\n`, base.id, nowIso);
+		const result = await executeRun(createEngineEnv(env.deps), {
+			request: { instruction: "Delegate" },
+			budget: new RunBudget(0.5),
+			rollout: { optimRunId: "01OPTIM3", runsRoot: join(env.home, "optim", "01OPTIM3", "rollouts"), candidate },
+		});
+		expect(result.status).toBe("succeeded");
+		expect(seen.systems[1]).toContain("Candidate body only.");
+		expect(seen.systems[1]).not.toContain("Run the linter.");
+		const rows = env.deps.db.prepare("SELECT id, optim_run_id FROM runs WHERE root_run_id = ?").all(result.trajectoryId as string);
+		expect(rows.length).toBe(2);
+		expect(rows.every((r) => r.optim_run_id === "01OPTIM3")).toBe(true);
+		expect(getSpent(env.deps.db, "optim:01OPTIM3")).toBeCloseTo(getSpent(env.deps.db, `run:${result.trajectoryId}`));
+	});
 });
