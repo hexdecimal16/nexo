@@ -53,6 +53,21 @@ function subjectOf(toolName: string, args: unknown): string {
 	return JSON.stringify(args ?? null);
 }
 
+/** True when `pattern` names `toolName`: exactly, or as a prefix when it ends in `*` (`mcp__playwright__*`). */
+export function toolPatternMatches(pattern: string, toolName: string): boolean {
+	return pattern.endsWith("*") ? toolName.startsWith(pattern.slice(0, -1)) : pattern === toolName;
+}
+
+/** The policy for `toolName`: its exact key, else the longest matching `*` key, else undefined. */
+function policyFor(policy: Record<string, PolicyAction>, toolName: string): PolicyAction | undefined {
+	if (Object.hasOwn(policy, toolName)) return policy[toolName];
+	let best: string | undefined;
+	for (const key of Object.keys(policy)) {
+		if (key.endsWith("*") && toolPatternMatches(key, toolName) && (best === undefined || key.length > best.length)) best = key;
+	}
+	return best === undefined ? undefined : policy[best];
+}
+
 export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
 	const rules = cfg.rules.map((rule, index) => {
 		try {
@@ -75,11 +90,11 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
 		const subject = subjectOf(toolName, args);
 		for (let i = 0; i < rules.length; i++) {
 			const rule = rules[i];
-			if (!rule || rule.tool !== toolName || (rule.re && !rule.re.test(subject))) continue;
+			if (!rule || !toolPatternMatches(rule.tool, toolName) || (rule.re && !rule.re.test(subject))) continue;
 			if (rule.action === "allow" && toolName === "bash" && SHELL_CHAINING.test(subject)) continue;
 			return { action: rule.action, rule: i, subject };
 		}
-		return { action: cfg.policy[toolName] ?? "ask", subject };
+		return { action: policyFor(cfg.policy, toolName) ?? "ask", subject };
 	};
 
 	return {
