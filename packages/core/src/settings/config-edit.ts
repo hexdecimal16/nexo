@@ -109,7 +109,7 @@ export const EDITABLE_SETTINGS: readonly SettingDefinition[] = [
 	{
 		key: "scoring.judge",
 		label: "LLM judge scoring",
-		description: "on adds an llm_judge scorer to your user config, off removes it; on needs models.judge set first and does nothing until then",
+		description: "on adds an llm_judge scorer to your user config, off removes it; on needs models.judge set first",
 		type: { kind: "scorerToggle" },
 	},
 	{
@@ -312,6 +312,12 @@ function parseModelOrRef(key: string, value: unknown): Record<string, unknown> {
 	}
 }
 
+/** Carries a stored `effort` over when an existing entry has the same provider and id. */
+function keepEffort<T extends Record<string, unknown>>(model: T, existing: unknown[]): T {
+	const old = existing.find((e) => isPlainObject(e) && "provider" in model && e.provider === model.provider && e.id === model.id);
+	return isPlainObject(old) && old.effort !== undefined ? { ...model, effort: old.effort } : model;
+}
+
 /** `provider/id` entries joined with `+` (or an array of them); at least one, none empty. */
 function parseModels(key: string, value: unknown): { provider: string; id: string }[] {
 	const parts = typeof value === "string" ? value.split("+").map((p) => p.trim()) : Array.isArray(value) ? value : [];
@@ -392,8 +398,8 @@ function writeJudgeToggle(def: SettingDefinition, layers: ConfigLayers, userFile
 	const present = hasJudgeScorer(user);
 	if (on === present) return settingView(def, layers);
 	if (on) {
-		if (!hasJudgeModels(deepMerge(DEFAULT_CONFIG, user, layers.project))) {
-			throw invalidRequest(`Cannot turn ${def.key} on: no judge model is set`, "Set models.judge first (for example google/<model-id>); an llm_judge scorer without one makes the config invalid", { key: def.key });
+		if (!hasJudgeModels(user)) {
+			throw invalidRequest(`Cannot turn ${def.key} on: no judge model is set in your user config`, "Set models.judge first (for example google/<model-id>); an llm_judge scorer without one makes the config invalid", { key: def.key });
 		}
 		setPath(user, SCORERS_PATH, [...scorersOf(user), { kind: "llm_judge", name: "quality" }]);
 	} else {
@@ -422,9 +428,11 @@ export function writeSetting(userFile: string, cwd: string, key: string, value: 
 	const path = segments(key);
 	const pointer = `/${path.join("/")}`;
 	if (def.type.kind === "models") {
-		setPath(user, path, parseModels(key, value));
+		const existing = getPath(user, path);
+		setPath(user, path, parseModels(key, value).map((m) => keepEffort(m, Array.isArray(existing) ? existing : [])));
 	} else if (def.type.kind === "modelOrRef") {
-		setPath(user, path, parseModelOrRef(key, value));
+		const next = parseModelOrRef(key, value);
+		setPath(user, path, keepEffort(next, [getPath(user, path)]));
 	} else if (def.type.kind === "boolean") {
 		setPath(user, path, parseOnOff(key, value));
 	} else if (def.type.kind === "model") {
@@ -454,7 +462,7 @@ export function resetSetting(userFile: string, cwd: string, key: string): Settin
 	if (!definedIn(layers.user, def)) return settingView(def, layers);
 	const user = structuredClone(layers.user);
 	for (const p of leafPaths(def)) deletePath(user, p);
-	if (def.key === "models.judge" && hasJudgeScorer(deepMerge(DEFAULT_CONFIG, user, layers.project)) && !hasJudgeModels(deepMerge(DEFAULT_CONFIG, user, layers.project))) {
+	if (def.key === "models.judge" && hasJudgeScorer(user) && !hasJudgeModels(user)) {
 		throw invalidRequest("Cannot reset models.judge while an llm_judge scorer is configured", "Turn scoring.judge off first (or remove the llm_judge scorer)", { key: def.key });
 	}
 	writeJsonAtomic(userFile, user);

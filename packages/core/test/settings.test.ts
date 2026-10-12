@@ -672,4 +672,29 @@ describe("judge, scoring and learning settings", () => {
 		expect(read(f)).toEqual({ learning: { perJobUsd: 0.3 }, memory: { maxTokens: 2000 } });
 		expect(settings.resetSetting("learning.perJobUsd")).toMatchObject({ value: 0.15, source: "default" });
 	});
+
+	it("bases the judge guards on the user config alone, not the project config", () => {
+		const f = fixture();
+		writeJson(join(f.cwd, ".nexo", "config.json"), { models: { judge: [{ provider: "p", id: "x" }] } });
+		const settings = createSettings(f.options());
+		expectCode(() => settings.setSetting("scoring.judge", "on"), "INVALID_REQUEST");
+		expect(existsSync(f.paths.config)).toBe(false);
+
+		const g = fixture();
+		writeJson(g.paths.config, { models: { judge: [{ provider: "a", id: "x" }] }, scoring: { scorers: [{ kind: "llm_judge", name: "q" }] } });
+		writeJson(join(g.cwd, ".nexo", "config.json"), { scoring: { scorers: [] } });
+		const before = readFileSync(g.paths.config);
+		expectCode(() => createSettings(g.options()).resetSetting("models.judge"), "INVALID_REQUEST");
+		expect(readFileSync(g.paths.config)).toEqual(before);
+	});
+
+	it("keeps a stored effort when models.judge or models.reflector is set again to the same model", () => {
+		const f = fixture();
+		writeJson(f.paths.config, { models: { judge: [{ provider: "a", id: "x", effort: "low" }], reflector: { provider: "g", id: "y", effort: "high" } } });
+		const settings = createSettings(f.options());
+		settings.setSetting("models.judge", "a/x+b/y");
+		settings.setSetting("models.reflector", "g/y");
+		expect(read(f).models.judge).toEqual([{ provider: "a", id: "x", effort: "low" }, { provider: "b", id: "y" }]);
+		expect(read(f).models.reflector).toEqual({ provider: "g", id: "y", effort: "high" });
+	});
 });
