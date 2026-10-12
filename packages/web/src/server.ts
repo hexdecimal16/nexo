@@ -10,8 +10,15 @@ import {
 	costResponse,
 	feedbackResponse,
 	judgeCalibrationResponse,
+	learnJobsResponse,
 	listRunsResponse,
+	memoriesResponse,
+	memoryDetailResponse,
 	metaResponse,
+	playbookResponse,
+	playbooksResponse,
+	retireMemoryResponse,
+	retirePlaybookItemResponse,
 	runDetailResponse,
 	serveRunFile,
 	spanResponse,
@@ -41,6 +48,8 @@ export interface WebServerOptions {
 	readOnly?: ReadOnlyInfo | null;
 	/** The configured judge key (`models.judge` joined with `+`) and its same-family warnings, for the calibration view. */
 	judge?: { key: string | null; warnings: string[] };
+	/** `learning.enabled` of the loaded config (default off): verdicts then store human lessons and enqueue learn jobs. */
+	learning?: { enabled: boolean };
 }
 
 export interface WebServer {
@@ -60,6 +69,13 @@ const ROUTES = {
 	feedback: new RegExp(`^/api/runs/${RUN_ID}/feedback$`),
 	costs: /^\/api\/costs$/,
 	calibration: /^\/api\/judge\/calibration$/,
+	memories: /^\/api\/memories$/,
+	memory: new RegExp(`^/api/memories/${RUN_ID}$`),
+	memoryRetire: new RegExp(`^/api/memories/${RUN_ID}/retire$`),
+	playbooks: /^\/api\/playbooks$/,
+	playbook: /^\/api\/playbooks\/([^/]{1,64})$/,
+	playbookRetire: /^\/api\/playbooks\/([^/]{1,64})\/items\/([^/]{1,64})\/retire$/,
+	learnJobs: /^\/api\/learn\/jobs$/,
 	meta: /^\/api\/meta$/,
 };
 
@@ -122,6 +138,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 		now: options.now ?? (() => new Date()),
 		readOnly: options.readOnly ?? null,
 		judge: options.judge ?? { key: null, warnings: [] },
+		learning: options.learning ?? { enabled: false },
 	};
 	const assertWritable = (): void => {
 		if (!ctx.readOnly) return;
@@ -188,6 +205,36 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 		if (ROUTES.calibration.test(path)) {
 			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
 			return sendJson(res, 200, judgeCalibrationResponse(ctx));
+		}
+		if (ROUTES.memories.test(path)) {
+			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
+			return sendJson(res, 200, memoriesResponse(ctx, url.searchParams));
+		}
+		if ((m = ROUTES.memory.exec(path))) {
+			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
+			return sendJson(res, 200, memoryDetailResponse(ctx, m[1] as string));
+		}
+		if ((m = ROUTES.memoryRetire.exec(path))) {
+			if (method !== "POST") throw methodNotAllowed(method, path, "POST");
+			assertWritable();
+			return sendJson(res, 200, retireMemoryResponse(ctx, m[1] as string));
+		}
+		if (ROUTES.playbooks.test(path)) {
+			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
+			return sendJson(res, 200, playbooksResponse(ctx));
+		}
+		if ((m = ROUTES.playbook.exec(path))) {
+			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
+			return sendJson(res, 200, playbookResponse(ctx, decodePath(m[1] as string), url.searchParams));
+		}
+		if ((m = ROUTES.playbookRetire.exec(path))) {
+			if (method !== "POST") throw methodNotAllowed(method, path, "POST");
+			assertWritable();
+			return sendJson(res, 200, retirePlaybookItemResponse(ctx, decodePath(m[1] as string), decodePath(m[2] as string)));
+		}
+		if (ROUTES.learnJobs.test(path)) {
+			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
+			return sendJson(res, 200, learnJobsResponse(ctx, url.searchParams));
 		}
 		throw new NexoError({ code: "NOT_FOUND", message: `No API route ${path}`, context: { path } });
 	};

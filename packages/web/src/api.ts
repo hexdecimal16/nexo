@@ -30,6 +30,22 @@ import {
 	type RunQuery,
 	type RunRow,
 	runNotFound,
+	type ArtifactRow,
+	countLearnJobs,
+	getMemory,
+	getPlaybookItem,
+	isSkillName,
+	listArtifactVersions,
+	listLearnJobs,
+	listMemories,
+	listPlaybookItems,
+	listPlaybookSkills,
+	memoryHistory,
+	type PlaybookItemRow,
+	playbookItemHistory,
+	publishPlaybook,
+	retireMemory,
+	retirePlaybookItem,
 } from "@nexo/store";
 import { NexoError, type Redactor } from "@nexo/telemetry";
 import { resolveConfined } from "@nexo/tools";
@@ -41,7 +57,16 @@ import type {
 	FeedbackResponse,
 	FileEntry,
 	JudgeCalibrationResponse,
+	LearnJobsResponse,
+	MemoryDetailResponse,
+	MemoryListResponse,
+	MemoryRetireResponse,
 	MetaResponse,
+	PlaybookItem,
+	PlaybookListResponse,
+	PlaybookResponse,
+	PlaybookRetireResponse,
+	PlaybookVersion,
 	ReadOnlyInfo,
 	RunDetailResponse,
 	RunListResponse,
@@ -61,6 +86,8 @@ export interface ApiContext {
 	readOnly: ReadOnlyInfo | null;
 	/** The configured judge and its same-family warnings; key null without a judge. */
 	judge: { key: string | null; warnings: string[] };
+	/** `learning.enabled` of the loaded config: verdicts then store human lessons and enqueue learn jobs. */
+	learning: { enabled: boolean };
 }
 
 function requireRun(db: Db, id: string): RunRow {
@@ -197,7 +224,7 @@ export function spanResponse(ctx: ApiContext, id: string, spanId: string): SpanR
 export function feedbackResponse(ctx: ApiContext, id: string, body: unknown): FeedbackResponse {
 	if (typeof body !== "object" || body === null || Array.isArray(body)) throw invalidRequest("The request body must be a JSON object");
 	const { verdict, comment } = body as { verdict?: unknown; comment?: unknown };
-	return { feedback: recordFeedback(ctx.db, { runId: id, verdict, comment, nowIso: ctx.now().toISOString(), redact: ctx.redact }) };
+	return { feedback: recordFeedback(ctx.db, { runId: id, verdict, comment, nowIso: ctx.now().toISOString(), redact: ctx.redact, learn: ctx.learning.enabled }) };
 }
 
 /** `by` defaults to day here (the CLI defaults to model); `costReport` owns the `since` default and all validation. */
@@ -336,4 +363,87 @@ export function serveRunFile(ctx: ApiContext, res: ServerResponse, id: string, r
 		return;
 	}
 	pipeFileRange(res, fd, length);
+}
+
+function intParam(params: URLSearchParams, name: string, fallback: number): number {
+	const raw = optional(params, name);
+	if (raw === undefined) return fallback;
+	const value = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+	if (!Number.isInteger(value)) throw invalidRequest(`${name} must be a positive integer`, { [name]: raw });
+	return value;
+}
+
+/** `GET /api/memories?scope=&type=&all=1&limit=`: live memories (all with `all=1`), newest first. */
+export function memoriesResponse(ctx: ApiContext, params: URLSearchParams): MemoryListResponse {
+	return {
+		memories: listMemories(ctx.db, {
+			scope: optional(params, "scope"),
+			type: optional(params, "type"),
+			includeInactive: params.get("all") === "1",
+			limit: intParam(params, "limit", 200),
+		}),
+	};
+}
+
+export function memoryDetailResponse(ctx: ApiContext, id: string): MemoryDetailResponse {
+	const memory = getMemory(ctx.db, id);
+	if (!memory) throw new NexoError({ code: "NOT_FOUND", message: `Memory ${id} does not exist`, context: { id } });
+	return { memory, history: memoryHistory(ctx.db, id) };
+}
+
+/** `POST /api/memories/{id}/retire`: a user action, so human and user memories can be retired too. */
+export function retireMemoryResponse(ctx: ApiContext, id: string): MemoryRetireResponse {
+	return { memory: retireMemory(ctx.db, id, "user", ctx.now().toISOString()) };
+}
+
+function skillParam(name: string): string {
+	if (!isSkillName(name)) throw invalidRequest("The playbook name must be a skill name", { name });
+	return name;
+}
+
+function versionView(a: ArtifactRow): PlaybookVersion {
+	return { id: a.id, version: a.version, origin: a.origin, status: a.status, createdAt: a.createdAt };
+}
+
+function itemView(ctx: ApiContext, item: PlaybookItemRow): PlaybookItem {
+	return { ...item, history: playbookItemHistory(ctx.db, item.id) };
+}
+
+/** `GET /api/playbooks`: every skill with playbook items, with its active item count and version. */
+export function playbooksResponse(ctx: ApiContext): PlaybookListResponse {
+	return {
+		playbooks: listPlaybookSkills(ctx.db).map((skill) => {
+			const active = listArtifactVersions(ctx.db, "playbook", skill).find((a) => a.status === "active");
+			return { skill, activeItems: listPlaybookItems(ctx.db, skill).length, version: active?.version ?? null, origin: active?.origin ?? null };
+		}),
+	};
+}
+
+/** `GET /api/playbooks/{name}?all=1`: the items (retired ones with `all=1`) with their history, and every version. */
+export function playbookResponse(ctx: ApiContext, name: string, params: URLSearchParams): PlaybookResponse {
+	const skill = skillParam(name);
+	return {
+		skill,
+		items: listPlaybookItems(ctx.db, skill, { includeRetired: params.get("all") === "1" }).map((i) => itemView(ctx, i)),
+		versions: listArtifactVersions(ctx.db, "playbook", skill).map(versionView),
+	};
+}
+
+/** `POST /api/playbooks/{name}/items/{key}/retire`: a user action; publishes a manual playbook version. */
+export function retirePlaybookItemResponse(ctx: ApiContext, name: string, key: string): PlaybookRetireResponse {
+	const skill = skillParam(name);
+	const nowIso = ctx.now().toISOString();
+	retirePlaybookItem(ctx.db, skill, key, "user", nowIso);
+	const version = publishPlaybook(ctx.db, skill, "manual", nowIso);
+	const item = getPlaybookItem(ctx.db, skill, key) as PlaybookItemRow;
+	return { item: itemView(ctx, item), version: version ? versionView(version) : null };
+}
+
+/** `GET /api/learn/jobs?status=&limit=`: job counts by status and the newest jobs. */
+export function learnJobsResponse(ctx: ApiContext, params: URLSearchParams): LearnJobsResponse {
+	const jobs = listLearnJobs(ctx.db, { status: optional(params, "status"), limit: intParam(params, "limit", 50) });
+	return {
+		counts: countLearnJobs(ctx.db),
+		jobs: jobs.map((j) => ({ id: j.id, runId: j.runId, kind: j.kind, trigger: j.trigger, status: j.status, attempts: j.attempts, lastError: j.lastError, createdAt: j.createdAt, updatedAt: j.updatedAt })),
+	};
 }
