@@ -9,8 +9,32 @@ import { runChargedCompletion } from "../engine/charged-completion.ts";
 import type { Recorder } from "../engine/recorder.ts";
 import type { EngineEnv } from "../engine/run.ts";
 
-/** Output tokens a reflection reply is capped at (and its estimate assumes), at most `budgets.estimateOutputTokens`. */
+/** The most output tokens a reflection reply may be capped at. */
 export const REFLECTION_MAX_OUTPUT_TOKENS = 8192;
+
+/** Output tokens a reply holding a rewrite of a text of `chars` characters needs: the JSON-escaped text (about 3 characters a token) plus the rationale. */
+export function requiredReflectionTokens(chars: number): number {
+	return Math.ceil(chars / 3) + 1024;
+}
+
+/** Refuses (INVALID_REQUEST) a base text whose rewrite cannot fit in `maxTokens` output tokens, before anything is spent. */
+export function assertReflectionFits(target: OptimTarget, texts: Readonly<Record<string, string>>, maxTokens: number = REFLECTION_MAX_OUTPUT_TOKENS): void {
+	for (const [component, text] of Object.entries(texts)) {
+		const needed = requiredReflectionTokens(text.length);
+		if (needed <= maxTokens) continue;
+		throw new NexoError({
+			code: "INVALID_REQUEST",
+			message: `The ${target.key} text (${component}, ${text.length} characters) is too long to optimize: a reflection reply needs about ${needed} output tokens and the limit is ${maxTokens}`,
+			hint: "Shorten the text, for example by moving detail into files the agent reads, then run the optimization again",
+			context: { target: target.key, component, chars: text.length, neededTokens: needed, maxTokens },
+		});
+	}
+}
+
+/** Output tokens a reflection call is capped at and its budget reservation assumes: enough for the current text, at least `budgets.estimateOutputTokens`, at most REFLECTION_MAX_OUTPUT_TOKENS. */
+export function reflectionOutputTokens(estimateOutputTokens: number, currentTextChars: number): number {
+	return Math.min(REFLECTION_MAX_OUTPUT_TOKENS, Math.max(estimateOutputTokens, requiredReflectionTokens(currentTextChars)));
+}
 
 /** Who pays for the optimizer's own calls (reflection, judge-rubric judgements) and where they are recorded. */
 export interface OptimPayer {
@@ -47,7 +71,7 @@ export async function stopOnRefusal<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /** One reflection completion on `models.s2`: a `gepa_call` span (tier `gepa`) charged to the optimization. */
-async function reflectionCompletion(payer: OptimPayer, request: { system: string; user: string; purpose: string }): Promise<string> {
+async function reflectionCompletion(payer: OptimPayer, request: { system: string; user: string; purpose: string; currentTextChars: number }): Promise<string> {
 	const { env, budget } = payer;
 	const { config } = env.deps;
 	const spec = config.models.s2;
@@ -77,7 +101,7 @@ async function reflectionCompletion(payer: OptimPayer, request: { system: string
 				system: request.system,
 				user: request.user,
 				effort,
-				outputTokens: Math.min(REFLECTION_MAX_OUTPUT_TOKENS, config.budgets.estimateOutputTokens),
+				outputTokens: reflectionOutputTokens(config.budgets.estimateOutputTokens, request.currentTextChars),
 				span: { kind: "gepa_call", name: `${request.purpose} ${model.id}`, parentSpanId: payer.parentSpanId, tier: "gepa", attrs: { purpose: request.purpose } },
 			},
 			payer.signal,
@@ -96,10 +120,11 @@ export async function proposeText(
 ): Promise<{ text: string; rationale: string } | { problem: string }> {
 	const system = reflectionSystem(input.target);
 	const user = reflectionPrompt(input);
-	const first = await reflectionCompletion(payer, { system, user, purpose: "reflect" });
+	const currentTextChars = input.currentText.length;
+	const first = await reflectionCompletion(payer, { system, user, purpose: "reflect", currentTextChars });
 	let checked = validateReply(ProposalSchema, first);
 	if (!checked.ok) {
-		const second = await reflectionCompletion(payer, { system, user: `${user}\n\n${repairPrompt(first, checked.errors)}`, purpose: "reflect-repair" });
+		const second = await reflectionCompletion(payer, { system, user: `${user}\n\n${repairPrompt(first, checked.errors)}`, purpose: "reflect-repair", currentTextChars });
 		checked = validateReply(ProposalSchema, second);
 		if (!checked.ok) return { problem: `the reflection reply did not match its schema after one repair: ${checked.errors.slice(0, 3).join("; ")}` };
 	}

@@ -1106,7 +1106,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 						...(rollout?.reference ? { reference: rollout.reference } : {}),
 					};
 					// The self-check only feeds escalation, so it is skipped when an escalation could not happen anyway.
-					const selfCheck = selfCheckOn && currentBlock() === null ? await runSelfCheck(scoring, active.model, active.resolved.effort, active.resolved.role ?? "custom", scoreInput) : null;
+					const selfCheck = selfCheckOn && !optimRunId && currentBlock() === null ? await runSelfCheck(scoring, active.model, active.resolved.effort, active.resolved.role ?? "custom", scoreInput) : null;
 					latestScores = await runScoringRound(scoring, plan, scoreInput, round);
 					scoreRows.push(...latestScores);
 					const judge = latestScores.find((r) => r.scorerType === "llm_judge" && r.status === "ok");
@@ -1116,7 +1116,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 						judgeScore: judge?.value ?? null,
 					});
 					const first = signals[0];
-					if (!first || input.signal?.aborted) break;
+					// A rollout's quality is its single scoring round: an S2 continuation would be prompted with judge rationales written against the case reference.
+					if (!first || optimRunId || input.signal?.aborted) break;
 					const combined: EscalationSignal = { trigger: first.trigger, reason: signals.map((x) => x.reason).join("; ") };
 					// A continuation that fails or runs out of budget keeps the answer that was scored, and the model that wrote it;
 					// an abort still aborts the run.

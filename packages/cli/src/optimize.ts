@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { type OptimizeEvent, startOptimization } from "@nexo/core";
+import { type NexoConfig, type OptimizeEvent, startOptimization } from "@nexo/core";
 import type { OptimReport } from "@nexo/optimize";
 import {
 	addEvalCase,
@@ -112,6 +112,15 @@ function positiveNumber(flag: string, raw: string | undefined, integer: boolean)
 	return value;
 }
 
+/** The notice printed before a foreground optimization: rollouts replay past instructions with the user's allowed tools and MCP servers, side effects included. Null when there are none. */
+function rolloutNotice(config: NexoConfig): string | null {
+	const allowed = Object.entries(config.tools.policy).filter(([, action]) => action === "allow").map(([tool]) => escapeControl(tool));
+	const servers = Object.keys(config.mcp.servers).map((name) => escapeControl(name));
+	if (allowed.length === 0 && servers.length === 0) return null;
+	const parts = [allowed.length > 0 ? `tools set to allow (${allowed.join(", ")})` : null, servers.length > 0 ? `configured MCP servers (${servers.join(", ")})` : null].filter((p) => p !== null);
+	return `notice: rollouts replay past instructions under your tool policy, so ${parts.join(" and ")} run once per rollout and their side effects happen each time`;
+}
+
 /** `nexo optimize --target …`: one optimization in the foreground. */
 async function runOptimize(args: string[], io: CliIO, options: CliOptions): Promise<number> {
 	const { values } = parseArgs({
@@ -123,6 +132,8 @@ async function runOptimize(args: string[], io: CliIO, options: CliOptions): Prom
 	if (seed !== undefined && !(Number.isInteger(seed) && seed >= 0)) throw usageError("--seed must be a non-negative integer");
 	const runtime = createRuntime({ env: options.env ?? process.env, cwd: options.cwd ?? process.cwd(), prompter: nonInteractivePrompter, models: options.models });
 	try {
+		const notice = rolloutNotice(runtime.config);
+		if (notice) io.stderr.write(`${notice}\n`);
 		const { run, report } = await startOptimization(runtime.engine.env, {
 			target: values.target,
 			budgetUsd: positiveNumber("--budget-usd", values["budget-usd"], false),

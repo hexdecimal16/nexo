@@ -176,6 +176,18 @@ function assertEmbeddingConfigured(config: NexoConfig, projectLayer: unknown, ov
 	}
 }
 
+/** `optimize.minJudgeKappa` gates promotion of judge-only evidence, so a project config (a cloned repo) may not lower it. Throws CONFIG_INVALID. */
+function assertKappaFromUser(projectLayer: unknown, overrides: unknown, homeFile: string): void {
+	const setsKappa = (layer: unknown) => isPlainObject(layer) && isPlainObject(layer.optimize) && "minJudgeKappa" in layer.optimize;
+	if (!setsKappa(projectLayer) || setsKappa(overrides)) return;
+	throw new NexoError({
+		code: "CONFIG_INVALID",
+		message: "Invalid configuration:\n  /optimize/minJudgeKappa must not be set in ./.nexo/config.json",
+		hint: `The judge agreement a promotion needs is your decision; set optimize.minJudgeKappa in ${homeFile}`,
+		context: { path: "/optimize/minJudgeKappa" },
+	});
+}
+
 const MCP_SERVER_NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
 /** The mcp section of the user-level layers only: defaults, `~/.nexo/config.json` and CLI overrides. */
@@ -253,6 +265,7 @@ export function loadConfig(options: LoadConfigOptions): LoadedConfig {
 	// Values from ./.nexo/config.json come from a file in the working directory (a cloned repo), so they are marked or confined.
 	const projectLayer = sources.includes(projectFile) ? layers[sources.indexOf(projectFile)] : undefined;
 	assertEmbeddingConfigured(config, projectLayer, options.overrides, options.paths.config);
+	assertKappaFromUser(projectLayer, options.overrides, options.paths.config);
 	config.scoring.scorersOrigin = fromProject(projectLayer, options.overrides, "scoring", "scorers") ? "project" : "user";
 	config.scoring.scorerTools = userToolPolicy(sources.includes(options.paths.config) ? layers[sources.indexOf(options.paths.config)] : undefined, options.overrides, options.paths.config);
 	// MCP servers are user-level only: a server runs a command, so a cloned repo must not add one.

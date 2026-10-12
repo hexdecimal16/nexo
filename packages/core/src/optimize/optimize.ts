@@ -53,6 +53,7 @@ import { RunBudget } from "../cost/budget.ts";
 import { DEFAULT_PLANNER_PROMPT, DEFAULT_SYSTEM_PROMPT } from "../engine/prompts.ts";
 import { createEngineEnv, type EngineEnv } from "../engine/run.ts";
 import { judgeKey, judgeModels, loadJudgeRubric } from "../scoring/sources.ts";
+import { assertReflectionFits } from "./reflect.ts";
 import { createOptimAdapter, type DetailedEvaluation, type OptimContext, type OptimEvent } from "./adapter.ts";
 import { closeOptimizerRun, openOptimizerRun } from "./optimizer-run.ts";
 
@@ -213,6 +214,8 @@ export async function startOptimization(baseEnv: EngineEnv, options: OptimizeOpt
 	if (Object.values(baseTexts).some((t) => t.length > MAX_CANDIDATE_CHARS)) {
 		throw new NexoError({ code: "INVALID_REQUEST", message: `The ${target.key} text is longer than ${MAX_CANDIDATE_CHARS} characters, the most an optimization handles`, context: { target: target.key } });
 	}
+
+	assertReflectionFits(target, baseTexts);
 
 	const optimRunId = newId();
 	const seed = options.seed ?? Math.floor(Math.random() * 2 ** 31);

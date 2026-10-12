@@ -16,6 +16,7 @@ import {
 } from "@nexo/store";
 import { createEngine, createEngineEnv, DEFAULT_SYSTEM_PROMPT, executeRun, loadJudgeRubric, RunBudget } from "../src/index.ts";
 import { makeEnv, type TestEnv } from "./helpers.ts";
+import { optimEnv, route } from "./optimize-helpers.ts";
 import { JUDGE, JUDGE_MODELS, verdict } from "./scoring-helpers.ts";
 
 const SKILL_HEAD = "---\nname: ci-fix\ndescription: Fix CI\n---\n";
@@ -117,6 +118,30 @@ describe("rollouts", () => {
 		expect(readFileSync(join(result.runDir as string, "artifacts", "skills", "ci-fix", "SKILL.md"), "utf8")).toContain("Lint, then test.");
 		const members = JSON.parse(String(env.deps.db.prepare("SELECT members_json FROM artifact_sets WHERE id = ?").get(run?.artifactSetId as string)?.members_json));
 		expect(members).toContainEqual({ kind: "skill", name: "ci-fix", artifactId: candidate.id, version: candidate.version });
+	});
+
+	it("runs no end-of-run escalation for a rollout, while a normal run with the same setup escalates", async () => {
+		const setup = () => {
+			const env = optimEnv();
+			const calls = route(env, { agent: () => "meh", judge: () => verdict(0.3, "the reference also runs the tests"), reflect: () => "rescued" });
+			return { env, calls };
+		};
+		const rolled = setup();
+		const nowIso = new Date().toISOString();
+		const base = ensureManualArtifact(rolled.env.deps.db, "skill", "ci-fix", SKILL, nowIso);
+		const result = await executeRun(createEngineEnv(rolled.env.deps), {
+			request: { instruction: "Fix CI", skill: "ci-fix" },
+			budget: new RunBudget(0.5),
+			rollout: { optimRunId: "01OPTIM", runsRoot: join(rolled.env.home, "optim", "01OPTIM", "rollouts"), candidate: base, reference: "Reference answer: lint and test" },
+		});
+		expect(result).toMatchObject({ status: "succeeded", output: "meh", escalations: 0 });
+		expect(rolled.calls.reflect).toHaveLength(0);
+		expect(rolled.calls.judge).toHaveLength(1);
+
+		const normal = setup();
+		const escalated = await createEngine(normal.env.deps).run({ instruction: "Fix CI", skill: "ci-fix" });
+		expect(escalated).toMatchObject({ output: "rescued", escalations: 1 });
+		expect(normal.calls.reflect).toHaveLength(1);
 	});
 
 	it("confines a rollout's writes to its own workspace and refuses ask tools without prompting", async () => {
