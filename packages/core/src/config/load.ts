@@ -6,6 +6,7 @@ import { NexoError } from "@nexo/telemetry";
 import { parseScorerSpecs } from "@nexo/scorers";
 import type { NexoPaths } from "@nexo/store";
 import { Value } from "typebox/value";
+import { VERTEX_PROVIDER } from "../learn/embedder.ts";
 import { ConfigSchema, DEFAULT_CONFIG, type DeepPartial, type NexoConfig } from "./schema.ts";
 
 export interface LoadConfigOptions {
@@ -153,7 +154,8 @@ function assertJudgeConfigured(config: NexoConfig): void {
 
 /**
  * `models.embedding` sends the provider's API key to its `baseUrl`, so a project config (a cloned repo) may not set it;
- * a provider other than `openai` needs an explicit `baseUrl`. Throws CONFIG_INVALID.
+ * a provider other than `openai` and `google-vertex` needs an explicit `baseUrl`, and `google-vertex` (which uses the
+ * Vertex AI API with Google credentials) takes none. Throws CONFIG_INVALID.
  */
 function assertEmbeddingConfigured(config: NexoConfig, projectLayer: unknown, overrides: unknown, homeFile: string): void {
 	const setsEmbedding = (layer: unknown) => isPlainObject(layer) && isPlainObject(layer.models) && "embedding" in layer.models;
@@ -166,7 +168,15 @@ function assertEmbeddingConfigured(config: NexoConfig, projectLayer: unknown, ov
 		});
 	}
 	const embedding = config.models.embedding;
-	if (embedding && !embedding.baseUrl && embedding.provider !== "openai") {
+	if (embedding?.provider === VERTEX_PROVIDER && embedding.baseUrl) {
+		throw new NexoError({
+			code: "CONFIG_INVALID",
+			message: `Invalid configuration:\n  /models/embedding/baseUrl is not used for provider "${VERTEX_PROVIDER}"`,
+			hint: "Remove models.embedding.baseUrl; Vertex AI is reached through GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION",
+			context: { path: "/models/embedding/baseUrl" },
+		});
+	}
+	if (embedding && !embedding.baseUrl && embedding.provider !== "openai" && embedding.provider !== VERTEX_PROVIDER) {
 		throw new NexoError({
 			code: "CONFIG_INVALID",
 			message: `Invalid configuration:\n  /models/embedding/baseUrl is required for provider "${embedding.provider}"`,

@@ -16,7 +16,10 @@ const ModelSpecSchema = Type.Object(
 	{ provider: Type.String({ minLength: 1 }), id: Type.String({ minLength: 1 }), effort: Type.Optional(EffortSchema) },
 	{ additionalProperties: false },
 );
-/** An OpenAI-compatible embeddings endpoint (`POST {baseUrl}/embeddings`); `baseUrl` defaults to OpenAI's for provider `openai`. */
+/**
+ * An OpenAI-compatible embeddings endpoint (`POST {baseUrl}/embeddings`); `baseUrl` defaults to OpenAI's for provider
+ * `openai`. Provider `google-vertex` uses the Vertex AI API instead and takes no `baseUrl`.
+ */
 const EmbeddingModelSchema = Type.Object(
 	{
 		provider: Type.String({ minLength: 1 }),
