@@ -2,12 +2,24 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { formatSkillIndex, loadSkills } from "../src/index.ts";
+import { BUNDLED_SKILLS_DIR, formatSkillIndex, loadSkills } from "../src/index.ts";
 
 function writeSkill(root: string, dirName: string, frontmatter: string, body = "Do the thing.") {
 	mkdirSync(join(root, dirName), { recursive: true });
 	writeFileSync(join(root, dirName, "SKILL.md"), `---\n${frontmatter}\n---\n${body}\n`);
 }
+
+describe("bundled skills", () => {
+	it("load without diagnostics, and a configured skill of the same name replaces one", () => {
+		const bundled = loadSkills([BUNDLED_SKILLS_DIR]);
+		expect(bundled.diagnostics).toEqual([]);
+		expect(bundled.skills.get("browser")?.meta.parallelSafe).toBe(false);
+		const root = mkdtempSync(join(tmpdir(), "nexo-skills-"));
+		mkdirSync(join(root, "browser"));
+		writeFileSync(join(root, "browser", "SKILL.md"), "---\nname: browser\ndescription: mine\n---\nbody");
+		expect(loadSkills([BUNDLED_SKILLS_DIR, root]).skills.get("browser")?.description).toBe("mine");
+	});
+});
 
 describe("loadSkills", () => {
 	it("parses a valid skill with default nexo metadata", () => {
