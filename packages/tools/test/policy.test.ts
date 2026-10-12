@@ -27,6 +27,20 @@ describe("createPolicy", () => {
 		expect(policy.decide("mystery", { a: 1 }).action).toBe("ask");
 	});
 
+	it("matches * keys and rule tools by prefix, the exact key and the longest prefix first", () => {
+		const mcp = createPolicy({
+			policy: { "mcp__pw__*": "ask", "mcp__pw__browser_snap*": "allow", mcp__pw__browser_run_code_unsafe: "deny" },
+			rules: [{ tool: "mcp__pw__*", match: '"url":"https://evil\\.example', action: "deny" }],
+			nonInteractiveAsk: "deny",
+		});
+		expect(mcp.decide("mcp__pw__browser_snapshot", {}).action).toBe("allow");
+		expect(mcp.decide("mcp__pw__browser_click", {}).action).toBe("ask");
+		expect(mcp.decide("mcp__pw__browser_run_code_unsafe", {}).action).toBe("deny");
+		expect(mcp.decide("mcp__pw__browser_navigate", { url: "https://evil.example/x" })).toMatchObject({ action: "deny", rule: 0 });
+		expect(mcp.decide("mcp__other__x", {}).action).toBe("ask");
+		expect(mcp.decide("mcp__pw_", {}).action).toBe("ask");
+	});
+
 	it("rejects invalid rule regexes with CONFIG_INVALID", () => {
 		try {
 			createPolicy({ ...cfg, rules: [{ tool: "bash", match: "(", action: "allow" }] });
