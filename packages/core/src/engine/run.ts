@@ -75,7 +75,7 @@ import { DEFAULT_PLANNER_PROMPT, DEFAULT_SYSTEM_PROMPT, renderSystemPrompt } fro
 import { type ApiKeyResolver, createGatedStreamFn } from "./provider-gate.ts";
 import { Recorder } from "./recorder.ts";
 import type { ChargedCallDeps } from "../learn/caller.ts";
-import { activePlaybook, EMPTY_MEMORY_CONTEXT, playbookSection, retrieveRunMemories, type RunMemoryContext, skillAppendix } from "../learn/context.ts";
+import { activePlaybook, emptyMemoryContext, playbookSection, retrieveRunMemories, type RunMemoryContext, skillAppendix } from "../learn/context.ts";
 import { continuationPrompt } from "../scoring/continuation.ts";
 import { planScoring, runScoringRound, runSelfCheck, type ScoringDeps, summarizeSpans } from "../scoring/runner.ts";
 import { judgeFamilyWarnings, loadJudgeRubric, loadRouterPolicy } from "../scoring/sources.ts";
@@ -437,7 +437,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	/** The skill's active playbook when the run starts with `--skill` (spec §6), snapshotted with the run's artifacts. */
 	const startPlaybook = skill ? getActiveArtifact(db, "playbook", skill.name) : undefined;
 	/** Memories injected at run start; load_skill adds the skill memories it shows. */
-	let memoryContext: RunMemoryContext = EMPTY_MEMORY_CONTEXT;
+	let memoryContext: RunMemoryContext = emptyMemoryContext();
 	/** Charges calls made for memory (the query embedding) to this run; set once the run span exists. */
 	let memoryDeps: ChargedCallDeps | null = null;
 

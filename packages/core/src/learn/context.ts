@@ -13,7 +13,10 @@ export interface RunMemoryContext {
 	embedding: { model: string; vector: number[] } | null;
 }
 
-export const EMPTY_MEMORY_CONTEXT: RunMemoryContext = { block: "", ids: new Set(), query: "", embedding: null };
+/** A fresh empty context; `ids` is mutated by load_skill, so it is never shared between runs. */
+export function emptyMemoryContext(): RunMemoryContext {
+	return { block: "", ids: new Set(), query: "", embedding: null };
+}
 
 function rankOptions(config: NexoConfig, now: Date): Pick<RetrieveOptions, "weights" | "tauDays" | "now" | "topK"> {
 	return { weights: config.memory.weights, tauDays: config.memory.tauDays, now, topK: config.memory.topK };
@@ -26,7 +29,7 @@ function rankOptions(config: NexoConfig, now: Date): Pick<RetrieveOptions, "weig
  */
 export async function retrieveRunMemories(deps: ChargedCallDeps, instruction: string, scopes: readonly string[]): Promise<RunMemoryContext> {
 	const { config, db, logger, redact } = deps.env.deps;
-	if (!config.memory.enabled || config.memory.maxTokens <= 0) return EMPTY_MEMORY_CONTEXT;
+	if (!config.memory.enabled || config.memory.maxTokens <= 0) return emptyMemoryContext();
 	const spanId = deps.recorder.start({ kind: "memory_read", name: "retrieve", parentSpanId: deps.parentSpanId, attrs: { scopes } });
 	let embedding: RunMemoryContext["embedding"] = null;
 	let embeddingError: unknown = null;
@@ -58,7 +61,7 @@ export async function retrieveRunMemories(deps: ChargedCallDeps, instruction: st
 		deps.recorder.finish(spanId, { status: "error", attrs: { error: redact(toErrorPayload(error)) } });
 		if (deps.signal.aborted) throw error;
 		logger.warn("memory retrieval failed; the run continues without memories", { error });
-		return EMPTY_MEMORY_CONTEXT;
+		return emptyMemoryContext();
 	}
 }
 

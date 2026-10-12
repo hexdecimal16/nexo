@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { addMemory, addPlaybookItem, getMemory, getRun, listLearnJobs, listSpans, publishPlaybook } from "@nexo/store";
 import { createEngine, createEngineEnv, LearnWorker } from "../src/index.ts";
 import { skillMd } from "./scoring-helpers.ts";
+import { emptyMemoryContext } from "../src/learn/context.ts";
 import { embeddingServer, makeEnv } from "./learn-helpers.ts";
 
 /** Scripted agent replies that also record each request's system prompt and last tool result. */
@@ -119,6 +120,27 @@ describe("playbooks in skills", () => {
 		expect(c.toolResults[0]).toContain("- [k001] Cache node_modules");
 		expect(c.toolResults[0]).toContain("- (fact · skill:ci · user) CI runs on Node 22");
 		expect(existsSync(join(result.runDir as string, "artifacts", "playbooks", "ci.md"))).toBe(true);
+	});
+});
+
+describe("empty memory context", () => {
+	it("is a fresh object with its own ids set each time", () => {
+		const a = emptyMemoryContext();
+		a.ids.add("m1");
+		const b = emptyMemoryContext();
+		expect(b).not.toBe(a);
+		expect(b.ids.size).toBe(0);
+	});
+
+	it("a disabled-memory run's load_skill ids never leak into the next run", async () => {
+		const env = makeEnv({ skills: { ci: skillMd("ci", {}) }, config: { memory: { enabled: false } } });
+		for (let i = 0; i < 2; i++) {
+			const c = capture(env, [fauxAssistantMessage([fauxToolCall("load_skill", { name: "ci" })]), fauxAssistantMessage("done")]);
+			await createEngine(env.deps).run({ instruction: "Speed up the CI build" });
+			expect(c.toolResults[0]).not.toContain("Playbook");
+		}
+		const a = emptyMemoryContext();
+		expect(a.ids.size).toBe(0);
 	});
 });
 
