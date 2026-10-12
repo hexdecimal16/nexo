@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs";
 import { join, sep } from "node:path";
-import { type Api, type AssistantMessage, type Model, normalizeContext } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { Effort } from "@nexo/router";
 import {
 	type CommandRunner,
@@ -27,9 +27,8 @@ import { type ErrorPayload, NexoError, toErrorPayload } from "@nexo/telemetry";
 import { createPolicy, runBash } from "@nexo/tools";
 import { DEFAULT_CONFIG } from "../config/schema.ts";
 import type { RunBudget } from "../cost/budget.ts";
-import { estimateCallCostUsd, type PricedUsage } from "../cost/pricing.ts";
-import { classifyProviderError, retryDelayMs } from "../engine/errors.ts";
-import { assistantText } from "../engine/messages.ts";
+import type { PricedUsage } from "../cost/pricing.ts";
+import { runChargedCompletion } from "../engine/charged-completion.ts";
 import type { Recorder } from "../engine/recorder.ts";
 import type { EngineEnv, EngineEvent } from "../engine/run.ts";
 import { judgeModels } from "./sources.ts";
@@ -140,12 +139,12 @@ export interface ScoringDeps {
 	generators: () => ModelRef[];
 	signal?: AbortSignal;
 }
-
 /**
- * One LLM completion charged to the run and recorded as a span (`judge_call` for judges, `self_check` for self-checks).
- * The estimate is reserved from the run budget for the call, so parallel calls (panel members, both pairwise orders)
- * never spend more than the budget together. Retryable provider errors are retried like agent turns. Throws
- * BUDGET_EXCEEDED when the estimate cannot be reserved, a classified provider error, or on abort.
+ * One LLM completion charged to the run and recorded as a span (`judge_call` for judges, `self_check` for self-checks):
+ * `runChargedCompletion` on the run budget, charged through `deps.charge` (the run's cost, tokens and the spend ledger).
+ * Parallel calls (panel members, both pairwise orders) reserve their estimates from the same budget, so together they
+ * never spend more than it. Throws BUDGET_EXCEEDED when the estimate cannot be reserved, a classified provider error, or
+ * on abort.
  */
 async function chargedCompletion(
 	deps: ScoringDeps,
@@ -154,68 +153,24 @@ async function chargedCompletion(
 	span: { kind: "judge_call" | "self_check"; name: string; parentSpanId: string; tier: string; attrs: Record<string, unknown> },
 	signal: AbortSignal,
 ): Promise<{ text: string; costUsd: number; costUnknown: boolean }> {
-	const { env, recorder, budget } = deps;
-	const { config, redact } = env.deps;
-	const providerCfg = config.providers[model.provider] ?? {};
-	const maxRetries = providerCfg.maxRetries ?? 3;
-	const baseDelay = providerCfg.retryBaseDelayMs ?? 1000;
-	// The reply is capped at the output tokens the estimate assumes, so a verbose reply cannot cost more than was reserved.
-	const maxTokens = model.maxTokens > 0 ? Math.min(config.budgets.estimateOutputTokens, model.maxTokens) : config.budgets.estimateOutputTokens;
-	let costUsd = 0;
-	let costUnknown = false;
-	for (let attempt = 1; ; attempt++) {
-		const estimate = estimateCallCostUsd(model, config.pricingOverrides, request.system.length + request.user.length, config.budgets.estimateOutputTokens);
-		const reserved = estimate > 0 ? budget.tryReserve(estimate) : budget.canAfford(0);
-		if (!reserved) {
-			throw new NexoError({
-				code: "BUDGET_EXCEEDED",
-				message: `The run budget cannot cover the ${span.kind === "judge_call" ? "judge" : "self-check"} call (estimated $${estimate.toFixed(4)}, $${budget.remainingUsd().toFixed(4)} left)`,
-				hint: "Raise --budget or budgets.perRunUsd so scoring fits after the run",
-			});
-		}
-		const spanId = recorder.start({
-			kind: span.kind,
-			name: span.name,
-			parentSpanId: span.parentSpanId,
-			model: model.id,
-			provider: model.provider,
-			tier: span.tier,
-			effort: request.effort,
-			modelSource: "default",
-			attrs: span.attrs,
-		});
-		let msg: AssistantMessage;
-		try {
-			const context = normalizeContext({ systemPrompt: request.system, messages: [{ role: "user", content: request.user, timestamp: env.now().getTime() }] });
-			const stream = await env.streamFn(model, context, { reasoning: request.effort === "off" ? undefined : request.effort, maxTokens, signal });
-			msg = await stream.result();
-		} catch (error) {
-			if (estimate > 0) budget.settleReservation(estimate, 0);
-			recorder.finish(spanId, { status: "error", attrs: { error: redact(toErrorPayload(error)) } });
-			throw error;
-		}
-		if (estimate > 0) budget.settleReservation(estimate, 0);
-		const priced = deps.charge(model, msg);
-		costUsd += priced.costUsd;
-		costUnknown ||= priced.costUnknown;
-		const text = assistantText(msg);
-		const failed = msg.stopReason === "error" || msg.stopReason === "aborted";
-		recorder.finish(spanId, {
-			status: failed ? "error" : "ok",
-			tokensIn: msg.usage.input,
-			tokensOut: msg.usage.output,
-			cacheRead: msg.usage.cacheRead,
-			cacheWrite: msg.usage.cacheWrite,
-			costUsd: priced.costUsd,
-			costUnknown: priced.costUnknown,
-			attrs: { stopReason: msg.stopReason, errorMessage: msg.errorMessage, reply: redact(text) },
-		});
-		if (msg.stopReason === "aborted" || signal.aborted) throw new NexoError({ code: "INTERNAL", message: "The scoring call was aborted" });
-		if (!failed) return { text, costUsd, costUnknown };
-		const error = classifyProviderError(msg.errorMessage ?? "Provider error");
-		if (!error.retryable || attempt > maxRetries) throw error;
-		await env.sleep(retryDelayMs(attempt, baseDelay, msg.errorMessage ?? ""), signal);
-	}
+	const { budget } = deps;
+	return runChargedCompletion(
+		{
+			env: deps.env,
+			recorder: deps.recorder,
+			budget,
+			charge: deps.charge,
+			refused: (estimate) =>
+				new NexoError({
+					code: "BUDGET_EXCEEDED",
+					message: `The run budget cannot cover the ${span.kind === "judge_call" ? "judge" : "self-check"} call (estimated $${estimate.toFixed(4)}, $${budget.remainingUsd().toFixed(4)} left)`,
+					hint: "Raise --budget or budgets.perRunUsd so scoring fits after the run",
+				}),
+			abortMessage: "The scoring call was aborted",
+		},
+		{ model, system: request.system, user: request.user, effort: request.effort, span },
+		signal,
+	);
 }
 
 /** A JudgeCaller whose calls are `judge_call` spans (tier `judge`) under `scorerSpanId`, charged to the run. */
