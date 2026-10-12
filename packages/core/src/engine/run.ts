@@ -38,6 +38,7 @@ import {
 	getActiveArtifact,
 	insertRun,
 	isPidAlive,
+	listPlaybookItems,
 	listSpans,
 	newId,
 	type NexoPaths,
@@ -439,6 +440,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	const plan = planScoring(env, skill, depth, workspace);
 	/** The skill's active playbook when the run starts with `--skill` (spec §6), snapshotted with the run's artifacts. */
 	const startPlaybook = skill ? getActiveArtifact(db, "playbook", skill.name) : undefined;
+	const startPlaybookSection = skill && startPlaybook?.content.trim() ? playbookSection(skill.name, listPlaybookItems(db, skill.name)) : "";
 	/** Memories injected at run start; load_skill adds the skill memories it shows. */
 	let memoryContext: RunMemoryContext = emptyMemoryContext();
 	/** Charges calls made for memory (the query embedding) to this run; set once the run span exists. */
@@ -732,7 +734,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			workspace,
 			skillIndex: formatSkillIndex(deps.skills),
 			activeSkill: skill
-				? { name: skill.name, body: startPlaybook?.content.trim() ? `${skill.body}\n\n${playbookSection(skill.name, startPlaybook.content)}` : skill.body }
+				? { name: skill.name, body: startPlaybookSection ? `${skill.body}\n\n${startPlaybookSection}` : skill.body }
 				: undefined,
 			memories: memoryContext.block,
 		});
