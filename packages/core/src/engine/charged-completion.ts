@@ -15,6 +15,8 @@ export interface ChargedCompletionPayer {
 	recorder: Recorder;
 	/** The budget each attempt's estimate is reserved from. */
 	budget: RunBudget;
+	/** USD of `budget` that no attempt may reserve into (the optimization's holdout reserve); defaults to 0. */
+	holdbackUsd?: () => number;
 	/**
 	 * Charges one reply after its reservation was released and returns its price: the caller decides which budget, cost
 	 * totals and ledgers pay.
@@ -62,7 +64,8 @@ export async function runChargedCompletion(
 	let costUnknown = false;
 	for (let attempt = 1; ; attempt++) {
 		const estimate = estimateCallCostUsd(model, config.pricingOverrides, request.system.length + request.user.length, outputTokens);
-		const reserved = estimate > 0 ? budget.tryReserve(estimate) : budget.canAfford(0);
+		const intoHoldback = estimate > 0 && budget.remainingUsd() - estimate + 1e-9 < (payer.holdbackUsd?.() ?? 0);
+		const reserved = !intoHoldback && (estimate > 0 ? budget.tryReserve(estimate) : budget.canAfford(0));
 		if (!reserved) throw payer.refused(estimate);
 		const spanId = recorder.start({
 			kind: span.kind,

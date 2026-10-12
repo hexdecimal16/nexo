@@ -86,6 +86,16 @@ function reserveRollout(ctx: OptimContext): number {
 	return amount;
 }
 
+/** USD the optimizer's own calls (judgements, reflections) must leave for the winner's holdout rollouts: the reserve, in the loop phase. */
+function holdback(ctx: OptimContext): number {
+	return ctx.phase === "loop" ? ctx.reserveUsd : 0;
+}
+
+/** The context as the payer of reflection calls: reads stay live, and the holdout reserve is held back. */
+function optimPayer(ctx: OptimContext): OptimPayer {
+	return Object.create(ctx, { holdbackUsd: { value: () => holdback(ctx) } });
+}
+
 function artifactOf(ctx: OptimContext, candidate: CandidateRef): ArtifactRow {
 	const artifact = getArtifact(ctx.env.deps.db, candidate.artifactId);
 	if (!artifact) throw new NexoError({ code: "NOT_FOUND", message: `Candidate artifact ${candidate.artifactId} does not exist` });
@@ -153,6 +163,7 @@ function optimJudgeCaller(ctx: OptimContext, refused: { hit: boolean }): JudgeCa
 					env: ctx.env,
 					recorder: ctx.recorder,
 					budget: ctx.budget,
+					holdbackUsd: () => holdback(ctx),
 					charge: (m, msg) => {
 						const priced = priceUsage(m, msg.usage, ctx.env.deps.config.pricingOverrides);
 						optimCharge(ctx, priced.costUsd, priced.costUnknown);
@@ -201,6 +212,8 @@ async function evaluateRubric(ctx: OptimContext, batch: readonly EvalCase[], can
 				{ runId: run.id, instruction: run.instruction, finalOutput: output, runDir: run.dirPath, workspace: run.dirPath, trajectory },
 				signal,
 			);
+			// A panel member whose call was refused is dropped by the scorer, which still returns; the evaluation stops instead.
+			if (refused.hit) throw new BudgetStop("budget_usd", "The optimization budget cannot cover another judge call");
 			judged = { value: result.value, passed: result.passed, rationale: result.rationale };
 			quality = result.passed === (c.expected === "done") ? 1 : 0;
 		} catch (error) {
@@ -229,6 +242,7 @@ async function evaluateRubric(ctx: OptimContext, batch: readonly EvalCase[], can
 
 /** The GepaAdapter of an optimization (spec §8.2.8): rollouts, reflective datasets and reflection proposals. */
 export function createOptimAdapter(ctx: OptimContext): OptimAdapter {
+	const payer = optimPayer(ctx);
 	return {
 		evaluate: (batch, candidate, captureTraces, signal) =>
 			ctx.target.kind === "judge_rubric" ? evaluateRubric(ctx, batch, candidate, captureTraces, signal) : evaluateAgent(ctx, batch, candidate, captureTraces, signal),
@@ -236,7 +250,7 @@ export function createOptimAdapter(ctx: OptimContext): OptimAdapter {
 		proposeNewTexts: async (candidate, dataset, components) => {
 			const texts: ComponentTexts = {};
 			for (const component of components) {
-				const proposal = await proposeText(ctx, { target: ctx.target, component, currentText: candidate.texts[component] ?? "", examples: dataset[component] ?? [] });
+				const proposal = await proposeText(payer, { target: ctx.target, component, currentText: candidate.texts[component] ?? "", examples: dataset[component] ?? [] });
 				const problem = "problem" in proposal ? proposal.problem : null;
 				ctx.onEvent?.({ type: "reflection", candidateId: candidate.id, component, problem });
 				if ("problem" in proposal) return null;

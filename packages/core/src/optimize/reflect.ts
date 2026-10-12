@@ -21,6 +21,8 @@ export interface OptimPayer {
 	parentSpanId: string;
 	/** The optimization budget each call reserves its estimate from. */
 	budget: RunBudget;
+	/** USD of the budget the calls must leave untouched (the winner's holdout reserve); absent means none. */
+	holdbackUsd?: () => number;
 	signal: AbortSignal;
 	/** Adds one call's priced cost to the optimizer's own totals. */
 	addCost: (usd: number, unknown: boolean) => void;
@@ -57,6 +59,7 @@ async function reflectionCompletion(payer: OptimPayer, request: { system: string
 				env,
 				recorder: payer.recorder,
 				budget,
+				...(payer.holdbackUsd ? { holdbackUsd: payer.holdbackUsd } : {}),
 				charge: (m, msg) => {
 					const priced = priceUsage(m, msg.usage, config.pricingOverrides);
 					optimCharge(payer, priced.costUsd, priced.costUnknown);
