@@ -3,6 +3,7 @@ export * from "./budget-ledger.ts";
 export * from "./cost-report.ts";
 export * from "./db.ts";
 export * from "./errors.ts";
+export * from "./eval-cases.ts";
 export * from "./feedback.ts";
 export * from "./ids.ts";
 export * from "./judge-calibration.ts";
