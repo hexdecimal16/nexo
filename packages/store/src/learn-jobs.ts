@@ -126,9 +126,10 @@ export function reclaimStaleLearnJobs(db: Db, staleBeforeIso: string, nowIso: st
 			)
 			.all(nowIso, staleBeforeIso)
 			.map((r) => String(r.id));
+		// The newer pending job covers the run, so the duplicate is failed out of attempts and `--retry` never revives it.
 		const leftover = db
-			.prepare("UPDATE learn_jobs SET status = 'failed', last_error = ?, updated_at = ? WHERE status = 'running' AND claimed_at < ? RETURNING id")
-			.all(JSON.stringify(abandoned), nowIso, staleBeforeIso)
+			.prepare("UPDATE learn_jobs SET status = 'failed', attempts = ?, last_error = ?, updated_at = ? WHERE status = 'running' AND claimed_at < ? RETURNING id")
+			.all(MAX_LEARN_ATTEMPTS, JSON.stringify(abandoned), nowIso, staleBeforeIso)
 			.map((r) => String(r.id));
 		return { pending, failed: [...failed, ...leftover] };
 	});

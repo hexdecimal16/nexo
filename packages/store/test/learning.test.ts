@@ -24,6 +24,7 @@ import {
 	listArtifactVersions,
 	listLearnJobs,
 	listMemories,
+	MAX_LEARN_ATTEMPTS,
 	listPlaybookItems,
 	MAX_ACE_IMPORTANCE,
 	memoriesWithoutEmbedding,
@@ -282,6 +283,18 @@ describe("learn jobs", () => {
 		expect(result).toEqual({ pending: [second?.id], failed: [first?.id] });
 		expect(getLearnJob(db, fresh?.id ?? "")?.status).toBe("running");
 		expect(() => listLearnJobs(db, { status: "nope" })).toThrow(expect.objectContaining({ code: "INVALID_REQUEST" }));
+	});
+
+	it("fails a stale job whose run already has a newer pending job, out of attempts so --retry cannot run it twice", () => {
+		const db = openDb(":memory:");
+		enqueueLearnJob(db, { runId: "r1", trigger: "run_end" }, NOW);
+		const stale = claimLearnJob(db, "dead", "2026-10-12T00:00:00.000Z");
+		const newer = enqueueLearnJob(db, { runId: "r1", trigger: "feedback" }, NOW);
+		const result = reclaimStaleLearnJobs(db, "2026-10-12T00:20:00.000Z", "2026-10-12T00:30:00.000Z");
+		expect(result).toEqual({ pending: [], failed: [stale?.id] });
+		expect(getLearnJob(db, stale?.id ?? "")).toMatchObject({ status: "failed", attempts: MAX_LEARN_ATTEMPTS });
+		expect(retryFailedLearnJobs(db, NOW)).toBe(0);
+		expect(getLearnJob(db, newer?.id ?? "")?.status).toBe("pending");
 	});
 });
 
