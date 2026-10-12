@@ -85,6 +85,46 @@ describe("settings screen", () => {
 		await h.done;
 	});
 
+	it("edits a boolean and a models list from the settings screen, and an on/off scorer toggle", async () => {
+		const h = await startHarness({ userConfig: { ...FAUX_ROLES } });
+		await openSettings(h);
+		h.terminal.type("learning enabled");
+		h.terminal.send(KEY.enter);
+		await until(() => expect(h.terminal.output()).toContain("reset to default"));
+		h.terminal.type("off");
+		h.terminal.send(KEY.enter);
+		await until(() => expect(h.settings.getSetting("learning.enabled")).toMatchObject({ value: "off", source: "user" }));
+		expect(JSON.parse(readFileSync(h.paths.config, "utf8")).learning.enabled).toBe(false);
+
+		h.terminal.type("judge models");
+		h.terminal.send(KEY.enter);
+		await until(() => expect(h.terminal.output()).toContain("joined with +"));
+		h.terminal.type("nope");
+		h.terminal.send(KEY.enter);
+		await until(() => expect(h.terminal.output()).toMatch(/error \[INVALID_REQUEST\]/));
+		for (let i = 0; i < 4; i++) h.terminal.send(KEY.backspace);
+		h.terminal.type("faux/fast+faux/slow");
+		h.terminal.send(KEY.enter);
+		await until(() => expect(h.settings.getSetting("models.judge")).toMatchObject({ value: "faux/fast+faux/slow", source: "user" }));
+
+		h.terminal.type("scoring judge");
+		h.terminal.send(KEY.enter);
+		await until(() => expect(h.terminal.output()).toContain("reset to default"));
+		h.terminal.type("on");
+		h.terminal.send(KEY.enter);
+		await until(() => expect(h.settings.getSetting("scoring.judge")).toMatchObject({ value: "on", source: "user" }));
+
+		h.terminal.type("reflector");
+		h.terminal.send(KEY.enter);
+		await until(() => expect(h.terminal.output()).toContain("Model reflector"));
+		h.terminal.type("s2");
+		h.terminal.send(KEY.enter);
+		await until(() => expect(h.settings.getSetting("models.reflector")).toMatchObject({ value: "s2", source: "user" }));
+		h.terminal.send(KEY.escape);
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
 	it("sets a provider key through masked input that never reaches the screen, then removes it", async () => {
 		const h = await startHarness({ userConfig: { ...FAUX_ROLES } });
 		await openSettings(h);

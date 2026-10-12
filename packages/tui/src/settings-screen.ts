@@ -1,5 +1,5 @@
 import { type Component, fuzzyFilter, Input, matchesKey, type SelectItem, SelectList, truncateToWidth } from "@earendil-works/pi-tui";
-import { type KeyStatus, keyStatusLabel, type SettingView, type Settings } from "@nexo/core";
+import { type KeyStatus, keyStatusLabel, ON_OFF, type SettingView, type Settings } from "@nexo/core";
 import { toErrorPayload } from "@nexo/telemetry";
 import { fitLines, MaskedInput } from "./components.ts";
 import { escapeControl, formatError } from "./text.ts";
@@ -299,6 +299,8 @@ export class SettingsScreen implements Component {
 		const type = view.type;
 		if (type.kind === "number") this.show(this.numberView(view));
 		else if (type.kind === "enum") this.show(this.enumView(view, type.values));
+		else if (type.kind === "boolean" || type.kind === "scorerToggle") this.show(this.enumView(view, ON_OFF));
+		else if (type.kind === "models") this.show(this.modelsView(view));
 		else this.show(this.modelView(view, () => this.backToMenu(), () => this.backToMenu(), true));
 	}
 
@@ -314,6 +316,15 @@ export class SettingsScreen implements Component {
 	}
 
 	private numberView(view: SettingView): View {
+		return this.textView(view, "enter save · empty resets to the default · esc back");
+	}
+
+	/** A list of models typed as `provider/id`, several joined with `+`. */
+	private modelsView(view: SettingView): View {
+		return this.textView(view, "provider/id, several joined with + · enter save · empty resets · esc back");
+	}
+
+	private textView(view: SettingView, hint: string): View {
 		const input = new Input({ prompt: style.gray("> ") });
 		input.setValue(view.userValue === null ? "" : String(view.userValue));
 		input.onSubmit = (raw) => {
@@ -323,7 +334,7 @@ export class SettingsScreen implements Component {
 		input.onEscape = () => this.backToMenu();
 		return new EntryView({
 			title: `${escapeControl(view.label)}: ${escapeControl(view.description)} (now ${settingDescription(view)})`,
-			hint: "enter save · empty resets to the default · esc back",
+			hint,
 			input,
 		});
 	}
@@ -343,8 +354,13 @@ export class SettingsScreen implements Component {
 		});
 	}
 
-	private modelItems(withReset: boolean): SelectItem[] {
-		const items: SelectItem[] = [];
+	private modelItems(withReset: boolean, roles: boolean): SelectItem[] {
+		const items: SelectItem[] = roles
+			? [
+					{ value: "s1", label: "s1", description: "the default model" },
+					{ value: "s2", label: "s2", description: "the stronger model" },
+				]
+			: [];
 		try {
 			for (const provider of this.settings.modelCatalog()) {
 				for (const model of provider.models) {
@@ -361,7 +377,7 @@ export class SettingsScreen implements Component {
 	private modelView(view: SettingView, onDone: () => void, onCancel: () => void, withReset: boolean): View {
 		return new PickerView({
 			title: escapeControl(`${this.mode === "setup" ? `Choose ${view.label.toLowerCase()}` : view.label}: ${view.description}`),
-			items: this.modelItems(withReset),
+			items: this.modelItems(withReset, view.type.kind === "modelOrRef"),
 			freeText: true,
 			maxVisible: () => this.listRows(),
 			hint: "type to filter or enter provider/model-id · enter select · esc back",

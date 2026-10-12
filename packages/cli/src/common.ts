@@ -46,7 +46,8 @@ export const USAGE = `Usage:
   nexo sessions [--limit <n>]
   nexo settings                            open the settings screen (needs a terminal)
   nexo settings get <key>
-  nexo settings set <key> <value>
+  nexo settings set <key> <value>          keys: models.s1|s2|judge|reflector, budgets.*, tools.policy.*, scoring.judge, learning.*, memory.*
+  nexo settings reset <key>                remove it from the user config
   nexo settings set-key <provider>         reads the key from a hidden prompt, or from stdin when piped
   nexo run <instruction...> [--skill <name>] [--model <s1|s2|provider/id>] [--effort <level>] [--workspace <dir>] [--budget <usd>] [--no-review]
   nexo cost [--by model|tier|day|run|skill] [--since YYYY-MM-DD]
@@ -99,7 +100,7 @@ export function requireTerminal(stdio: CliStdio, what: string): void {
 		throw new NexoError({
 			code: "CONFIG_INVALID",
 			message: `${what} needs an interactive terminal (stdin, stdout and stderr must all be TTYs)`,
-			hint: `For scripts use \`nexo run "<instruction>"\`, \`nexo settings get|set|set-key\` or \`nexo sessions\`.\n${USAGE.trim()}`,
+			hint: `For scripts use \`nexo run "<instruction>"\`, \`nexo settings get|set|reset|set-key\` or \`nexo sessions\`.\n${USAGE.trim()}`,
 		});
 	}
 }
