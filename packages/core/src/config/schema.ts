@@ -188,7 +188,17 @@ export const ConfigSchema = Type.Object(
 			},
 			{ additionalProperties: false },
 		),
-		optimize: Type.Optional(LooseSection),
+		optimize: Type.Object(
+			{
+				/** Fewest eval cases an optimization starts with (spec §8.2.1). */
+				minCases: Type.Integer({ minimum: 3 }),
+				/** Iterations without a new Pareto member before the loop stops. */
+				patience: Type.Integer({ minimum: 1 }),
+				/** Lowest judge Cohen's κ that lets judge-only evidence promote a candidate. */
+				minJudgeKappa: Type.Number({ minimum: -1, maximum: 1 }),
+			},
+			{ additionalProperties: false },
+		),
 		telemetry: Type.Optional(LooseSection),
 		ui: Type.Optional(LooseSection),
 	},
@@ -238,4 +248,5 @@ export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 	redaction: { patterns: [] },
 	memory: { enabled: true, maxTokens: 1500, weights: { relevance: 1, importance: 0.5, recency: 0.3 }, tauDays: 14, topK: 20 },
 	learning: { enabled: true, maxPlaybookItems: 50, perJobUsd: 0.15, staleMinutes: 10, drainAfterRunMs: 30_000 },
+	optimize: { minCases: 10, patience: 5, minJudgeKappa: 0.6 },
 };

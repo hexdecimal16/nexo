@@ -31,12 +31,21 @@ export function checkAdmission(db: Db, budgets: { dailyUsd: number; monthlyUsd: 
 	}
 }
 
-/** Adds spend to the day, month and root-run ledger scopes, and to `session:<id>` for a session turn. */
-export function recordSpend(db: Db, rootRunId: string, usd: number, now: Date, sessionId: string | null = null): void {
+/** The ledger scope of an optimization (spec §5.2). */
+export function optimScope(optimRunId: string): string {
+	return `optim:${optimRunId}`;
+}
+
+/**
+ * Adds spend to the day, month and root-run ledger scopes, to `session:<id>` for a session turn and to `optim:<id>` for
+ * an optimization rollout.
+ */
+export function recordSpend(db: Db, rootRunId: string, usd: number, now: Date, sessionId: string | null = null, optimRunId: string | null = null): void {
 	if (!Number.isFinite(usd) || usd < 0) {
 		throw new NexoError({ code: "INTERNAL", message: `recordSpend received an invalid amount: ${usd}`, context: { rootRunId, usd } });
 	}
 	const scopes = [dayScope(now), monthScope(now), `run:${rootRunId}`];
 	if (sessionId) scopes.push(sessionScope(sessionId));
+	if (optimRunId) scopes.push(optimScope(optimRunId));
 	addSpend(db, scopes, usd, now.toISOString());
 }

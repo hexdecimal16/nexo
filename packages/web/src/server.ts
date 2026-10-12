@@ -15,6 +15,9 @@ import {
 	memoriesResponse,
 	memoryDetailResponse,
 	metaResponse,
+	approveOptimResponse,
+	optimDetailResponse,
+	optimListResponse,
 	playbookResponse,
 	playbooksResponse,
 	retireMemoryResponse,
@@ -50,6 +53,8 @@ export interface WebServerOptions {
 	judge?: { key: string | null; warnings: string[] };
 	/** `learning.enabled` of the loaded config (default off): verdicts then store human lessons and enqueue learn jobs. */
 	learning?: { enabled: boolean };
+	/** `optimize.minJudgeKappa` of the loaded config (default 0.6), for the approval gate. */
+	optimize?: { minJudgeKappa: number };
 }
 
 export interface WebServer {
@@ -76,6 +81,9 @@ const ROUTES = {
 	playbook: /^\/api\/playbooks\/([^/]{1,64})$/,
 	playbookRetire: /^\/api\/playbooks\/([^/]{1,64})\/items\/([^/]{1,64})\/retire$/,
 	learnJobs: /^\/api\/learn\/jobs$/,
+	optimList: /^\/api\/optim$/,
+	optim: new RegExp(`^/api/optim/${RUN_ID}$`),
+	optimApprove: new RegExp(`^/api/optim/${RUN_ID}/approve$`),
 	meta: /^\/api\/meta$/,
 };
 
@@ -139,6 +147,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 		readOnly: options.readOnly ?? null,
 		judge: options.judge ?? { key: null, warnings: [] },
 		learning: options.learning ?? { enabled: false },
+		optimize: options.optimize ?? { minJudgeKappa: 0.6 },
 	};
 	const assertWritable = (): void => {
 		if (!ctx.readOnly) return;
@@ -235,6 +244,19 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 		if (ROUTES.learnJobs.test(path)) {
 			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
 			return sendJson(res, 200, learnJobsResponse(ctx, url.searchParams));
+		}
+		if (ROUTES.optimList.test(path)) {
+			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
+			return sendJson(res, 200, optimListResponse(ctx));
+		}
+		if ((m = ROUTES.optim.exec(path))) {
+			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
+			return sendJson(res, 200, optimDetailResponse(ctx, m[1] as string));
+		}
+		if ((m = ROUTES.optimApprove.exec(path))) {
+			if (method !== "POST") throw methodNotAllowed(method, path, "POST");
+			assertWritable();
+			return sendJson(res, 200, approveOptimResponse(ctx, m[1] as string));
 		}
 		throw new NexoError({ code: "NOT_FOUND", message: `No API route ${path}`, context: { path } });
 	};

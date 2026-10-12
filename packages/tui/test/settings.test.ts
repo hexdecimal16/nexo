@@ -71,6 +71,21 @@ describe("settings screen", () => {
 		await h.done;
 	});
 
+	it("edits an optimize number setting", async () => {
+		const h = await startHarness({ userConfig: { ...FAUX_ROLES } });
+		await openSettings(h);
+		h.terminal.type("optimization patience");
+		h.terminal.send(KEY.enter);
+		await until(() => expect(h.terminal.output()).toContain("Optimization patience"));
+		h.terminal.type("7");
+		h.terminal.send(KEY.enter);
+		await until(() => expect(h.settings.getSetting("optimize.patience")).toMatchObject({ value: 7, source: "user" }));
+		expect(JSON.parse(readFileSync(h.paths.config, "utf8")).optimize).toEqual({ patience: 7 });
+		h.terminal.send(KEY.escape);
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
 	it("edits an enum setting from a list", async () => {
 		const h = await startHarness({ userConfig: { ...FAUX_ROLES } });
 		await openSettings(h);

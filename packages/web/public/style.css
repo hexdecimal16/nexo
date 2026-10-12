@@ -124,3 +124,11 @@ button.danger { color: var(--bad); cursor: pointer; }
 button.link { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer; text-decoration: underline; font: inherit; }
 .playbook-list, .history { padding-left: 18px; margin: 4px 0; }
 tr.retired td { color: var(--muted); }
+button.primary { color: var(--accent); border-color: var(--accent); font-weight: 600; cursor: pointer; }
+.outcome-win { color: var(--ok); }
+.outcome-loss { color: var(--bad); }
+.outcome-tie { color: var(--muted); }
+pre.diff { overflow-x: auto; }
+pre.diff span { display: block; white-space: pre-wrap; }
+.diff-add { color: var(--ok); }
+.diff-del { color: var(--bad); }

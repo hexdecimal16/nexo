@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { createSettings, type LearnEvent } from "@nexo/core";
+import { createSettings, type LearnEvent, type NexoConfig } from "@nexo/core";
 import {
 	addMemory,
 	addPlaybookItem,
@@ -84,21 +84,22 @@ export async function learnCommand(args: string[], io: CliIO, options: CliOption
 	}
 }
 
-interface Store {
+export interface Store {
 	db: Db;
 	redact: Redactor;
+	config: NexoConfig;
 	close(): void;
 }
 
-/** The database and the full redactor (config patterns and stored keys) for memory and playbook commands. */
-function openStore(options: CliOptions): Store {
+/** The database, the full redactor (config patterns and stored keys) and the config, for the memory, playbook, optimize and eval commands. */
+export function openStore(options: CliOptions): Store {
 	const env = options.env ?? process.env;
 	const paths = resolveNexoPaths(env);
 	ensureNexoDirs(paths);
 	const settings = createSettings({ paths, cwd: options.cwd ?? process.cwd(), env, models: options.models ?? builtinModels() });
-	settings.loadConfig();
+	const { config } = settings.loadConfig();
 	const db = openDb(paths.db);
-	return { db, redact: settings.redact, close: () => db.close() };
+	return { db, redact: settings.redact, config, close: () => db.close() };
 }
 
 function memoryLine(m: MemoryRow): string {

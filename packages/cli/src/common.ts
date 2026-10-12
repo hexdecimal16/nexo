@@ -46,13 +46,20 @@ export const USAGE = `Usage:
   nexo sessions [--limit <n>]
   nexo settings                            open the settings screen (needs a terminal)
   nexo settings get <key>
-  nexo settings set <key> <value>          keys: models.s1|s2|judge|reflector, budgets.*, tools.policy.*, scoring.judge, learning.*, memory.*
+  nexo settings set <key> <value>          keys: models.s1|s2|judge|reflector, budgets.*, tools.policy.*, scoring.judge, learning.*, memory.*, optimize.*
   nexo settings reset <key>                remove it from the user config
   nexo settings set-key <provider>         reads the key from a hidden prompt, or from stdin when piped
   nexo run <instruction...> [--skill <name>] [--model <s1|s2|provider/id>] [--effort <level>] [--workspace <dir>] [--budget <usd>] [--no-review]
   nexo cost [--by model|tier|day|run|skill] [--since YYYY-MM-DD]
   nexo reindex
   nexo eval judge [--judge <provider/id[+provider/id…]>]   judge-vs-human agreement and Cohen's κ
+  nexo eval add --target <target> --input <text> [--skill <name>] [--expected <text>] [--feedback <text>]
+  nexo eval list --target <target>
+  nexo optimize --target skill:<name>|system_prompt|planner_prompt|judge_rubric [--budget-usd <n>] [--max-rollouts <n>] [--merge] [--seed <n>]
+  nexo optimize list
+  nexo optimize show <id> [--diff]
+  nexo optimize approve <id>               promote the best candidate (refused on weak evidence)
+  nexo optimize rollback <id>              reactivate the version an approval replaced
   nexo learn [--retry]                     run pending learn jobs (--retry: failed ones with attempts left too)
   nexo memory list [--scope user|global|skill:<name>] [--type fact|preference|lesson|workflow] [--all]
   nexo memory add <text...> [--scope …] [--type …] [--importance 0..1]

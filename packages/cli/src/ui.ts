@@ -2,7 +2,7 @@ import type { Models } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { createEngineEnv, createSettings, judgeFamilyWarnings, judgeKey, LearnWorker, loadConfig, type NexoConfig } from "@nexo/core";
 import { BUNDLED_SKILLS_DIR, loadSkills } from "@nexo/skills";
-import { type Db, ensureNexoDirs, isPidAlive, type NexoPaths, openDb, recoverCrashedRuns, resolveNexoPaths } from "@nexo/store";
+import { type Db, ensureNexoDirs, isPidAlive, type NexoPaths, openDb, recoverCrashedOptimRuns, recoverCrashedRuns, resolveNexoPaths } from "@nexo/store";
 import { createRedactor, NexoError } from "@nexo/telemetry";
 import { nonInteractivePrompter } from "@nexo/tools";
 import { type ReadOnlyInfo, startWebServer } from "@nexo/web";
@@ -77,10 +77,20 @@ export async function runUi(options: { env: NodeJS.ProcessEnv; cwd: string; port
 	const db = openDb(paths.db);
 	const recovered = recoverCrashedRuns(db, isPidAlive, new Date().toISOString());
 	if (recovered.length > 0) options.io.stderr.write(`Marked ${recovered.length} run(s) left by a crashed process as aborted\n`);
+	const recoveredOptim = recoverCrashedOptimRuns(db, isPidAlive, new Date().toISOString());
+	if (recoveredOptim.length > 0) options.io.stderr.write(`Marked ${recoveredOptim.length} optimization(s) left by a crashed process as aborted\n`);
 	let server: Awaited<ReturnType<typeof startWebServer>>;
 	try {
 		const judge = config ? { key: judgeKey(config), warnings: judgeFamilyWarnings(config) } : undefined;
-		server = await startWebServer({ db, redact: createRedactor(patterns), port, readOnly, judge, learning: { enabled: config?.learning.enabled ?? false } });
+		server = await startWebServer({
+			db,
+			redact: createRedactor(patterns),
+			port,
+			readOnly,
+			judge,
+			learning: { enabled: config?.learning.enabled ?? false },
+			optimize: { minJudgeKappa: config?.optimize.minJudgeKappa ?? 0.6 },
+		});
 	} catch (error) {
 		db.close();
 		throw error;

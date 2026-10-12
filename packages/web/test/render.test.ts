@@ -44,6 +44,7 @@ function summary(overrides: Partial<RunSummary> = {}): RunSummary {
 		sessionId: null,
 		turnIndex: null,
 		sessionTitle: null,
+		optimRunId: null,
 		score: null,
 		...overrides,
 	};
