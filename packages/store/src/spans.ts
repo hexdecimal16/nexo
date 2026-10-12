@@ -15,7 +15,10 @@ export type SpanKind =
 	| "self_check"
 	| "memory_read"
 	| "memory_write"
-	| "compaction";
+	| "compaction"
+	| "learn"
+	| "learn_call"
+	| "embedding_call";
 
 export type SpanStatus = "running" | "ok" | "error";
 

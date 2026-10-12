@@ -60,7 +60,22 @@ export function migrate(db: Db): number[] {
 	return applied;
 }
 
+let savepoints = 0;
+
+/** Runs `fn` in a transaction (BEGIN IMMEDIATE); inside an open transaction it uses a savepoint, so calls nest. */
 export function transaction<T>(db: Db, fn: () => T): T {
+	if (db.isTransaction) {
+		const name = `nexo_sp_${++savepoints}`;
+		db.exec(`SAVEPOINT ${name}`);
+		try {
+			const result = fn();
+			db.exec(`RELEASE ${name}`);
+			return result;
+		} catch (error) {
+			db.exec(`ROLLBACK TO ${name}; RELEASE ${name}`);
+			throw error;
+		}
+	}
 	db.exec("BEGIN IMMEDIATE");
 	try {
 		const result = fn();
