@@ -17,6 +17,8 @@ export interface SystemPromptParts {
 	workspace: string;
 	skillIndex: string;
 	activeSkill?: { name: string; body: string };
+	/** The retrieved-memory data block (`memoryBlock`), last so the rules above it win. */
+	memories?: string;
 }
 
 export function renderSystemPrompt(parts: SystemPromptParts): string {
@@ -24,5 +26,6 @@ export function renderSystemPrompt(parts: SystemPromptParts): string {
 	if (parts.plannerPrompt) sections.push(parts.plannerPrompt);
 	if (parts.skillIndex) sections.push(parts.skillIndex);
 	if (parts.activeSkill) sections.push(`# Active skill: ${parts.activeSkill.name}\n${parts.activeSkill.body}`);
+	if (parts.memories) sections.push(parts.memories);
 	return sections.join("\n\n");
 }

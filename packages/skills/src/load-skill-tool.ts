@@ -9,6 +9,8 @@ const LoadSkillParams = Type.Object({
 export interface LoadSkillToolOptions {
 	catalog: SkillCatalog;
 	onLoad?: (skill: Skill) => void;
+	/** Text appended to the skill body (its playbook and skill memories); an empty string appends nothing. */
+	appendix?: (skill: Skill) => string;
 }
 
 /** For skills that pin a model or effort: a closing line pointing the agent at `spawn`, which honours that pin. */
@@ -37,8 +39,9 @@ export function createLoadSkillTool(options: LoadSkillToolOptions): AgentTool<ty
 				};
 			}
 			options.onLoad?.(skill);
+			const extra = options.appendix?.(skill) ?? "";
 			return {
-				content: [{ type: "text", text: `# Skill: ${skill.name}\nBase directory: ${skill.dir}\n\n${skill.body}${delegationNote(skill)}` }],
+				content: [{ type: "text", text: `# Skill: ${skill.name}\nBase directory: ${skill.dir}\n\n${skill.body}${extra ? `\n\n${extra}` : ""}${delegationNote(skill)}` }],
 				details: { name: skill.name, filePath: skill.filePath },
 			};
 		},
