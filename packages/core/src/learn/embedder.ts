@@ -19,8 +19,10 @@ export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
 export interface EmbedResult {
 	vectors: number[][];
-	/** Input tokens the provider reported (0 when it reported none). */
+	/** Input tokens the provider reported; ceil(input chars / 4) when the reply carries no usage. 0 only for an empty input. */
 	tokens: number;
+	/** True when `tokens` is the chars/4 estimate because the reply reported no usage. */
+	tokensEstimated?: true;
 }
 
 /** The configured embedding endpoint, or null without `models.embedding`. */
@@ -93,25 +95,37 @@ export async function embedTexts(
 		throw new NexoError({ code: "PROVIDER_UNAVAILABLE", message: "The embeddings reply is not JSON", context: { model: endpoint.model } });
 	}
 	const data = Array.isArray(parsed.data) ? parsed.data : [];
-	const vectors: number[][] = new Array(texts.length);
+	const slots: (number[] | undefined)[] = new Array(texts.length).fill(undefined);
 	for (const [position, item] of data.entries()) {
 		const index = typeof item.index === "number" ? item.index : position;
 		const embedding = item.embedding;
-		if (!Array.isArray(embedding) || embedding.length === 0 || !embedding.every((x) => typeof x === "number" && Number.isFinite(x)) || index < 0 || index >= texts.length) {
+		if (
+			!Array.isArray(embedding) ||
+			embedding.length === 0 ||
+			!embedding.every((x) => typeof x === "number" && Number.isFinite(x)) ||
+			!Number.isInteger(index) ||
+			index < 0 ||
+			index >= texts.length ||
+			slots[index] !== undefined
+		) {
 			throw new NexoError({ code: "PROVIDER_UNAVAILABLE", message: "The embeddings reply has a malformed vector", context: { model: endpoint.model, index } });
 		}
-		vectors[index] = embedding as number[];
+		slots[index] = embedding as number[];
 	}
-	if (data.length !== texts.length || vectors.some((v) => v === undefined)) {
+	const vectors: number[][] = [];
+	for (const v of slots) if (v !== undefined) vectors.push(v);
+	if (data.length !== texts.length || vectors.length !== texts.length) {
 		throw new NexoError({ code: "PROVIDER_UNAVAILABLE", message: `The embeddings reply has ${data.length} vectors for ${texts.length} texts`, context: { model: endpoint.model } });
 	}
 	const tokens = Number(parsed.usage?.prompt_tokens ?? parsed.usage?.total_tokens ?? 0);
-	return { vectors, tokens: Number.isFinite(tokens) && tokens > 0 ? tokens : 0 };
+	if (Number.isFinite(tokens) && tokens > 0) return { vectors, tokens };
+	const chars = texts.reduce((sum, t) => sum + t.length, 0);
+	return { vectors, tokens: Math.ceil(chars / 4), tokensEstimated: true };
 }
 
 /**
  * USD of an embeddings call from `pricingOverrides["<provider>/<id>"].input` (USD per million tokens). Without a price
- * the cost is unknown (spec §10: never counted as $0); a call that reported no tokens costs 0.
+ * the cost is unknown (spec §10: never counted as $0); only a call with no tokens (empty input) costs a known 0.
  */
 export function embeddingCost(config: NexoConfig, endpoint: EmbeddingEndpoint, tokens: number): { costUsd: number; costUnknown: boolean } {
 	const rate = config.pricingOverrides[endpoint.model]?.input;

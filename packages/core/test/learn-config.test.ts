@@ -101,6 +101,31 @@ describe("embedTexts", () => {
 		}
 	});
 
+	it("rejects a duplicate or fractional index instead of returning a sparse array", async () => {
+		const dup = await embeddingServer(() => ({ status: 200, body: { data: [{ index: 0, embedding: [1] }, { index: 0, embedding: [2] }] } }));
+		const frac = await embeddingServer(() => ({ status: 200, body: { data: [{ index: 0, embedding: [1] }, { index: 0.5, embedding: [2] }] } }));
+		try {
+			await expect(embedTexts(endpoint(dup.baseUrl), ["x", "y"], { apiKey: "k-12345678" })).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE", message: expect.stringContaining("malformed") });
+			await expect(embedTexts(endpoint(frac.baseUrl), ["x", "y"], { apiKey: "k-12345678" })).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE", message: expect.stringContaining("malformed") });
+		} finally {
+			await Promise.all([dup.close(), frac.close()]);
+		}
+	});
+
+	it("estimates tokens as chars/4 when the reply has no usage, so cost is never a known $0", async () => {
+		const server = await embeddingServer((input) => ({ status: 200, body: { data: input.map((_, index) => ({ index, embedding: [1, 0] })) } }));
+		try {
+			const result = await embedTexts(endpoint(server.baseUrl), ["12345678", "1234"], { apiKey: "k-12345678" });
+			expect(result).toEqual({ vectors: [[1, 0], [1, 0]], tokens: 3, tokensEstimated: true });
+			const priced = load({ models, pricingOverrides: { "acme/e1": { input: 2, output: 0 } } })();
+			expect(embeddingCost(priced, endpoint("x"), result.tokens)).toEqual({ costUsd: 6e-6, costUnknown: false });
+			const unpriced = load({ models })();
+			expect(embeddingCost(unpriced, endpoint("x"), result.tokens)).toEqual({ costUsd: 0, costUnknown: true });
+		} finally {
+			await server.close();
+		}
+	});
+
 	it("prices embeddings from pricingOverrides and flags them unknown otherwise", () => {
 		const config = load({ models, pricingOverrides: { "acme/e1": { input: 0.02, output: 0 } } })();
 		expect(embeddingCost(config, endpoint("x"), 1_000_000)).toEqual({ costUsd: 0.02, costUnknown: false });
