@@ -9,6 +9,7 @@ export * from "./ids.ts";
 export * from "./judge-calibration.ts";
 export * from "./learn-jobs.ts";
 export * from "./memories.ts";
+export * from "./optim.ts";
 export * from "./paths.ts";
 export * from "./playbooks.ts";
 export * from "./runs.ts";

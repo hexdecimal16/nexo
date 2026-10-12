@@ -44,6 +44,11 @@ function decode(row: Record<string, unknown>): ArtifactRow {
 	};
 }
 
+export function getArtifact(db: Db, id: string): ArtifactRow | undefined {
+	const row = db.prepare("SELECT * FROM artifacts WHERE id = ?").get(id);
+	return row ? decode(row) : undefined;
+}
+
 export function getActiveArtifact(db: Db, kind: ArtifactKind, name: string): ArtifactRow | undefined {
 	const row = db.prepare("SELECT * FROM artifacts WHERE kind = ? AND name = ? AND status = 'active' ORDER BY version DESC LIMIT 1").get(kind, name);
 	return row ? decode(row) : undefined;
@@ -97,6 +102,50 @@ export function appendArtifactVersion(
 		db.prepare(
 			"INSERT INTO artifacts (id, kind, name, version, content, content_hash, parent_version_id, origin, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		).run(row.id, kind, name, row.version, content, hash, row.parentVersionId, origin, "active", nowIso);
+		return row;
+	});
+}
+
+/**
+ * The version a run uses for an artifact whose text comes from a source (SKILL.md, a built-in prompt, a `file:`
+ * rubric): a promoted (`gepa`) active version while the newest `manual` version still matches `source`, so a promotion
+ * stays in use until the source is edited; otherwise `source` as the active manual version (`ensureManualArtifact`).
+ */
+export function resolveSourcedArtifact(db: Db, kind: ArtifactKind, name: string, source: string, nowIso: string): ArtifactRow {
+	return transaction(db, () => {
+		const active = getActiveArtifact(db, kind, name);
+		if (active?.origin === "gepa") {
+			const manual = db
+				.prepare("SELECT content_hash FROM artifacts WHERE kind = ? AND name = ? AND origin = 'manual' ORDER BY version DESC LIMIT 1")
+				.get(kind, name);
+			if (manual && String(manual.content_hash) === sha256(source)) return active;
+		}
+		return appendArtifactVersion(db, kind, name, source, "manual", nowIso);
+	});
+}
+
+/**
+ * Stores an optimization candidate: a new version with status `candidate` and origin `gepa` whose parent is the
+ * candidate it was derived from. The active version is not touched.
+ */
+export function insertCandidateArtifact(db: Db, kind: ArtifactKind, name: string, content: string, parentId: string, nowIso: string): ArtifactRow {
+	return transaction(db, () => {
+		const max = db.prepare("SELECT COALESCE(MAX(version), 0) AS v FROM artifacts WHERE kind = ? AND name = ?").get(kind, name);
+		const row: ArtifactRow = {
+			id: newId(),
+			kind,
+			name,
+			version: Number(max?.v ?? 0) + 1,
+			content,
+			contentHash: sha256(content),
+			parentVersionId: parentId,
+			origin: "gepa",
+			status: "candidate",
+			createdAt: nowIso,
+		};
+		db.prepare(
+			"INSERT INTO artifacts (id, kind, name, version, content, content_hash, parent_version_id, origin, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'gepa', 'candidate', ?)",
+		).run(row.id, kind, name, row.version, content, row.contentHash, parentId, nowIso);
 		return row;
 	});
 }
