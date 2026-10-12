@@ -97,7 +97,7 @@ describe("startOptimization", () => {
 		addCases(env);
 		addSpend(env.deps.db, [dayScope(new Date())], 2.5, new Date().toISOString());
 		await expect(startOptimization(createEngineEnv(env.deps), { target: "skill:ci-fix", budgetUsd: 1 })).rejects.toMatchObject({ code: "BUDGET_EXCEEDED", message: expect.stringMatching(/more than what is left of the daily budget/) });
-		await expect(startOptimization(createEngineEnv(env.deps), { target: "skill:ci-fix", budgetUsd: 0.4, maxRollouts: 5 })).rejects.toMatchObject({ code: "INVALID_REQUEST", message: expect.stringMatching(/--max-rollouts must be at least 14/) });
+		await expect(startOptimization(createEngineEnv(env.deps), { target: "skill:ci-fix", budgetUsd: 0.4, maxRollouts: 5 })).rejects.toMatchObject({ code: "INVALID_REQUEST", message: expect.stringMatching(/--max-rollouts must be at least 20/) });
 		await expect(startOptimization(createEngineEnv(env.deps), { target: "router_policy" })).rejects.toMatchObject({ code: "INVALID_REQUEST" });
 		const noJudge = optimEnv({ models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "slow" } } });
 		await expect(startOptimization(createEngineEnv(noJudge.deps), { target: "skill:ci-fix" })).rejects.toMatchObject({ code: "CONFIG_INVALID", message: expect.stringMatching(/Nothing can score candidates/) });
@@ -122,6 +122,16 @@ describe("startOptimization", () => {
 		expect(existsSync(join(run.dirPath, "report.json"))).toBe(true);
 		expect(getActiveArtifact(env.deps.db, "skill", "ci-fix")?.id).toBe(run.baseArtifactId);
 		expect(() => approveOptimRun(env.deps.db, run.id, { minJudgeKappa: 0.6, nowIso: new Date().toISOString() })).toThrow(/found nothing better/);
+	});
+
+	it("runs one iteration with exactly the minimum --max-rollouts", async () => {
+		const env = optimEnv(NO_ESCALATION);
+		addCases(env);
+		script(env);
+		const events: OptimizeEvent[] = [];
+		const { run } = await startOptimization(createEngineEnv(env.deps), { target: "skill:ci-fix", budgetUsd: 2, seed: 7, maxRollouts: 20, onEvent: (e) => events.push(e) });
+		expect(events.filter((e) => e.type === "iteration").length).toBeGreaterThanOrEqual(1);
+		expect(run.rollouts).toBeLessThanOrEqual(20);
 	});
 
 	it("never activates a candidate while optimizing, even when aborted", async () => {
