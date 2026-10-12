@@ -5,7 +5,9 @@ import type { Db } from "./db.ts";
 import { invalidRequest, runNotFound } from "./errors.ts";
 import { newId } from "./ids.ts";
 import { syncJudgeDisagreement } from "./judge-calibration.ts";
-import { getRun } from "./runs.ts";
+import { enqueueLearnJob } from "./learn-jobs.ts";
+import { addMemory, MAX_MEMORY_CHARS, type MemoryRow } from "./memories.ts";
+import { getRun, type RunRow } from "./runs.ts";
 
 export type Verdict = "done" | "not_done";
 
@@ -35,6 +37,34 @@ export interface FeedbackInput {
 	comment?: unknown;
 	nowIso: string;
 	redact: Redactor;
+	/**
+	 * Learning is on (`learning.enabled`): a `not_done` comment is stored as a human lesson and a reflect job is
+	 * enqueued for the run (spec §8.1).
+	 */
+	learn?: boolean;
+}
+
+/** Instruction text quoted in a human lesson. */
+const LESSON_INSTRUCTION_CHARS = 160;
+
+/**
+ * The human lesson of a `not_done` comment (spec §8.1 human priority): a memory with source `human`, importance 1, scope
+ * `skill:<run skill>` or `user`, written without any model call. The same comment on the same run is stored once.
+ * Returns the memory, or null when there is no comment or it was already stored.
+ */
+export function storeHumanLesson(db: Db, run: Pick<RunRow, "id" | "instruction" | "skill">, comment: string, redact: Redactor, nowIso: string): MemoryRow | null {
+	const text = comment.trim();
+	if (!text) return null;
+	const first = (run.instruction.split("\n")[0] ?? "").trim();
+	const quoted = first.length > LESSON_INSTRUCTION_CHARS ? `${first.slice(0, LESSON_INSTRUCTION_CHARS)}…` : first;
+	const prefix = `The user marked "${quoted}" not done: `;
+	const room = MAX_MEMORY_CHARS - prefix.length;
+	const content = prefix + (text.length > room ? `${text.slice(0, room - 1)}…` : text);
+	const existing = db
+		.prepare("SELECT id FROM memories WHERE source = 'human' AND source_run_id = ? AND content = ?")
+		.get(run.id, redact(content));
+	if (existing) return null;
+	return addMemory(db, { scope: run.skill ? `skill:${run.skill}` : "user", type: "lesson", content, importance: 1, source: "human", sourceRunId: run.id }, redact, nowIso);
 }
 
 function decode(row: Record<string, unknown>): FeedbackRow {
@@ -91,6 +121,10 @@ export function recordFeedback(db: Db, input: FeedbackInput): FeedbackRow {
 		row.createdAt,
 	);
 	syncJudgeDisagreement(db, run.id, input.nowIso);
+	if (input.learn) {
+		if (row.verdict === "not_done") storeHumanLesson(db, run, row.comment, input.redact, input.nowIso);
+		enqueueLearnJob(db, { runId: run.id, trigger: "feedback" }, input.nowIso);
+	}
 	const latest = latestFeedback(db, run.id) ?? row;
 	writeHumanVerdict(run.dirPath, { verdict: latest.verdict, comment: latest.comment, createdAt: latest.createdAt });
 	return row;

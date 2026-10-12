@@ -51,6 +51,31 @@ export function getActiveArtifact(db: Db, kind: ArtifactKind, name: string): Art
 
 /** Returns the active version when its content matches; otherwise stores a new active manual version and retires the old one. */
 export function ensureManualArtifact(db: Db, kind: ArtifactKind, name: string, content: string, nowIso: string): ArtifactRow {
+	return appendArtifactVersion(db, kind, name, content, "manual", nowIso);
+}
+
+/**
+ * Returns the active version of a learnable artifact (router policy, judge rubric), creating version 1 from `seed` when
+ * none exists. Unlike `ensureManualArtifact` it never replaces an active version, so a promoted version stays active.
+ */
+export function ensureSeedArtifact(db: Db, kind: ArtifactKind, name: string, seed: string, nowIso: string): ArtifactRow {
+	const active = getActiveArtifact(db, kind, name);
+	if (active) return active;
+	return ensureManualArtifact(db, kind, name, seed, nowIso);
+}
+
+/**
+ * Stores `content` as a new active version with the given origin and retires the previous active version; returns the
+ * active version unchanged when its content already matches.
+ */
+export function appendArtifactVersion(
+	db: Db,
+	kind: ArtifactKind,
+	name: string,
+	content: string,
+	origin: ArtifactRow["origin"],
+	nowIso: string,
+): ArtifactRow {
 	const hash = sha256(content);
 	return transaction(db, () => {
 		const active = getActiveArtifact(db, kind, name);
@@ -64,26 +89,21 @@ export function ensureManualArtifact(db: Db, kind: ArtifactKind, name: string, c
 			content,
 			contentHash: hash,
 			parentVersionId: active?.id ?? null,
-			origin: "manual",
+			origin,
 			status: "active",
 			createdAt: nowIso,
 		};
 		if (active) db.prepare("UPDATE artifacts SET status = 'retired' WHERE id = ?").run(active.id);
 		db.prepare(
 			"INSERT INTO artifacts (id, kind, name, version, content, content_hash, parent_version_id, origin, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		).run(row.id, kind, name, row.version, content, hash, row.parentVersionId, "manual", "active", nowIso);
+		).run(row.id, kind, name, row.version, content, hash, row.parentVersionId, origin, "active", nowIso);
 		return row;
 	});
 }
 
-/**
- * Returns the active version of a learnable artifact (router policy, judge rubric), creating version 1 from `seed` when
- * none exists. Unlike `ensureManualArtifact` it never replaces an active version, so a promoted version stays active.
- */
-export function ensureSeedArtifact(db: Db, kind: ArtifactKind, name: string, seed: string, nowIso: string): ArtifactRow {
-	const active = getActiveArtifact(db, kind, name);
-	if (active) return active;
-	return ensureManualArtifact(db, kind, name, seed, nowIso);
+/** Every version of an artifact, newest first. */
+export function listArtifactVersions(db: Db, kind: ArtifactKind, name: string): ArtifactRow[] {
+	return db.prepare("SELECT * FROM artifacts WHERE kind = ? AND name = ? ORDER BY version DESC").all(kind, name).map(decode);
 }
 
 /** Stores an artifact set keyed by the hash of its sorted members, so identical sets share one id. */
