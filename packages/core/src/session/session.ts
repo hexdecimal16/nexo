@@ -37,6 +37,7 @@ import {
 	type RunModelInfo,
 	type RunResult,
 } from "../engine/run.ts";
+import { LearnWorker } from "../learn/worker.ts";
 import {
 	activeMessageLines,
 	buildHistory,
@@ -149,6 +150,8 @@ export class Session {
 	private busy = false;
 	private compactRequested = false;
 	private onEvent: ((event: EngineEvent) => void) | undefined;
+	/** Runs this process's learn jobs in the background after each turn and verdict (spec §8.1). */
+	private learner: LearnWorker;
 
 	/** Use `createSession` or `resumeSession`. Saves the state and takes ownership of `lock`. */
 	constructor(init: typeof INIT, deps: SessionDeps, dir: SessionDir, state: SessionJson, lines: TranscriptLine[], lock: SessionLock) {
@@ -161,6 +164,7 @@ export class Session {
 		this.lock = lock;
 		this.configHash = deps.configHash;
 		this.env = this.buildEnv(deps);
+		this.learner = new LearnWorker(this.env);
 		this.save();
 	}
 
@@ -279,6 +283,7 @@ export class Session {
 				signal: options.signal,
 			});
 			if (result.trajectoryId !== null) this.recordTurn(turnIndex, instruction, sent, result);
+			this.learner.kick();
 			return result;
 		} finally {
 			this.onEvent = undefined;
@@ -367,7 +372,21 @@ export class Session {
 	review(verdict: Verdict, comment?: string): FeedbackRow {
 		const runId = this.state.lastRunId;
 		if (!runId) throw invalid("There is no turn to review yet");
-		return recordFeedback(this.deps.db, { runId, verdict, comment, nowIso: this.env.now().toISOString(), redact: this.env.deps.redact });
+		const row = recordFeedback(this.deps.db, {
+			runId,
+			verdict,
+			comment,
+			nowIso: this.env.now().toISOString(),
+			redact: this.env.deps.redact,
+			learn: this.env.deps.config.learning.enabled,
+		});
+		this.learner.kick();
+		return row;
+	}
+
+	/** Resolves when the learn jobs started in the background have finished. */
+	learnIdle(): Promise<void> {
+		return this.learner.idle();
 	}
 
 	/** Marks the session closed and releases its lock; a session that never ran a turn is deleted instead; `resumeSession` reopens it. Throws CONFLICT while a turn runs. */
@@ -376,6 +395,8 @@ export class Session {
 			throw new NexoError({ code: "CONFLICT", message: "A turn is running", hint: "Abort the turn (its signal) and wait for it to finish before closing" });
 		}
 		if (this.state.status === "closed") return;
+		// A job cut short goes back to pending (or is reclaimed as stale if the process exits first).
+		void this.learner.stop();
 		this.state.status = "closed";
 		if (this.isEmpty()) {
 			// Nothing happened: leave no empty session behind. The lock goes last, so nobody can resume a half-deleted session.
@@ -423,6 +444,9 @@ export class Session {
 		this.deps = { ...this.deps, config: next.config, configHash: next.configHash, redact };
 		this.dir = new SessionDir(this.dir.root, this.id, redact);
 		this.env = this.buildEnv(this.deps);
+		const previous = this.learner;
+		this.learner = new LearnWorker(this.env);
+		void previous.stop();
 	}
 
 	/** Compacts before the turn's first request when forced or when the request would pass `session.compactAt`. */

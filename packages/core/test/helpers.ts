@@ -56,6 +56,8 @@ export function makeEnv(
 		overrides: {
 			models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "slow" } },
 			providers: { faux: { retryBaseDelayMs: 0 } },
+			// Learn jobs would consume the scripted faux replies of later turns; learning tests turn it on (learn-helpers.ts).
+			learning: { enabled: false },
 			...options.config,
 		},
 	});

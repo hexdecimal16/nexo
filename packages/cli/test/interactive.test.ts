@@ -31,6 +31,8 @@ afterEach(() => {
 const roles = {
 	models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "slow" } },
 	providers: { faux: { retryBaseDelayMs: 0 } },
+	// Background learn jobs would take the scripted faux replies meant for later turns.
+	learning: { enabled: false },
 };
 
 function home(config?: unknown): { env: NodeJS.ProcessEnv; cwd: string; home: string } {
