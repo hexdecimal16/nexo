@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { addMemory, addPlaybookItem, type Db, enqueueLearnJob, insertRun, listLearnJobs, listMemories, openDb, publishPlaybook, RunDir, supersedeMemory } from "@nexo/store";
+import { addMemory, addPlaybookItem, type Db, enqueueLearnJob, insertRun, listLearnJobs, listMemories, listPlaybookItems, openDb, publishPlaybook, RunDir, supersedeMemory } from "@nexo/store";
 import { createRedactor } from "@nexo/telemetry";
 import { runRow } from "../../store/test/fixtures.ts";
 import type { LearnJobsResponse, MemoryDetailResponse, MemoryListResponse, PlaybookListResponse, PlaybookResponse, PlaybookRetireResponse } from "../public/lib/api-types.ts";
@@ -78,6 +78,18 @@ describe("learning API", () => {
 		]);
 		expect((await raw(server.port, "/api/playbooks/Bad%20Name")).status).toBe(400);
 		expect((await post(server, "/api/playbooks/deploy/items/k404/retire")).status).toBe(404);
+	});
+
+	it("leaves the item active when its playbook version cannot be published", async () => {
+		addPlaybookItem(db, { skill: "release", content: "Bump the version first", source: "human" }, redact, NOW);
+		publishPlaybook(db, "release", "manual", NOW);
+		db.exec("CREATE TRIGGER no_release_versions BEFORE INSERT ON artifacts WHEN NEW.name = 'release' BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END;");
+		try {
+			expect((await post(server, "/api/playbooks/release/items/k001/retire")).status).toBe(500);
+			expect(listPlaybookItems(db, "release").map((i) => [i.key, i.status])).toEqual([["k001", "active"]]);
+		} finally {
+			db.exec("DROP TRIGGER no_release_versions");
+		}
 	});
 
 	it("lists learn jobs with counts and validates the status filter", async () => {
