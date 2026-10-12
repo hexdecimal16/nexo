@@ -1,6 +1,5 @@
-import { dataBlock, parseJudgeJson } from "@nexo/scorers";
+import { dataBlock, validateStructuredReply } from "@nexo/scorers";
 import { type Static, type TSchema, Type } from "typebox";
-import { Value } from "typebox/value";
 
 /** Most lessons one reflection may return. */
 export const MAX_LESSONS = 8;
@@ -198,22 +197,11 @@ export function curatorPrompt(input: CuratorInput): string {
 
 /** Parses and validates a reply against `schema`: the value, or the first validation errors. */
 export function validateReply<T extends TSchema>(schema: T, text: string): { ok: true; value: Static<T> } | { ok: false; errors: string[] } {
-	let value: unknown;
-	try {
-		value = parseJudgeJson(text);
-	} catch (error) {
-		return { ok: false, errors: [`not valid JSON: ${(error as Error).message}`] };
-	}
-	if (Value.Check(schema, value)) return { ok: true, value: value as Static<T> };
-	const errors = new Set<string>();
-	for (const e of Value.Errors(schema, value)) {
-		errors.add(`${e.instancePath || "/"} ${e.message}`);
-		if (errors.size >= 10) break;
-	}
-	return { ok: false, errors: [...errors] };
+	const checked = validateStructuredReply(schema, text);
+	return checked.errors.length === 0 ? { ok: true, value: checked.value as Static<T> } : { ok: false, errors: checked.errors };
 }
 
 /** The follow-up request after an invalid reply: the reply (as data) and what was wrong with it. */
 export function repairPrompt(reply: string, errors: readonly string[]): string {
-	return `Your previous reply was not valid. Problems:\n${errors.map((e) => `- ${e}`).join("\n")}\n\nYour previous reply:\n${dataBlock("previous_reply", clipMiddle(reply, 4000))}\n\nReply again with only the JSON object in the required shape.`;
+	return `Your previous reply was not valid. Problems:\n${dataBlock("validation_errors", errors.map((e) => `- ${clipMiddle(e, 200)}`).join("\n"))}\n\nYour previous reply:\n${dataBlock("previous_reply", clipMiddle(reply, 4000))}\n\nReply again with only the JSON object in the required shape.`;
 }

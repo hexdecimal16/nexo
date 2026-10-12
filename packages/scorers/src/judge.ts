@@ -111,17 +111,25 @@ export function parseJudgeJson(text: string): unknown {
 	return JSON.parse(text.slice(start, end + 1));
 }
 
-function validationErrors(schema: TSchema, text: string): { value: unknown; errors: string[] } {
+/** Longest validation error string, in characters (errors can quote model-controlled text). */
+const MAX_ERROR_CHARS = 200;
+
+/**
+ * Parses and validates a model reply against `schema`: the value (when it parsed) and up to ten validation errors, each
+ * clipped to 200 characters; no errors means the value matches. The errors may quote the reply, so a prompt that shows
+ * them to a model puts them in a data block.
+ */
+export function validateStructuredReply(schema: TSchema, text: string): { value: unknown; errors: string[] } {
 	let value: unknown;
 	try {
 		value = parseJudgeJson(text);
 	} catch (error) {
-		return { value: undefined, errors: [`not valid JSON: ${(error as Error).message}`] };
+		return { value: undefined, errors: [clip(`not valid JSON: ${(error as Error).message}`, MAX_ERROR_CHARS)] };
 	}
 	if (Value.Check(schema, value)) return { value, errors: [] };
 	const errors = new Set<string>();
 	for (const e of Value.Errors(schema, value)) {
-		errors.add(`${e.instancePath || "/"} ${e.message}`);
+		errors.add(clip(`${e.instancePath || "/"} ${e.message}`, MAX_ERROR_CHARS));
 		if (errors.size >= 10) break;
 	}
 	return { value, errors: [...errors] };
@@ -150,12 +158,12 @@ export async function completeStructured<T>(
 	const first = await caller.complete(model, request, signal);
 	let costUsd = first.costUsd;
 	let costUnknown = first.costUnknown;
-	const checked = validationErrors(schema, first.text);
+	const checked = validateStructuredReply(schema, first.text);
 	if (checked.errors.length === 0) return { value: checked.value as T, costUsd, costUnknown, replies: [first.text], repaired: false };
 	const repair: JudgeRequest = {
 		system: request.system,
 		purpose: `${request.purpose}-repair`,
-		user: `${request.user}\n\n# Your previous reply was invalid\n${dataBlock("previous_reply", clip(first.text, 4000))}\n\nProblems:\n- ${checked.errors.join("\n- ")}\n\nReply again with only the JSON object in the required shape.`,
+		user: `${request.user}\n\n# Your previous reply was invalid\n${dataBlock("previous_reply", clip(first.text, 4000))}\n\nProblems:\n${dataBlock("validation_errors", checked.errors.map((e) => `- ${e}`).join("\n"))}\n\nReply again with only the JSON object in the required shape.`,
 	};
 	let second: JudgeCompletion;
 	try {
@@ -173,7 +181,7 @@ export async function completeStructured<T>(
 	}
 	costUsd += second.costUsd;
 	costUnknown ||= second.costUnknown;
-	const rechecked = validationErrors(schema, second.text);
+	const rechecked = validateStructuredReply(schema, second.text);
 	if (rechecked.errors.length === 0) return { value: rechecked.value as T, costUsd, costUnknown, replies: [first.text, second.text], repaired: true };
 	throw new NexoError({
 		code: "SCORER_FAILED",
