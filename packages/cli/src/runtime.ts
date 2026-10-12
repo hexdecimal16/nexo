@@ -1,7 +1,8 @@
 import type { Models } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { createEngine, createSettings, type DeepPartial, type Engine, type EngineEvent, type NexoConfig, type Settings } from "@nexo/core";
-import { loadSkills, type SkillCatalog } from "@nexo/skills";
+import { createConfiguredMcpHub, createEngine, createSettings, type DeepPartial, type Engine, type EngineEvent, type NexoConfig, type Settings } from "@nexo/core";
+import type { McpHub } from "@nexo/mcp";
+import { BUNDLED_SKILLS_DIR, loadSkills, type SkillCatalog } from "@nexo/skills";
 import { type Db, ensureNexoDirs, type NexoPaths, openDb, resolveNexoPaths } from "@nexo/store";
 import { createLogger, type Logger, type Redactor } from "@nexo/telemetry";
 import type { Prompter } from "@nexo/tools";
@@ -22,6 +23,8 @@ export interface Runtime {
 	redact: Redactor;
 	logger: Logger;
 	settings: Settings;
+	/** The configured MCP servers, null when there are none. Close it when done, or the servers keep the process alive. */
+	mcp: McpHub | null;
 }
 
 export interface RuntimeOptions {
@@ -42,8 +45,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 	const redact = settings.redact;
 	const logger = openLogger(settings, paths, "cli");
 	const db = openDb(paths.db);
-	const skills = loadSkills(config.skills.dirs);
+	const skills = loadSkills([BUNDLED_SKILLS_DIR, ...config.skills.dirs]);
 	for (const d of skills.diagnostics) logger.warn("invalid skill skipped", { path: d.path, error: d.error });
+	const mcp = createConfiguredMcpHub(config, { cwd: options.cwd, logger });
 	const engine = createEngine({
 		config,
 		configHash: hash,
@@ -56,6 +60,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 		skills,
 		onEvent: options.onEvent,
 		resolveApiKey: settings.resolveApiKey,
+		...(mcp ? { mcp } : {}),
 	});
-	return { paths, config, db, skills, engine, redact, logger, settings };
+	return { paths, config, db, skills, engine, redact, logger, settings, mcp };
 }

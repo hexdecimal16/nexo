@@ -120,17 +120,22 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 	});
 
 	for (const warning of judgeFamilyWarnings(runtime.config)) io.stderr.write(`warning: ${escapeControl(warning)}\n`);
-	const result = await runtime.engine.run(
-		{
-			instruction,
-			skill: values.skill,
-			model: values.model,
-			effort: values.effort as Effort | undefined,
-			workspace: values.workspace,
-			budgetUsd,
-		},
-		options.signal,
-	);
+	let result: Awaited<ReturnType<typeof runtime.engine.run>>;
+	try {
+		result = await runtime.engine.run(
+			{
+				instruction,
+				skill: values.skill,
+				model: values.model,
+				effort: values.effort as Effort | undefined,
+				workspace: values.workspace,
+				budgetUsd,
+			},
+			options.signal,
+		);
+	} finally {
+		await runtime.mcp?.close();
+	}
 	io.stdout.write("\n");
 	const mark = result.status === "succeeded" ? "✓" : "✗";
 	const unknown = result.costUnknown ? " (some calls unpriced)" : "";

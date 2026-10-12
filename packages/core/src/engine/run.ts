@@ -27,6 +27,7 @@ import {
 	type RouterPolicy,
 	TriggerMonitor,
 } from "@nexo/router";
+import type { McpHub } from "@nexo/mcp";
 import { createLoadSkillTool, formatSkillIndex, type SkillCatalog } from "@nexo/skills";
 import {
 	createArtifactSet,
@@ -100,6 +101,8 @@ export interface EngineDeps {
 	onEvent?: (event: EngineEvent) => void;
 	/** API key per provider for model requests (settings: environment variable, then credentials file). */
 	resolveApiKey?: ApiKeyResolver;
+	/** The process's MCP servers; every run gets their tools. The caller closes it. */
+	mcp?: McpHub;
 }
 
 /** Longest tool result text carried by a `tool_end` event. */
@@ -680,6 +683,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			sessionId,
 		};
 		for (const factory of extraToolFactories) baseTools.push(...factory(toolCtx));
+		if (deps.mcp) baseTools.push(...(await deps.mcp.tools()));
 		const tools = baseTools.map(withToolErrorCodes);
 
 		const systemPrompt = renderSystemPrompt({
