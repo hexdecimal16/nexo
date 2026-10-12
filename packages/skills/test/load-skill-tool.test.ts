@@ -39,4 +39,12 @@ describe("load_skill tool", () => {
 		expect(text).toContain('This skill sets nexo-model "s2" and nexo-effort "high".');
 		expect(text).toContain('call spawn with a task whose skill is "heavy"');
 	});
+
+	it("appends the appendix after the body and before the delegation note", async () => {
+		const tool = createLoadSkillTool({ catalog, appendix: (s) => (s.name === "heavy" ? "## Playbook for heavy\n- [k001] tip" : "") });
+		const heavy = ((await tool.execute("c4", { name: "heavy" })).content[0] as { text: string }).text;
+		expect(heavy).toContain("Think hard.\n\n\n## Playbook for heavy\n- [k001] tip\n\nThis skill sets");
+		const plain = ((await tool.execute("c5", { name: "a" })).content[0] as { text: string }).text;
+		expect(plain).toBe(`# Skill: a\nBase directory: ${join(root, "a")}\n\nStep 1.\n`);
+	});
 });

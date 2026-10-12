@@ -33,7 +33,9 @@ import {
 	createArtifactSet,
 	type ArtifactSetMember,
 	type Db,
+	enqueueLearnJob,
 	ensureManualArtifact,
+	getActiveArtifact,
 	insertRun,
 	isPidAlive,
 	listSpans,
@@ -72,6 +74,8 @@ import { assistantText, contentText, estimatePromptChars, lastAssistant, recorde
 import { DEFAULT_PLANNER_PROMPT, DEFAULT_SYSTEM_PROMPT, renderSystemPrompt } from "./prompts.ts";
 import { type ApiKeyResolver, createGatedStreamFn } from "./provider-gate.ts";
 import { Recorder } from "./recorder.ts";
+import type { ChargedCallDeps } from "../learn/caller.ts";
+import { activePlaybook, EMPTY_MEMORY_CONTEXT, playbookSection, retrieveRunMemories, type RunMemoryContext, skillAppendix } from "../learn/context.ts";
 import { continuationPrompt } from "../scoring/continuation.ts";
 import { planScoring, runScoringRound, runSelfCheck, type ScoringDeps, summarizeSpans } from "../scoring/runner.ts";
 import { judgeFamilyWarnings, loadJudgeRubric, loadRouterPolicy } from "../scoring/sources.ts";
@@ -430,6 +434,12 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	let rubric = "";
 	// The scorers are fixed before the run starts, so the agent cannot change them by editing a scorer file.
 	const plan = planScoring(env, skill, depth, workspace);
+	/** The skill's active playbook when the run starts with `--skill` (spec §6), snapshotted with the run's artifacts. */
+	const startPlaybook = skill ? getActiveArtifact(db, "playbook", skill.name) : undefined;
+	/** Memories injected at run start; load_skill adds the skill memories it shows. */
+	let memoryContext: RunMemoryContext = EMPTY_MEMORY_CONTEXT;
+	/** Charges calls made for memory (the query embedding) to this run; set once the run span exists. */
+	let memoryDeps: ChargedCallDeps | null = null;
 
 	const recorder = new Recorder({ db, runDir, runId, now, redact: deps.redact });
 	const runJson = (status: RunStatus, output: string, error: ErrorPayload | null): RunJson => ({
@@ -478,6 +488,10 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		snapshot("system_prompt", "default", DEFAULT_SYSTEM_PROMPT, "system_prompt.md");
 		snapshot("planner_prompt", "default", DEFAULT_PLANNER_PROMPT, "planner_prompt.md");
 		if (skill) snapshot("skill", skill.name, skill.content, `skills/${skill.name}/SKILL.md`);
+		if (skill && startPlaybook?.content.trim()) {
+			members.push({ kind: "playbook", name: skill.name, artifactId: startPlaybook.id, version: startPlaybook.version });
+			runDir.writeArtifact(`playbooks/${skill.name}.md`, startPlaybook.content);
+		}
 		const routerPolicy = loadRouterPolicy(db, config, nowIso, deps.redact);
 		policy = routerPolicy.policy;
 		members.push({ kind: "router_policy", name: routerPolicy.artifact.name, artifactId: routerPolicy.artifact.id, version: routerPolicy.artifact.version });
@@ -661,6 +675,12 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 					const hint = monitor.skillLoaded(s.name, s.meta.model);
 					if (hint) escalate(hint, "mid_run");
 				},
+				appendix: (s) => {
+					if (!memoryDeps) return "";
+					const playbook = activePlaybook(memoryDeps, s.name);
+					if (playbook) runDir.writeArtifact(`playbooks/${s.name}.md`, playbook.content);
+					return skillAppendix(memoryDeps, memoryContext, s.name);
+				},
 			}),
 		];
 		const toolCtx: RunToolContext = {
@@ -686,12 +706,32 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		if (deps.mcp) baseTools.push(...(await deps.mcp.tools()));
 		const tools = baseTools.map(withToolErrorCodes);
 
+		// Retrieval at run start (spec §8.3); the query embedding is charged to this run like any of its calls.
+		memoryDeps = {
+			env,
+			recorder,
+			parentSpanId: rootSpan,
+			budget,
+			signal: input.signal ?? new AbortController().signal,
+			charge: (usd, unknown) => {
+				recordSpend(db, rootRunId, usd, now(), sessionId);
+				ownCost += usd;
+				costUnknown ||= unknown;
+			},
+		};
+		if (!input.signal?.aborted) memoryContext = await retrieveRunMemories(memoryDeps, request.instruction, ["user", "global", ...(skill ? [`skill:${skill.name}`] : [])]);
+		// The run directory keeps the memories the run started with (spec §5.1 `context/`).
+		if (memoryContext.block) runDir.writeContext("memories.md", memoryContext.block);
+
 		const systemPrompt = renderSystemPrompt({
 			systemPrompt: DEFAULT_SYSTEM_PROMPT,
 			plannerPrompt: tools.some((t) => t.name === "spawn") ? DEFAULT_PLANNER_PROMPT : null,
 			workspace,
 			skillIndex: formatSkillIndex(deps.skills),
-			activeSkill: skill ? { name: skill.name, body: skill.body } : undefined,
+			activeSkill: skill
+				? { name: skill.name, body: startPlaybook?.content.trim() ? `${skill.body}\n\n${playbookSection(skill.name, startPlaybook.content)}` : skill.body }
+				: undefined,
+			memories: memoryContext.block,
 		});
 
 		/** Prompt size for the pre-call estimate: the system prompt, the tool definitions and the non-system transcript. */
@@ -1092,6 +1132,10 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			escalations,
 		}),
 	);
+	// Online learning (spec §7.1 step 6, §8.1): a root run that was not interrupted gets a reflect job; it runs later, in a worker.
+	if (!parent && config.learning.enabled && status !== "aborted") {
+		attempt("enqueueing the learn job", () => enqueueLearnJob(db, { runId, trigger: "run_end" }, now().toISOString()));
+	}
 	attempt("run_end event", () => deps.onEvent?.({ type: "run_end", runId, depth, status, costUsd: totalCost }));
 	logger.info("run finished", { status, cost_usd: totalCost });
 	const messages = agent ? newMessages(agent.state.messages, seededCount) : [];
