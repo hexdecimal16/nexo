@@ -34,6 +34,8 @@ export interface RunRow {
 	/** Set on the root run of a session turn. */
 	sessionId?: string | null;
 	turnIndex?: number | null;
+	/** Set on optimization rollouts (and their subagents) and on the optimizer's own run row. */
+	optimRunId?: string | null;
 }
 
 const COLUMNS: Record<keyof RunRow, string> = {
@@ -59,6 +61,7 @@ const COLUMNS: Record<keyof RunRow, string> = {
 	error: "error_json",
 	sessionId: "session_id",
 	turnIndex: "turn_index",
+	optimRunId: "optim_run_id",
 };
 
 function encode(key: string, value: unknown): SQLInputValue {
@@ -91,6 +94,7 @@ function decode(row: Record<string, unknown>): RunRow {
 		error: row.error_json ? (JSON.parse(String(row.error_json)) as ErrorPayload) : null,
 		sessionId: (row.session_id as string | null) ?? null,
 		turnIndex: row.turn_index === null || row.turn_index === undefined ? null : Number(row.turn_index),
+		optimRunId: (row.optim_run_id as string | null) ?? null,
 	};
 }
 
@@ -164,6 +168,8 @@ export interface RunSummary {
 	turnIndex: number | null;
 	/** Title of the run's session, when the session is indexed. */
 	sessionTitle: string | null;
+	/** The optimization this run belongs to (a rollout or the optimizer's own run); null for ordinary runs. */
+	optimRunId: string | null;
 	/** The latest scoring round; null when the run was never scored. */
 	score: RunScore | null;
 }
@@ -183,6 +189,8 @@ export interface RunQuery {
 	sessionId?: string;
 	/** true: runs with at least one score. false: finished runs without scores. */
 	scored?: boolean;
+	/** Only the runs of this optimization. Without it, optimization runs (rollouts, the optimizer) are left out. */
+	optimRunId?: string;
 }
 
 export interface RunPage {
@@ -258,6 +266,7 @@ function decodeSummary(row: Record<string, unknown>): RunSummary {
 		sessionId: run.sessionId ?? null,
 		turnIndex: run.turnIndex ?? null,
 		sessionTitle: (row.session_title as string | null) ?? null,
+		optimRunId: run.optimRunId ?? null,
 		score: decodeRunScore(row.score_json),
 	};
 }
@@ -286,6 +295,12 @@ export function queryRuns(db: Db, query: RunQuery = {}): RunPage {
 	if (query.sessionId) {
 		where.push("r.session_id = ?");
 		args.push(query.sessionId);
+	}
+	if (query.optimRunId) {
+		where.push("r.optim_run_id = ?");
+		args.push(query.optimRunId);
+	} else {
+		where.push("r.optim_run_id IS NULL");
 	}
 	if (since) {
 		where.push("r.started_at >= ?");

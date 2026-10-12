@@ -18,7 +18,9 @@ export type SpanKind =
 	| "compaction"
 	| "learn"
 	| "learn_call"
-	| "embedding_call";
+	| "embedding_call"
+	| "optimize"
+	| "gepa_call";
 
 export type SpanStatus = "running" | "ok" | "error";
 
