@@ -46,6 +46,7 @@ import {
 	publishPlaybook,
 	retireMemory,
 	retirePlaybookItem,
+	transaction,
 } from "@nexo/store";
 import { NexoError, type Redactor } from "@nexo/telemetry";
 import { resolveConfined } from "@nexo/tools";
@@ -433,8 +434,10 @@ export function playbookResponse(ctx: ApiContext, name: string, params: URLSearc
 export function retirePlaybookItemResponse(ctx: ApiContext, name: string, key: string): PlaybookRetireResponse {
 	const skill = skillParam(name);
 	const nowIso = ctx.now().toISOString();
-	retirePlaybookItem(ctx.db, skill, key, "user", nowIso);
-	const version = publishPlaybook(ctx.db, skill, "manual", nowIso);
+	const version = transaction(ctx.db, () => {
+		retirePlaybookItem(ctx.db, skill, key, "user", nowIso);
+		return publishPlaybook(ctx.db, skill, "manual", nowIso);
+	});
 	const item = getPlaybookItem(ctx.db, skill, key) as PlaybookItemRow;
 	return { item: itemView(ctx, item), version: version ? versionView(version) : null };
 }

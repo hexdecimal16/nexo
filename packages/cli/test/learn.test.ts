@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { addMemory, getActiveArtifact, listLearnJobs, listMemories, openDb, resolveNexoPaths } from "@nexo/store";
+import { addMemory, getActiveArtifact, listLearnJobs, listMemories, listPlaybookItems, openDb, resolveNexoPaths } from "@nexo/store";
 import { createRedactor } from "@nexo/telemetry";
 import { type CliIO, runCli } from "../src/main.ts";
 
@@ -104,6 +104,21 @@ describe("nexo playbook", () => {
 		const d = db(h);
 		expect(getActiveArtifact(d, "playbook", "ci")).toMatchObject({ version: 2, content: "" });
 		d.close();
+	});
+});
+
+describe("nexo playbook without a version", () => {
+	it("adds and retires nothing when the playbook version cannot be published", async () => {
+		const h = home();
+		expect(await runCli(["playbook", "add", "ci", "First", "tip"], io(), h)).toBe(0);
+		const d = db(h);
+		d.exec("CREATE TRIGGER no_versions BEFORE INSERT ON artifacts BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END;");
+		d.close();
+		expect(await runCli(["playbook", "add", "ci", "Second", "tip"], io(), h)).not.toBe(0);
+		expect(await runCli(["playbook", "retire", "ci", "k001"], io(), h)).not.toBe(0);
+		const after = db(h);
+		expect(listPlaybookItems(after, "ci", { includeRetired: true }).map((i) => [i.key, i.status])).toEqual([["k001", "active"]]);
+		after.close();
 	});
 });
 

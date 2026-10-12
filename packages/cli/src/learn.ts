@@ -19,6 +19,7 @@ import {
 	retireMemory,
 	retirePlaybookItem,
 	retryFailedLearnJobs,
+	transaction,
 } from "@nexo/store";
 import type { Redactor } from "@nexo/telemetry";
 import { nonInteractivePrompter } from "@nexo/tools";
@@ -170,15 +171,19 @@ export function playbookCommand(args: string[], io: CliIO, options: CliOptions):
 		if (sub === "add") {
 			const text = positionals.join(" ").trim();
 			if (!text) throw usageError("nexo playbook add needs the item text");
-			const item = addPlaybookItem(store.db, { skill, content: text, source: "human" }, store.redact, now);
-			const version = publishPlaybook(store.db, skill, "manual", now);
+			const { item, version } = transaction(store.db, () => {
+				const added = addPlaybookItem(store.db, { skill, content: text, source: "human" }, store.redact, now);
+				return { item: added, version: publishPlaybook(store.db, skill, "manual", now) };
+			});
 			io.stdout.write(`Added ${skill}/${item.key}${version ? ` · playbook version ${version.version}` : ""}\n`);
 			return 0;
 		}
 		const [key] = positionals;
 		if (!key) throw usageError("nexo playbook retire needs an item key");
-		retirePlaybookItem(store.db, skill, key, "user", now);
-		const version = publishPlaybook(store.db, skill, "manual", now);
+		const version = transaction(store.db, () => {
+			retirePlaybookItem(store.db, skill, key, "user", now);
+			return publishPlaybook(store.db, skill, "manual", now);
+		});
 		io.stdout.write(`Retired ${skill}/${key}${version ? ` · playbook version ${version.version}` : ""}\n`);
 		return 0;
 	} finally {
