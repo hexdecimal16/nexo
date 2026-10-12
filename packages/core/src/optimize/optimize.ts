@@ -199,11 +199,11 @@ export async function startOptimization(baseEnv: EngineEnv, options: OptimizeOpt
 	assertBudget(env, budgetUsd);
 	const cases = loadCases(env, target, nowIso());
 	const minibatch = Math.min(MINIBATCH_SIZE, cases.feedback.length);
-	const minRollouts = cases.pareto.length + 2 * cases.holdout.length + 2 * minibatch;
+	const minRollouts = 2 * (cases.pareto.length + cases.holdout.length) + 2 * minibatch;
 	if (options.maxRollouts !== undefined && options.maxRollouts < minRollouts) {
 		throw new NexoError({
 			code: "INVALID_REQUEST",
-			message: `--max-rollouts must be at least ${minRollouts}: the base on the pareto (${cases.pareto.length}) and holdout (${cases.holdout.length}) splits, one iteration (${2 * minibatch}) and the winner on the holdout split`,
+			message: `--max-rollouts must be at least ${minRollouts}: the base on the pareto (${cases.pareto.length}) and holdout (${cases.holdout.length}) splits, one iteration (${2 * minibatch} on the minibatch and ${cases.pareto.length} on the pareto split) and the winner on the holdout split (${cases.holdout.length})`,
 			context: { maxRollouts: options.maxRollouts, minRollouts },
 		});
 	}
