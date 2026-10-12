@@ -1,8 +1,9 @@
 import { parseArgs } from "node:util";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { createSession, createSettings, listSessions, resumeSession, type SessionDeps } from "@nexo/core";
+import { createConfiguredMcpHub, createSession, createSettings, listSessions, resumeSession, type SessionDeps } from "@nexo/core";
+import type { McpHub } from "@nexo/mcp";
 import { EFFORTS, type Effort } from "@nexo/router";
-import { loadSkills } from "@nexo/skills";
+import { BUNDLED_SKILLS_DIR, loadSkills } from "@nexo/skills";
 import { ensureNexoDirs, getSessionRow, openDb, resolveNexoPaths, sessionNotFound } from "@nexo/store";
 import { NexoError, toErrorPayload } from "@nexo/telemetry";
 import { escapeControl, oneLine, restoreTerminal, runInteractive, runSettingsScreen } from "@nexo/tui";
@@ -135,6 +136,8 @@ export async function interactiveCommand(args: string[], io: CliIO, options: Cli
 		return code;
 	};
 	const dispose = installCrashHandlers({ proc: options.proc ?? process, restore: restoreTerminal, redact: settings.redact, stderr: io.stderr, exit: options.exit ?? ((code) => process.exit(code)) });
+	// Started with the first session and kept for the next ones, so a browser connection survives across turns and sessions.
+	let mcp: McpHub | null | undefined;
 	try {
 		const code = await runInteractive({
 			settings,
@@ -144,8 +147,9 @@ export async function interactiveCommand(args: string[], io: CliIO, options: Cli
 			openSession: (prompter) => {
 				const { config, hash } = settings.loadConfig();
 				const logger = openLogger(settings, paths, "tui");
-				const skills = loadSkills(config.skills.dirs);
+				const skills = loadSkills([BUNDLED_SKILLS_DIR, ...config.skills.dirs]);
 				for (const d of skills.diagnostics) logger.warn("invalid skill skipped", { path: d.path, error: d.error });
+				if (mcp === undefined) mcp = createConfiguredMcpHub(config, { cwd, logger });
 				const deps: SessionDeps = {
 					config,
 					configHash: hash,
@@ -158,14 +162,17 @@ export async function interactiveCommand(args: string[], io: CliIO, options: Cli
 					skills,
 					resolveApiKey: settings.resolveApiKey,
 					reloadConfig: () => settings.reloadConfig(),
+					...(mcp ? { mcp } : {}),
 				};
 				return resumeId ? resumeSession(deps, resumeId) : createSession(deps, { cwd, workspace: parsed.workspace, model: parsed.model, effort: parsed.effort });
 			},
 		});
+		await mcp?.close();
 		return finish(options.signal?.aborted && code === 0 ? EXIT_SIGINT : code);
 	} catch (error) {
 		const payload = toErrorPayload(error);
 		printError(io, payload, settings.redact);
+		await mcp?.close();
 		return finish(exitCodeFor(payload.code));
 	} finally {
 		dispose();

@@ -16,6 +16,7 @@ export type NexoErrorCode =
 	| "SKILL_INVALID"
 	| "SKILL_NOT_FOUND"
 	| "STORE_IO"
+	| "MCP_UNAVAILABLE"
 	| "INVALID_REQUEST"
 	| "FORBIDDEN"
 	| "NOT_FOUND"

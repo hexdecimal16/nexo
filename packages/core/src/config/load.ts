@@ -151,6 +151,29 @@ function assertJudgeConfigured(config: NexoConfig): void {
 	});
 }
 
+const MCP_SERVER_NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+/** The mcp section of the user-level layers only: defaults, `~/.nexo/config.json` and CLI overrides. */
+function userMcp(homeLayer: unknown, overrides: unknown, homeFile: string): NexoConfig["mcp"] {
+	const section = (layer: unknown) => (isPlainObject(layer) ? layer.mcp : undefined);
+	const mcp = structuredClone(deepMerge(DEFAULT_CONFIG.mcp, section(homeLayer), section(overrides)));
+	const invalid = (path: string, why: string) =>
+		new NexoError({
+			code: "CONFIG_INVALID",
+			message: `Invalid configuration:\n  ${path} ${why} in the user-level config`,
+			hint: `Fix mcp in ${homeFile}`,
+			context: { path },
+		});
+	if (!Value.Check(ConfigSchema.properties.mcp, mcp)) {
+		const first = Value.Errors(ConfigSchema.properties.mcp, mcp)[0];
+		throw invalid(`/mcp${first?.instancePath ?? ""}`, first ? `is invalid: ${first.message}` : "is invalid");
+	}
+	for (const name of Object.keys(mcp.servers)) {
+		if (!MCP_SERVER_NAME.test(name)) throw invalid(`/mcp/servers/${name}`, "must be named with 1-32 lowercase letters, digits and hyphens");
+	}
+	return mcp;
+}
+
 /**
  * The tool policy of the user-level layers only: defaults, `~/.nexo/config.json` and CLI overrides, without
  * `./.nexo/config.json`. Throws CONFIG_INVALID when those layers' tools section is invalid on its own.
@@ -206,6 +229,8 @@ export function loadConfig(options: LoadConfigOptions): LoadedConfig {
 	const projectLayer = sources.includes(projectFile) ? layers[sources.indexOf(projectFile)] : undefined;
 	config.scoring.scorersOrigin = fromProject(projectLayer, options.overrides, "scoring", "scorers") ? "project" : "user";
 	config.scoring.scorerTools = userToolPolicy(sources.includes(options.paths.config) ? layers[sources.indexOf(options.paths.config)] : undefined, options.overrides, options.paths.config);
+	// MCP servers are user-level only: a server runs a command, so a cloned repo must not add one.
+	config.mcp = userMcp(sources.includes(options.paths.config) ? layers[sources.indexOf(options.paths.config)] : undefined, options.overrides, options.paths.config);
 	config.skills.dirs = config.skills.dirs.map((d) => expandDir(d, options.paths, options.cwd));
 	config.router.policy = fromProject(projectLayer, options.overrides, "router", "policy")
 		? projectFileSource(config.router.policy, "/router/policy", options.cwd)

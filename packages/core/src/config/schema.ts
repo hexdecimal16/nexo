@@ -121,6 +121,24 @@ export const ConfigSchema = Type.Object(
 			},
 			{ additionalProperties: false },
 		),
+		mcp: Type.Object(
+			{
+				/** Stdio MCP servers by name; their tools reach the agent as `mcp__<name>__<tool>`. */
+				servers: Type.Record(
+					Type.String(),
+					Type.Object(
+						{
+							command: Type.String({ minLength: 1 }),
+							args: Type.Optional(Type.Array(Type.String())),
+							env: Type.Optional(Type.Record(Type.String(), Type.String())),
+							timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
+						},
+						{ additionalProperties: false },
+					),
+				),
+			},
+			{ additionalProperties: false },
+		),
 		pricingOverrides: Type.Record(
 			Type.String(),
 			Type.Object(
@@ -181,6 +199,7 @@ export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 		nonInteractiveAsk: "deny",
 		bashTimeoutMs: 120_000,
 	},
+	mcp: { servers: {} },
 	pricingOverrides: {},
 	redaction: { patterns: [] },
 };
