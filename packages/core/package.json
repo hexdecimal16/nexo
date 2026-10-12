@@ -9,6 +9,7 @@
     "@earendil-works/pi-ai": "1.1.0",
     "@nexo/mcp": "0.1.0",
     "@nexo/memory": "0.1.0",
+    "@nexo/optimize": "0.1.0",
     "@nexo/router": "0.1.0",
     "@nexo/scorers": "0.1.0",
     "@nexo/skills": "0.1.0",
