@@ -134,7 +134,7 @@ const CAPS = { instruction: 2000, output: 6000, trajectory: 6000, scores: 3000, 
  * `dataBlock(name, text)` whose escaped content is at most `max` characters. The text is clipped (head and tail kept),
  * then clipped further while escaping `<<<` (up to 1.5× longer) pushes it over, so a block never exceeds its cap.
  */
-function cappedBlock(name: string, text: string, max: number): string {
+export function cappedBlock(name: string, text: string, max: number): string {
 	const delimiters = dataBlock(name, "").length;
 	let room = max;
 	for (;;) {

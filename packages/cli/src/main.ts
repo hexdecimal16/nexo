@@ -7,6 +7,7 @@ import { nonInteractivePrompter, type Prompter } from "@nexo/tools";
 import { type CliIO, type CliOptions, EXIT_SIGINT, EXIT_SIGTERM, exitCodeFor, printError, USAGE, usageError } from "./common.ts";
 import { evalCommand } from "./eval.ts";
 import { learnCommand, learnEventLine, memoryCommand, playbookCommand } from "./learn.ts";
+import { optimizeCommand } from "./optimize.ts";
 import { createTtyPrompter } from "./prompter.ts";
 import { createTtyLineAsker, isInteractiveTerminal, type LineAsker, promptReview } from "./review.ts";
 import { createRuntime } from "./runtime.ts";
@@ -194,7 +195,7 @@ function costCommand(args: string[], io: CliIO, options: CliOptions): number {
 function reindexCommand(io: CliIO, options: CliOptions): number {
 	const paths = resolveNexoPaths(options.env ?? process.env);
 	ensureNexoDirs(paths);
-	const result = reindex(openDb(paths.db), paths.runs, paths.sessions);
+	const result = reindex(openDb(paths.db), paths.runs, paths.sessions, paths.optim);
 	io.stdout.write(`Reindexed ${result.runs} runs, ${result.spans} spans, ${result.sessions} sessions\n`);
 	for (const dir of result.skipped) io.stderr.write(`skipped unreadable directory: ${dir}\n`);
 	return 0;
@@ -216,6 +217,8 @@ export async function runCli(argv: string[], io: CliIO, options: CliOptions = {}
 				return reindexCommand(io, options);
 			case "eval":
 				return evalCommand(rest, io, options);
+			case "optimize":
+				return await optimizeCommand(rest, io, options);
 			case "learn":
 				return await learnCommand(rest, io, options);
 			case "memory":

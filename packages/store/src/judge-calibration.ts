@@ -19,6 +19,10 @@ export interface EvalCaseRow {
 	scorerSpec: unknown;
 	split: EvalSplit;
 	createdAt: string;
+	/** The skill rollouts of this case run with; null for none. */
+	skill: string | null;
+	/** `run`: made from a reviewed run; `manual`: added with `nexo eval add`. */
+	origin: "run" | "manual";
 }
 
 /** Judge pass/fail against human done/not-done; "positive" is a pass / done. */
@@ -52,7 +56,7 @@ export interface JudgeHumanPair {
 	verdict: Verdict;
 }
 
-/** Stable 40/40/20 feedback/pareto/holdout split by the hash of the source run id (spec §8.2). */
+/** Stable 40/40/20 feedback/pareto/holdout split by the hash of `key` (spec §8.2); eval cases pass their normalized instruction. */
 export function evalSplitFor(key: string): EvalSplit {
 	const bucket = createHash("sha256").update(key).digest().readUInt32BE(0) % 10;
 	return bucket < 4 ? "feedback" : bucket < 8 ? "pareto" : "holdout";
@@ -94,6 +98,8 @@ function decodeCase(row: Record<string, unknown>): EvalCaseRow {
 		scorerSpec: row.scorer_spec_json ? JSON.parse(String(row.scorer_spec_json)) : null,
 		split: row.split as EvalSplit,
 		createdAt: String(row.created_at),
+		skill: (row.skill as string | null) ?? null,
+		origin: row.origin === "manual" ? "manual" : "run",
 	};
 }
 

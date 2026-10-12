@@ -18,17 +18,21 @@ export interface ReindexResult {
 
 /**
  * Rebuilds the `runs` and `spans` tables from run directories, and the `sessions` table from session directories when
- * `sessionsRoot` is given. Directories are the source of truth; a run's session link comes from its run.json.
+ * `sessionsRoot` is given. With `optimRoot`, each optimization directory's own run and its `rollouts/` runs are indexed
+ * too. Directories are the source of truth; a run's session and optimization links come from its run.json.
  * The feedback and scores tables are kept; a run with no feedback rows gets one back from its run.json `humanVerdict`,
  * and a run with no score rows gets its run.json `scores` back.
  * A run.json still marked running is indexed as aborted, because a reindexed row has no pid for crash recovery to check.
  */
-export function reindex(db: Db, runsRoot: string, sessionsRoot?: string): ReindexResult {
+export function reindex(db: Db, runsRoot: string, sessionsRoot?: string, optimRoot?: string): ReindexResult {
 	const result: ReindexResult = { runs: 0, spans: 0, sessions: 0, skipped: [] };
 	transaction(db, () => {
 		db.exec("DELETE FROM spans; DELETE FROM runs;");
 		if (existsSync(runsRoot)) {
 			for (const name of readdirSync(runsRoot).sort()) indexDir(db, join(runsRoot, name), result);
+		}
+		if (optimRoot !== undefined && existsSync(optimRoot)) {
+			for (const name of readdirSync(optimRoot).sort()) indexOptimDir(db, join(optimRoot, name), result);
 		}
 		if (sessionsRoot === undefined) return;
 		db.exec("DELETE FROM sessions;");
@@ -36,6 +40,20 @@ export function reindex(db: Db, runsRoot: string, sessionsRoot?: string): Reinde
 		for (const name of readdirSync(sessionsRoot).sort()) indexSession(db, join(sessionsRoot, name), result);
 	});
 	return result;
+}
+
+/** An optimization directory: its own run (when it has a run.json) and every rollout under `rollouts/`. */
+function indexOptimDir(db: Db, dir: string, result: ReindexResult): void {
+	try {
+		if (!statSync(dir).isDirectory()) return;
+	} catch {
+		return;
+	}
+	if (existsSync(join(dir, "run.json"))) indexDir(db, dir, result);
+	const rollouts = join(dir, "rollouts");
+	if (existsSync(rollouts)) {
+		for (const name of readdirSync(rollouts).sort()) indexDir(db, join(rollouts, name), result);
+	}
 }
 
 function indexSession(db: Db, dir: string, result: ReindexResult): void {
@@ -98,6 +116,7 @@ function indexRun(db: Db, dir: string): { spans: number } | null {
 			pid: null,
 			sessionId: run.sessionId ?? null,
 			turnIndex: run.turnIndex ?? null,
+			optimRunId: run.optimRunId ?? null,
 			error: stillRunning
 				? { code: "INTERNAL", message: "The run was still marked running when the index was rebuilt", retryable: false }
 				: run.error,

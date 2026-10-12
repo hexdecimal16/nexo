@@ -74,6 +74,12 @@ export const EDITABLE_SETTINGS: readonly SettingDefinition[] = [
 	{ key: "budgets.perSessionUsd", label: "Budget per session", description: "Spending cap for one interactive session, in USD", type: USD },
 	{ key: "budgets.dailyUsd", label: "Daily budget", description: "Spending cap per UTC day, in USD", type: USD },
 	{ key: "budgets.monthlyUsd", label: "Monthly budget", description: "Spending cap per UTC month, in USD", type: USD },
+	{
+		key: "budgets.optimDefaultUsd",
+		label: "Optimization budget",
+		description: "Default spending cap for one `nexo optimize` run, in USD (--budget-usd overrides)",
+		type: USD,
+	},
 	...Object.keys(DEFAULT_CONFIG.tools.policy).map(
 		(tool): SettingDefinition => ({
 			key: `tools.policy.${tool}`,
@@ -126,6 +132,24 @@ export const EDITABLE_SETTINGS: readonly SettingDefinition[] = [
 		label: "Memory tokens",
 		description: "Most tokens of retrieved memories added to a prompt",
 		type: { kind: "number", integer: true, min: 0 },
+	},
+	{
+		key: "optimize.minCases",
+		label: "Optimization min cases",
+		description: "Fewest eval cases an optimization needs",
+		type: { kind: "number", integer: true, min: 3 },
+	},
+	{
+		key: "optimize.patience",
+		label: "Optimization patience",
+		description: "Iterations without a new Pareto member before an optimization stops",
+		type: { kind: "number", integer: true, min: 1 },
+	},
+	{
+		key: "optimize.minJudgeKappa",
+		label: "Promotion min judge κ",
+		description: "Lowest judge–human agreement (Cohen's κ) that lets judge-only evidence promote a candidate",
+		type: { kind: "number", integer: false, min: -1, max: 1 },
 	},
 ];
 

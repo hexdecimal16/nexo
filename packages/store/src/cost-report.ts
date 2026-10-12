@@ -36,7 +36,7 @@ const KEY_SQL: Record<CostDimension, string> = {
 	model: "COALESCE(s.provider, '?') || '/' || COALESCE(s.model, '?')",
 	tier: "COALESCE(s.tier, 'unknown')",
 	day: "substr(s.started_at, 1, 10)",
-	run: "r.root_run_id",
+	run: "COALESCE('optim:' || r.optim_run_id, r.root_run_id)",
 	skill: "COALESCE(r.skill, '(none)')",
 };
 
@@ -61,7 +61,7 @@ export function costReport(db: Db, options: CostReportOptions): CostReport {
 	}
 	const sql = `SELECT ${KEY_SQL[by]} AS key, SUM(s.cost_usd) AS cost, COUNT(*) AS calls, SUM(s.cost_unknown) AS unknown
 		FROM spans s JOIN runs r ON r.id = s.run_id
-		WHERE s.kind IN ('llm_call', 'compaction', 'judge_call', 'self_check', 'learn_call', 'embedding_call') AND s.started_at >= ?
+		WHERE s.kind IN ('llm_call', 'compaction', 'judge_call', 'self_check', 'learn_call', 'embedding_call', 'gepa_call') AND s.started_at >= ?
 		GROUP BY key ORDER BY cost DESC, key`;
 	const rows = db
 		.prepare(sql)

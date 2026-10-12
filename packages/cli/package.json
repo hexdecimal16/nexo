@@ -8,6 +8,7 @@
   "dependencies": {
     "@earendil-works/pi-ai": "1.1.0",
     "@nexo/core": "0.1.0",
+    "@nexo/optimize": "0.1.0",
     "@nexo/router": "0.1.0",
     "@nexo/skills": "0.1.0",
     "@nexo/store": "0.1.0",

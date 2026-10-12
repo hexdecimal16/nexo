@@ -1,7 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { DEFAULT_ROUTER_POLICY, parseRouterPolicy, type RouterPolicy } from "@nexo/router";
 import { DEFAULT_JUDGE_RUBRIC, type ModelRef, modelKeyOf, sameFamilyPairs } from "@nexo/scorers";
-import { type ArtifactRow, type Db, ensureManualArtifact, ensureSeedArtifact } from "@nexo/store";
+import { type ArtifactRow, type Db, ensureManualArtifact, ensureSeedArtifact, resolveSourcedArtifact } from "@nexo/store";
 import { NexoError, type Redactor } from "@nexo/telemetry";
 import type { NexoConfig } from "../config/schema.ts";
 
@@ -52,11 +52,14 @@ export function loadRouterPolicy(db: Db, config: NexoConfig, nowIso: string, red
 	return { policy: parseRouterPolicy(artifact.content, `router_policy v${artifact.version}`), artifact };
 }
 
-/** The generic judge rubric and its artifact version; `artifact:judge_rubric` seeds DEFAULT_JUDGE_RUBRIC. */
+/**
+ * The generic judge rubric and its artifact version; `artifact:judge_rubric` seeds DEFAULT_JUDGE_RUBRIC. A `file:`
+ * rubric is a sourced artifact: a promoted version stays in use until the file changes.
+ */
 export function loadJudgeRubric(db: Db, config: NexoConfig, nowIso: string, redact: Redactor): { rubric: string; artifact: ArtifactRow } {
 	const source = config.scoring.rubric;
 	const artifact = source.startsWith("file:")
-		? ensureManualArtifact(db, "judge_rubric", DEFAULT_ARTIFACT_NAME, redact(readSource(source.slice("file:".length), "scoring.rubric")), nowIso)
+		? resolveSourcedArtifact(db, "judge_rubric", DEFAULT_ARTIFACT_NAME, redact(readSource(source.slice("file:".length), "scoring.rubric")), nowIso)
 		: ensureSeedArtifact(db, "judge_rubric", DEFAULT_ARTIFACT_NAME, `${DEFAULT_JUDGE_RUBRIC}\n`, nowIso);
 	if (!artifact.content.trim()) {
 		throw new NexoError({ code: "CONFIG_INVALID", message: "The judge rubric is empty", hint: "Write grading criteria into the rubric file", context: { source } });
