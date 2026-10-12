@@ -37,6 +37,7 @@ import {
 	type RunModelInfo,
 	type RunResult,
 } from "../engine/run.ts";
+import type { RunMemoryContext } from "../learn/context.ts";
 import { LearnWorker } from "../learn/worker.ts";
 import {
 	activeMessageLines,
@@ -152,6 +153,11 @@ export class Session {
 	private onEvent: ((event: EngineEvent) => void) | undefined;
 	/** Runs this process's learn jobs in the background after each turn and verdict (spec §8.1). */
 	private learner: LearnWorker;
+	/**
+	 * The memories retrieved at this process's first turn, injected unchanged into every later turn (also after /clear
+	 * and compaction), so the system prompt and its prompt cache stay the same (spec §8.3).
+	 */
+	private memoryContext: RunMemoryContext | null = null;
 
 	/** Use `createSession` or `resumeSession`. Saves the state and takes ownership of `lock`. */
 	constructor(init: typeof INIT, deps: SessionDeps, dir: SessionDir, state: SessionJson, lines: TranscriptLine[], lock: SessionLock) {
@@ -281,6 +287,13 @@ export class Session {
 				},
 				budget: new RunBudget(Math.min(config.budgets.perRunUsd, remaining)),
 				signal: options.signal,
+				...(this.memoryContext
+					? { memoryContext: this.memoryContext }
+					: {
+							onMemoryContext: (context: RunMemoryContext) => {
+								this.memoryContext = context;
+							},
+						}),
 			});
 			if (result.trajectoryId !== null) this.recordTurn(turnIndex, instruction, sent, result);
 			this.learner.kick();

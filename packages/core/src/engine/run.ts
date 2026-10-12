@@ -255,6 +255,13 @@ export interface ExecuteInput {
 	budget: RunBudget;
 	parent?: ParentLink;
 	signal?: AbortSignal;
+	/**
+	 * Memories retrieved by an earlier run (a session's first turn). The run injects them as they are: it does no
+	 * retrieval, charges no query embedding and leaves `last_used_at` alone, so the system prompt stays the same.
+	 */
+	memoryContext?: RunMemoryContext;
+	/** Called with what retrieval at run start chose (not called when `memoryContext` was given). */
+	onMemoryContext?: (context: RunMemoryContext) => void;
 }
 
 /** Context handed to extra tool factories (the spawn tool) for the run being built. */
@@ -724,7 +731,13 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				costUnknown ||= unknown;
 			},
 		};
-		if (!input.signal?.aborted) memoryContext = await retrieveRunMemories(memoryDeps, request.instruction, ["user", "global", ...(skill ? [`skill:${skill.name}`] : [])]);
+		if (input.memoryContext) {
+			// load_skill adds to `ids`, so the run works on its own copy.
+			memoryContext = { ...input.memoryContext, ids: new Set(input.memoryContext.ids) };
+		} else if (!input.signal?.aborted) {
+			memoryContext = await retrieveRunMemories(memoryDeps, request.instruction, ["user", "global", ...(skill ? [`skill:${skill.name}`] : [])]);
+			input.onMemoryContext?.({ ...memoryContext, ids: new Set(memoryContext.ids) });
+		}
 		// The run directory keeps the memories the run started with (spec §5.1 `context/`).
 		if (memoryContext.block) runDir.writeContext("memories.md", memoryContext.block);
 

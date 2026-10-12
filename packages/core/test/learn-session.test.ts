@@ -2,7 +2,8 @@ import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { listLearnJobs, listMemories } from "@nexo/store";
+import { getSystemMessageText, type FauxResponseFactory, fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { addMemory, listLearnJobs, listMemories, listSpans } from "@nexo/store";
 import { createSession } from "../src/index.ts";
 import { delta, lesson, makeEnv, reflection, script } from "./learn-helpers.ts";
 
@@ -45,6 +46,28 @@ describe("learning in a session", () => {
 		await session.learnIdle();
 		expect(listMemories(env.deps.db)).toEqual([]);
 		expect(listLearnJobs(env.deps.db)).toEqual([]);
+		session.close();
+	});
+	it("retrieves memories once, at the session's first turn, and reuses the same block for later turns", async () => {
+		const env = makeEnv({ config: { learning: { enabled: false } } });
+		const now = new Date().toISOString();
+		addMemory(env.deps.db, { scope: "user", type: "preference", content: "Use pnpm, never npm", importance: 0.9, source: "user" }, env.deps.redact, now);
+		const systems: string[] = [];
+		const factory: FauxResponseFactory = async (context) => {
+			systems.push(context.messages.flatMap((m) => (m.role === "system" ? [getSystemMessageText(m)] : [])).join("\n"));
+			return fauxAssistantMessage("ok");
+		};
+		env.faux.setResponses(Array.from({ length: 4 }, () => factory));
+		const session = createSession(env.deps, { cwd: cwd() });
+		const first = await session.turn("Install the pnpm dependencies");
+		addMemory(env.deps.db, { scope: "user", type: "fact", content: "The build uses pnpm workspaces", importance: 1, source: "user" }, env.deps.redact, now);
+		const second = await session.turn("Now explain the pnpm workspaces build");
+		const block = (text: string) => text.slice(text.indexOf("# Notes from memory"));
+		expect(systems).toHaveLength(2);
+		expect(block(systems[0] ?? "")).toContain("Use pnpm, never npm");
+		expect(block(systems[1] ?? "")).toBe(block(systems[0] ?? ""));
+		expect(listSpans(env.deps.db, first.trajectoryId as string).filter((sp) => sp.kind === "memory_read")).toHaveLength(1);
+		expect(listSpans(env.deps.db, second.trajectoryId as string).filter((sp) => sp.kind === "memory_read")).toEqual([]);
 		session.close();
 	});
 });
