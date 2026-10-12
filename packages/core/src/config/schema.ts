@@ -16,6 +16,16 @@ const ModelSpecSchema = Type.Object(
 	{ provider: Type.String({ minLength: 1 }), id: Type.String({ minLength: 1 }), effort: Type.Optional(EffortSchema) },
 	{ additionalProperties: false },
 );
+/** An OpenAI-compatible embeddings endpoint (`POST {baseUrl}/embeddings`); `baseUrl` defaults to OpenAI's for provider `openai`. */
+const EmbeddingModelSchema = Type.Object(
+	{
+		provider: Type.String({ minLength: 1 }),
+		id: Type.String({ minLength: 1 }),
+		baseUrl: Type.Optional(Type.String({ pattern: "^https?://[^\\s]+$" })),
+		dimensions: Type.Optional(Type.Integer({ minimum: 1, maximum: 8192 })),
+	},
+	{ additionalProperties: false },
+);
 const ModelRefSchema = Type.Object({ ref: Type.Union([Type.Literal("s1"), Type.Literal("s2")]) }, { additionalProperties: false });
 const PolicyActionSchema = Type.Union([Type.Literal("allow"), Type.Literal("ask"), Type.Literal("deny")]);
 const ToolRuleSchema = Type.Object(
@@ -36,7 +46,7 @@ export const ConfigSchema = Type.Object(
 				s2: ModelSpecSchema,
 				judge: Type.Optional(Type.Array(ModelSpecSchema)),
 				reflector: Type.Optional(Type.Union([ModelSpecSchema, ModelRefSchema])),
-				embedding: Type.Optional(ModelSpecSchema),
+				embedding: Type.Optional(EmbeddingModelSchema),
 			},
 			{ additionalProperties: false },
 		),
@@ -152,8 +162,29 @@ export const ConfigSchema = Type.Object(
 			),
 		),
 		redaction: Type.Object({ patterns: Type.Array(Type.String({ minLength: 1 })) }, { additionalProperties: false }),
-		memory: Type.Optional(LooseSection),
-		learning: Type.Optional(LooseSection),
+		memory: Type.Object(
+			{
+				enabled: Type.Boolean(),
+				maxTokens: Type.Integer({ minimum: 0 }),
+				weights: Type.Object(
+					{ relevance: Type.Number({ minimum: 0 }), importance: Type.Number({ minimum: 0 }), recency: Type.Number({ minimum: 0 }) },
+					{ additionalProperties: false },
+				),
+				tauDays: Type.Number({ exclusiveMinimum: 0 }),
+				topK: Type.Integer({ minimum: 1, maximum: 200 }),
+			},
+			{ additionalProperties: false },
+		),
+		learning: Type.Object(
+			{
+				enabled: Type.Boolean(),
+				maxPlaybookItems: Type.Integer({ minimum: 1, maximum: 500 }),
+				perJobUsd: Usd,
+				staleMinutes: Type.Integer({ minimum: 1 }),
+				drainAfterRunMs: Type.Integer({ minimum: 0 }),
+			},
+			{ additionalProperties: false },
+		),
 		optimize: Type.Optional(LooseSection),
 		telemetry: Type.Optional(LooseSection),
 		ui: Type.Optional(LooseSection),
@@ -202,4 +233,6 @@ export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 	mcp: { servers: {} },
 	pricingOverrides: {},
 	redaction: { patterns: [] },
+	memory: { enabled: true, maxTokens: 1500, weights: { relevance: 1, importance: 0.5, recency: 0.3 }, tauDays: 14, topK: 20 },
+	learning: { enabled: true, maxPlaybookItems: 50, perJobUsd: 0.05, staleMinutes: 10, drainAfterRunMs: 30_000 },
 };

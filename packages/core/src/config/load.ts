@@ -151,6 +151,31 @@ function assertJudgeConfigured(config: NexoConfig): void {
 	});
 }
 
+/**
+ * `models.embedding` sends the provider's API key to its `baseUrl`, so a project config (a cloned repo) may not set it;
+ * a provider other than `openai` needs an explicit `baseUrl`. Throws CONFIG_INVALID.
+ */
+function assertEmbeddingConfigured(config: NexoConfig, projectLayer: unknown, overrides: unknown, homeFile: string): void {
+	const setsEmbedding = (layer: unknown) => isPlainObject(layer) && isPlainObject(layer.models) && "embedding" in layer.models;
+	if (setsEmbedding(projectLayer) && !setsEmbedding(overrides)) {
+		throw new NexoError({
+			code: "CONFIG_INVALID",
+			message: "Invalid configuration:\n  /models/embedding must not be set in ./.nexo/config.json",
+			hint: `The embedding endpoint receives your API key; set models.embedding in ${homeFile}`,
+			context: { path: "/models/embedding" },
+		});
+	}
+	const embedding = config.models.embedding;
+	if (embedding && !embedding.baseUrl && embedding.provider !== "openai") {
+		throw new NexoError({
+			code: "CONFIG_INVALID",
+			message: `Invalid configuration:\n  /models/embedding/baseUrl is required for provider "${embedding.provider}"`,
+			hint: 'Set models.embedding.baseUrl to the provider\'s OpenAI-compatible API root, for example "https://api.example.com/v1"',
+			context: { path: "/models/embedding/baseUrl" },
+		});
+	}
+}
+
 const MCP_SERVER_NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
 /** The mcp section of the user-level layers only: defaults, `~/.nexo/config.json` and CLI overrides. */
@@ -227,6 +252,7 @@ export function loadConfig(options: LoadConfigOptions): LoadedConfig {
 	assertJudgeConfigured(config);
 	// Values from ./.nexo/config.json come from a file in the working directory (a cloned repo), so they are marked or confined.
 	const projectLayer = sources.includes(projectFile) ? layers[sources.indexOf(projectFile)] : undefined;
+	assertEmbeddingConfigured(config, projectLayer, options.overrides, options.paths.config);
 	config.scoring.scorersOrigin = fromProject(projectLayer, options.overrides, "scoring", "scorers") ? "project" : "user";
 	config.scoring.scorerTools = userToolPolicy(sources.includes(options.paths.config) ? layers[sources.indexOf(options.paths.config)] : undefined, options.overrides, options.paths.config);
 	// MCP servers are user-level only: a server runs a command, so a cloned repo must not add one.
