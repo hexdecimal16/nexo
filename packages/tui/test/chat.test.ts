@@ -59,7 +59,7 @@ describe("chat screen", () => {
 	});
 
 	it("shows a tool line running, then ✓ with a preview, and ✗ for a failed tool", async () => {
-		const h = await startHarness();
+		const h = await startHarness({ workspace: "." });
 		const { writeFileSync } = await import("node:fs");
 		writeFileSync(`${h.cwd}/notes.txt`, "line one\nline two\n");
 		let release: () => void = () => {};
@@ -359,7 +359,7 @@ describe("stored keys on screen", () => {
 
 describe("hostile text", () => {
 	it("escapes control characters in assistant text, result previews and error messages", async () => {
-		const h = await startHarness();
+		const h = await startHarness({ workspace: "." });
 		const { writeFileSync } = await import("node:fs");
 		writeFileSync(`${h.cwd}/ansi.txt`, "before\x1b]0;pwned\x07after\n");
 		h.faux.setResponses([
@@ -520,5 +520,48 @@ describe("! shell commands", () => {
 		expect(h.terminal.output()).toContain("500");
 		h.terminal.send(KEY.ctrlD);
 		expect(await h.done).toBe(0);
+	});
+});
+
+describe("where files go", () => {
+	it("names each turn's run folder as where files go, on start and in /help", async () => {
+		const h = await startHarness({ columns: 300 });
+		const line = `files: ${h.paths.runs}/<turn id>/workspace (carried over each turn)`;
+		await until(() => expect(h.terminal.output()).toContain(line));
+		submit(h.terminal, "/help");
+		await until(() => expect(h.terminal.output().split(line)).toHaveLength(3));
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
+	it("names the --workspace folder as where files go, escaping control characters", async () => {
+		const { mkdirSync, realpathSync } = await import("node:fs");
+		const cwdHarness = makeHarness({ columns: 300 });
+		mkdirSync(`${cwdHarness.cwd}/dir\x1b[31mred`);
+		const e = makeHarness({ reuse: { paths: cwdHarness.paths, cwd: cwdHarness.cwd }, workspace: "dir\x1b[31mred", columns: 300 });
+		const done = e.start();
+		const dir = realpathSync(`${cwdHarness.cwd}/dir\x1b[31mred`);
+		await until(() => expect(e.terminal.output()).toContain(`files: ${dir.replace("\x1b", "\\x1b")}`));
+		expect(e.terminal.output()).not.toContain("carried over");
+		expect(e.terminal.raw()).not.toContain("dir\x1b[31mred");
+		submit(e.terminal, "/help");
+		await until(() => expect(e.terminal.output().split(`files: ${dir.replace("\x1b", "\\x1b")}`)).toHaveLength(3));
+		e.terminal.send(KEY.ctrlD);
+		await done;
+	});
+
+	it("names the resumed session's folder: a run-folder session keeps carrying files over", async () => {
+		const first = await startHarness({ columns: 300 });
+		first.faux.setResponses([fauxAssistantMessage("one")]);
+		submit(first.terminal, "hello");
+		await until(() => !first.session().running && first.session().turns === 1);
+		const id = first.session().id;
+		first.terminal.send(KEY.ctrlD);
+		await first.done;
+		const again = makeHarness({ reuse: { paths: first.paths, cwd: first.cwd }, resume: id, columns: 300 });
+		const done = again.start();
+		await until(() => expect(again.terminal.output()).toContain(`files: ${first.paths.runs}/<turn id>/workspace (carried over each turn)`));
+		again.terminal.send(KEY.ctrlD);
+		await done;
 	});
 });

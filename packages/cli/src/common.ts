@@ -43,6 +43,8 @@ export const USAGE = `Usage:
   nexo                                     start an interactive session (needs a terminal)
   nexo --resume [id]                       resume a session (a picker when no id is given)
   nexo [--workspace <dir>] [--model <s1|s2|provider/id>] [--effort <level>]   options for a new session
+                                           without --workspace each turn works in its own run folder (files carried over
+                                           from the previous turn); --workspace . works in the current folder
   nexo sessions [--limit <n>]
   nexo settings                            open the settings screen (needs a terminal)
   nexo settings get <key>

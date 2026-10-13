@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, constants, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { type ErrorPayload, NexoError, type Redactor } from "@nexo/telemetry";
 import type { HumanVerdict } from "./feedback.ts";
@@ -51,6 +51,22 @@ export interface RunJson {
 	escalations?: number;
 	/** The optimization this run is a rollout of (or the optimizer's own run); absent or null otherwise. */
 	optimRunId?: string | null;
+	/**
+	 * The session turn whose workspace this run's `workspace/` started as a copy of, and the bytes of regular files
+	 * copied; absent when the run started with an empty or a shared workspace.
+	 */
+	workspaceFrom?: { runId: string; bytes: number };
+}
+
+/** Total size of the regular files under `dir`, not following symlinks. */
+function regularFileBytes(dir: string): number {
+	let total = 0;
+	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		const path = join(dir, entry.name);
+		if (entry.isDirectory()) total += regularFileBytes(path);
+		else if (entry.isFile()) total += lstatSync(path).size;
+	}
+	return total;
 }
 
 const SUBDIRS = ["artifacts", "context", "workspace", "tool_outputs", "scores", "subagents"] as const;
@@ -100,6 +116,32 @@ export class RunDir {
 			for (const sub of SUBDIRS) mkdirSync(join(this.root, sub), { recursive: true });
 		} catch (cause) {
 			throw new NexoError({ code: "STORE_IO", message: `Cannot create run directory ${this.root}`, cause });
+		}
+	}
+
+	/**
+	 * Copies `source` into the empty `workspace/` folder and returns the bytes of regular files copied. Files are cloned
+	 * copy-on-write where the file system supports it, else copied; symlinks are copied as links, their targets unchanged.
+	 * Throws STORE_IO when the copy fails.
+	 */
+	copyIntoWorkspace(source: string): number {
+		try {
+			cpSync(source, this.workspaceDir, {
+				recursive: true,
+				mode: constants.COPYFILE_FICLONE,
+				dereference: false,
+				verbatimSymlinks: true,
+				preserveTimestamps: true,
+			});
+			return regularFileBytes(this.workspaceDir);
+		} catch (cause) {
+			throw new NexoError({
+				code: "STORE_IO",
+				message: `Cannot copy the workspace ${source} into ${this.workspaceDir}`,
+				hint: "Check that the previous turn's workspace is readable and the disk has space",
+				context: { source, workspace: this.workspaceDir },
+				cause,
+			});
 		}
 	}
 

@@ -14,8 +14,11 @@ export interface SessionJson {
 	title: string;
 	/** Directory `nexo` was started in. */
 	cwd: string;
-	/** Directory every turn works in (the cwd unless `--workspace` overrides it). */
-	workspace: string;
+	/**
+	 * The `--workspace` directory every turn shares, or null when each turn works in its own run folder's `workspace/`,
+	 * which starts as a copy of the previous turn's. Files written before run-folder sessions always hold a directory.
+	 */
+	workspace: string | null;
 	/** Session-level user overrides (`/model`, `/effort`); null means no override. */
 	model: string | null;
 	effort: string | null;
@@ -142,6 +145,19 @@ export function maxSessionTurn(db: Db, sessionId: string): number {
 export function latestSessionRunId(db: Db, sessionId: string): string | undefined {
 	const row = db.prepare("SELECT id FROM runs WHERE session_id = ? ORDER BY turn_index DESC, id DESC LIMIT 1").get(sessionId);
 	return row ? String(row.id) : undefined;
+}
+
+/**
+ * The newest indexed turn run of the session whose run folder still has its `workspace/` folder (the files a run-folder
+ * session carries into its next turn), or undefined.
+ */
+export function latestSessionRunWorkspace(db: Db, sessionId: string): { runId: string; dir: string } | undefined {
+	const rows = db.prepare("SELECT id, dir_path FROM runs WHERE session_id = ? ORDER BY turn_index DESC, id DESC").all(sessionId);
+	for (const row of rows) {
+		const dir = join(String(row.dir_path), "workspace");
+		if (existsSync(dir)) return { runId: String(row.id), dir };
+	}
+	return undefined;
 }
 
 /** Directories of the session's indexed turn runs, newest turn first. */

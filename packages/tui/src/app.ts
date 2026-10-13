@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { sep } from "node:path";
 import {
 	CombinedAutocompleteProvider,
 	type Component,
@@ -21,6 +23,18 @@ import { Block, DynamicLine, SafeContainer, SafeMarkdown, SubagentLine, Ticker, 
 import { SettingsScreen, type SettingsScreenMode } from "./settings-screen.ts";
 import { escapeControl, escapeControlKeepLines, formatError, oneLine, toolSummary, usd } from "./text.ts";
 import { editorTheme, markdownTheme, shellBorder, style } from "./theme.ts";
+
+/** Shortens a path under the user's home directory to `~/…`. */
+function tildePath(path: string): string {
+	const home = homedir();
+	return home && (path === home || path.startsWith(home + sep)) ? `~${path.slice(home.length)}` : path;
+}
+
+/** Where the session's files go: the `--workspace` folder, else each turn's run folder. Control-escaped. */
+function filesLine(session: Pick<Session, "workspace" | "runsDir">): string {
+	if (session.workspace !== null) return `files: ${escapeControl(tildePath(session.workspace))}`;
+	return `files: ${escapeControl(tildePath(session.runsDir))}/<turn id>/workspace (carried over each turn)`;
+}
 
 export interface InteractiveOptions {
 	/**
@@ -287,9 +301,10 @@ class InteractiveApp {
 		const resumed = session.turns > 0;
 		this.add(
 			new Block(
-				`${style.bold("nexo")} ${style.gray(`session ${session.id}${session.title ? ` · ${escapeControl(oneLine(session.title, 60))}` : ""} · ${escapeControl(session.workspace)}`)}`,
+				`${style.bold("nexo")} ${style.gray(`session ${session.id}${session.title ? ` · ${escapeControl(oneLine(session.title, 60))}` : ""}`)}`,
 			),
 		);
+		this.say(filesLine(session));
 		if (resumed) this.renderTranscript(session.transcript());
 		this.say(`${resumed ? `resumed after ${session.turns} turn${session.turns === 1 ? "" : "s"} · ` : ""}/help for commands · esc or ctrl-c stops a turn · ctrl-d quits`);
 	}
@@ -332,7 +347,7 @@ class InteractiveApp {
 	private footerText(): string {
 		const session = this.session;
 		if (!session) return style.gray(this.screen === "settings" ? "nexo · setup" : "nexo · opening…");
-		if (this.shellMode()) return shellBorder(`! shell mode · output goes to the model with your next message · ${escapeControl(session.workspace)}`);
+		if (this.shellMode()) return shellBorder(`! shell mode · output goes to the model with your next message · ${escapeControl(session.shellDir)}`);
 		const last = session.lastModel;
 		const model = session.model ?? (last ? `${last.provider}/${last.id}` : this.defaultModel || "model ?");
 		const effort = session.effort ?? last?.effort ?? (this.defaultEffort || "default effort");
@@ -588,7 +603,7 @@ class InteractiveApp {
 		try {
 			switch (name) {
 				case "help":
-					this.say(helpText());
+					this.say(`${helpText()}\n\n${filesLine(session)}`);
 					break;
 				case "done":
 					session.review("done");

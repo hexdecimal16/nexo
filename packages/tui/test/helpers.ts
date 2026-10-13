@@ -44,6 +44,8 @@ export interface HarnessOptions {
 	resume?: string;
 	/** Terminal width (default 100). */
 	columns?: number;
+	/** `--workspace` for a new session (resolved against the cwd); without it each turn works in its run folder. */
+	workspace?: string;
 	/** Reuse the home, cwd and db of an earlier harness. */
 	reuse?: Pick<Harness, "paths" | "cwd">;
 }
@@ -83,7 +85,7 @@ export function makeHarness(options: HarnessOptions = {}): Omit<Harness, "done">
 			resolveApiKey: settings.resolveApiKey,
 			reloadConfig: () => settings.reloadConfig(),
 		};
-		opened = options.resume ? resumeSession(deps, options.resume) : createSession(deps, { cwd });
+		opened = options.resume ? resumeSession(deps, options.resume) : createSession(deps, { cwd, ...(options.workspace !== undefined ? { workspace: options.workspace } : {}) });
 		return opened;
 	};
 

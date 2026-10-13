@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
@@ -141,6 +141,36 @@ describe("routing", () => {
 		expect(terminal.stopped).toBe(true);
 		expect(proc.listenerCount("uncaughtException")).toBe(0);
 		expect(proc.listenerCount("exit")).toBe(0);
+	});
+
+	it("says in the usage where a session's files go", async () => {
+		const t = io();
+		expect(await runCli(["--help"], t, { ...home(roles), models: fauxModels() })).toBe(0);
+		expect(t.out()).toContain("without --workspace each turn works in its own run folder");
+		expect(t.out()).toContain("--workspace . works in the current folder");
+	});
+
+	it("starts a session in each turn's run folder, or in the current folder with --workspace .", async () => {
+		for (const [args, expected] of [
+			[[], "runs"],
+			[["--workspace", "."], "cwd"],
+		] as const) {
+			const h = home(roles);
+			const terminal = new FakeTerminal(300);
+			const done = runCli([...args], io(), { ...h, models: fauxModels([fauxAssistantMessage("hi")]), stdio: ttyStdio(), terminal, exit: vi.fn(), proc: new EventEmitter() as never });
+			await until(() => terminal.started && terminal.output().includes("nexo session"));
+			const files = expected === "runs" ? `files: ${join(h.home, "runs")}/<turn id>/workspace (carried over each turn)` : `files: ${realpathSync(h.cwd)}`;
+			await until(() => expect(terminal.output()).toContain(files));
+			terminal.type("hello");
+			terminal.send(KEY.enter);
+			await until(() => expect(terminal.output()).toContain("hi"));
+			terminal.type("/exit");
+			terminal.send(KEY.enter);
+			expect(await done).toBe(0);
+			const [id] = readdirSync(join(h.home, "sessions"));
+			const json = JSON.parse(readFileSync(join(h.home, "sessions", id as string, "session.json"), "utf8"));
+			expect(json.workspace).toBe(expected === "runs" ? null : realpathSync(h.cwd));
+		}
 	});
 
 	it("aborts through the signal and returns the SIGINT exit code", async () => {
