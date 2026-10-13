@@ -66,21 +66,27 @@ function isWithin(path: string, dir: string): boolean {
 }
 
 /**
- * Guards the nexo home (config, credentials, skills, runs) against the agent's file tools, whatever the workspace.
- * Paths are compared through the native realpath, which also settles letter case on case-insensitive file systems.
- * A workspace that lies inside the nexo home (a run's own workspace) stays writable.
+ * Guards the nexo home (config, credentials, skills, runs, sessions, the database) against the agent's file tools,
+ * whatever the workspace. Paths are compared through the native realpath, which also settles letter case on
+ * case-insensitive file systems. Only `runWorkspace`, the run's own `workspace/` folder, stays writable inside it;
+ * other runs' folders and everything else under the nexo home are refused.
  */
-export function nexoHomeGuard(nexoHome: string, workspaceRoot: string): { checkWrite(path: string): void; checkRead(path: string): void } {
+export function nexoHomeGuard(
+	nexoHome: string,
+	workspaceRoot: string,
+	runWorkspace?: string,
+): { checkWrite(path: string): void; checkRead(path: string): void } {
 	const native = realpathSync.native;
 	const home = canonicalPath(nexoHome, process.cwd(), native);
 	const workspace = canonicalPath(workspaceRoot, process.cwd(), native);
 	const credentials = join(home, "credentials.json");
-	const exempt = isWithin(workspace, home) && workspace !== home ? workspace : null;
+	const own = runWorkspace === undefined ? null : canonicalPath(runWorkspace, process.cwd(), native);
+	const exempt = own !== null && isWithin(own, home) && own !== home ? own : null;
 	const deny = (target: string, message: string) =>
 		new NexoError({
 			code: "TOOL_DENIED",
 			message,
-			hint: "nexo's own files (config, credentials, skills, runs) are not changed by the agent; edit them yourself outside the run",
+			hint: "nexo's own files (config, credentials, skills, runs, sessions) are not changed by the agent; edit them yourself outside the run",
 			context: { target, nexoHome: home },
 		});
 	return {

@@ -193,6 +193,11 @@ export interface RunRequest {
 	/** Session link, recorded on the run and in its run.json; spend is also charged to the `session:<id>` ledger scope. */
 	sessionId?: string;
 	turnIndex?: number;
+	/**
+	 * A previous turn's workspace: a root run without `workspace` starts with a copy of `dir` in its own `workspace/`,
+	 * recorded as run.json `workspaceFrom`. Ignored with `workspace`, for subagents and for rollouts.
+	 */
+	workspaceFrom?: { runId: string; dir: string };
 }
 
 export interface RunModelInfo {
@@ -457,6 +462,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	const workspace = sharedWorkspace ?? runDir.workspaceDir;
 	let changeTracker: ChangeTracker | null = parent?.changeTracker ?? null;
 	let artifactSetId: string | null = null;
+	let workspaceFrom: { runId: string; bytes: number } | null = null;
 	/** The model requests go to; replaced by S2 when an escalation takes effect. */
 	let active = { model, resolved };
 	let escalations = 0;
@@ -526,11 +532,15 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		...(scoreRows.length > 0 ? { scores: scoreRows } : {}),
 		escalations,
 		...(optimRunId ? { optimRunId } : {}),
+		...(workspaceFrom ? { workspaceFrom } : {}),
 	});
 
 	// Setup up to and including the DB row. A failure here leaves no row, only a failed run.json.
 	try {
 		if (!parent && sharedWorkspace) changeTracker = createChangeTracker(sharedWorkspace, runDir.changesDir, (s) => deps.redact(s));
+		// A session turn continues from the previous turn's files.
+		const from = request.workspaceFrom;
+		if (from && !parent && !sharedWorkspace && !rollout) workspaceFrom = { runId: from.runId, bytes: runDir.copyIntoWorkspace(from.dir) };
 
 		// Snapshot the exact artifacts this run uses.
 		const nowIso = now().toISOString();
@@ -725,6 +735,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				changeTracker: changeTracker ?? undefined,
 				bashTimeoutMs: config.tools.bashTimeoutMs,
 				nexoHome: deps.paths.home,
+				...(sharedWorkspace ? {} : { runWorkspace: runDir.workspaceDir }),
 				toolOutputsDir: runDir.toolOutputsDir,
 				// Large-output pointers in a session's history name files saved by earlier turns' runs.
 				earlierToolOutputsDirs: sessionId

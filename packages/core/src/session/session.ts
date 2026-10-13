@@ -7,6 +7,7 @@ import {
 	type FeedbackRow,
 	getSpent,
 	latestSessionRunId,
+	latestSessionRunWorkspace,
 	deleteSessionRow,
 	listSessionRows,
 	maxSessionTurn,
@@ -71,7 +72,10 @@ export interface SessionDeps extends Omit<EngineDeps, "onEvent"> {
 export interface CreateSessionOptions {
 	/** Directory nexo was started in. */
 	cwd: string;
-	/** Directory the turns work in, resolved against `cwd`; defaults to `cwd`. */
+	/**
+	 * Directory every turn works in, resolved against `cwd` (`"."` is `cwd` itself). Without it each turn works in its
+	 * own run folder's `workspace/`, which starts as a copy of the previous turn's.
+	 */
 	workspace?: string;
 	/** Initial session-level overrides, as `/model` and `/effort` set them. */
 	model?: string;
@@ -99,8 +103,8 @@ function invalid(message: string, hint?: string): NexoError {
 	return new NexoError({ code: "INVALID_REQUEST", message, ...(hint ? { hint } : {}) });
 }
 
-function resolveWorkspace(cwd: string, workspace: string | undefined): string {
-	const dir = resolve(cwd, workspace ?? ".");
+function resolveWorkspace(cwd: string, workspace: string): string {
+	const dir = resolve(cwd, workspace);
 	let isDir = false;
 	try {
 		isDir = statSync(dir).isDirectory();
@@ -183,8 +187,21 @@ export class Session {
 	get cwd(): string {
 		return this.state.cwd;
 	}
-	get workspace(): string {
+	/** The `--workspace` directory every turn shares; null when each turn works in its own run folder's `workspace/`. */
+	get workspace(): string | null {
 		return this.state.workspace;
+	}
+	/** Where run folders are created; a run-folder session's turn files are in `<runsDir>/<run id>/workspace`. */
+	get runsDir(): string {
+		return this.deps.paths.runs;
+	}
+	/**
+	 * Where `!` commands run: the `--workspace` directory, else the latest turn's workspace (whose files the next turn
+	 * starts from), else the directory nexo was started in.
+	 */
+	get shellDir(): string {
+		if (this.state.workspace !== null) return this.state.workspace;
+		return latestSessionRunWorkspace(this.deps.db, this.id)?.dir ?? this.state.cwd;
 	}
 	get status(): SessionStatus {
 		return this.state.status;
@@ -274,6 +291,8 @@ export class Session {
 			const turnIndex = this.state.turns + 1;
 			this.onEvent = options.onEvent;
 			const sent = withShellNotes(this.state.pendingShell ?? [], instruction);
+			const workspace = this.state.workspace;
+			const previous = workspace === null ? latestSessionRunWorkspace(this.deps.db, this.id) : undefined;
 			const result = await executeRun(this.env, {
 				request: {
 					instruction: sent,
@@ -281,7 +300,8 @@ export class Session {
 					prepareHistory: this.compactionHook(turnIndex),
 					sessionId: this.id,
 					turnIndex,
-					workspace: this.state.workspace,
+					...(workspace !== null ? { workspace } : {}),
+					...(previous ? { workspaceFrom: previous } : {}),
 					...(this.state.model ? { model: this.state.model } : {}),
 					...(this.effort ? { effort: this.effort } : {}),
 				},
@@ -318,7 +338,7 @@ export class Session {
 		try {
 			this.reloadConfig();
 			const { config, redact } = this.env.deps;
-			const outcome = await runBash({ command: trimmed, cwd: this.state.workspace, timeoutMs: config.tools.bashTimeoutMs, signal: options.signal });
+			const outcome = await runBash({ command: trimmed, cwd: this.shellDir, timeoutMs: config.tools.bashTimeoutMs, signal: options.signal });
 			const result = { ...outcome, output: redact(outcome.output) };
 			const note: ShellNote = { command: redact(trimmed), ended: result.ended, exitCode: result.exitCode, output: capShellOutput(result.output, result.truncated) };
 			this.state.pendingShell = [...(this.state.pendingShell ?? []), note];
@@ -536,9 +556,12 @@ function openSession(deps: SessionDeps, dir: SessionDir, state: SessionJson, lin
 	}
 }
 
-/** Starts a new session in `options.cwd` (or `options.workspace`), with the cap from `budgets.perSessionUsd`. */
+/**
+ * Starts a new session with the cap from `budgets.perSessionUsd`. Its turns work in `options.workspace` when given, else
+ * each in its own run folder.
+ */
 export function createSession(deps: SessionDeps, options: CreateSessionOptions): Session {
-	const workspace = resolveWorkspace(options.cwd, options.workspace);
+	const workspace = options.workspace === undefined ? null : resolveWorkspace(options.cwd, options.workspace);
 	const id = newId();
 	const nowIso = (deps.now ?? (() => new Date()))().toISOString();
 	const state: SessionJson = {

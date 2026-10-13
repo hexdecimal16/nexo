@@ -126,8 +126,10 @@ export interface ToolContext {
 	/** Further `tool_outputs/` directories searched, in order, for a TOOL_OUTPUT_PREFIX path not in `toolOutputsDir` (earlier turns of a session). */
 	earlierToolOutputsDirs?: () => readonly string[];
 	fetch?: typeof fetch;
-	/** The nexo home: write and edit are denied inside it (except in a workspace that lies within it), read of its credentials file too. */
+	/** The nexo home: write and edit are denied inside it (except in `runWorkspace`), read of its credentials file too. */
 	nexoHome?: string;
+	/** The run's own `workspace/` folder, the one place inside the nexo home that write and edit may change. */
+	runWorkspace?: string;
 }
 
 function textResult(text: string, isError = false): AgentToolResult<undefined> {
@@ -153,7 +155,7 @@ const FetchParams = Type.Object({ url: Type.String({ description: "http(s) URL" 
 
 export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 	const root = realpathSync(ctx.workspaceRoot);
-	const guard = ctx.nexoHome === undefined ? null : nexoHomeGuard(ctx.nexoHome, root);
+	const guard = ctx.nexoHome === undefined ? null : nexoHomeGuard(ctx.nexoHome, root, ctx.runWorkspace);
 	const writeFile = (abs: string, content: string): void => {
 		ctx.leases.acquire(abs, ctx.holder);
 		ctx.changeTracker?.beforeWrite(abs);

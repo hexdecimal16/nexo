@@ -104,13 +104,37 @@ describe("the nexo home", () => {
 		expect(text(await tool("read").execute("4", { path: ".nexo-other/x.txt" }))).toBe("c");
 	});
 
-	it("allows writes in a run workspace that lies inside the nexo home", async () => {
+	it("allows writes in the run's own workspace inside the nexo home", async () => {
 		const nexoHome = mkdtempSync(join(tmpdir(), "nexo-home-"));
 		const ws = join(nexoHome, "runs", "r1", "workspace");
 		mkdirSync(ws, { recursive: true });
-		const { tool } = setup({ workspaceRoot: ws, nexoHome });
+		const { tool } = setup({ workspaceRoot: ws, nexoHome, runWorkspace: ws });
 		await tool("write").execute("1", { path: "a.txt", content: "a" });
-		expect(readFileSync(join(ws, "a.txt"), "utf8")).toBe("a");
+		await tool("edit").execute("2", { path: "a.txt", oldText: "a", newText: "b" });
+		expect(readFileSync(join(ws, "a.txt"), "utf8")).toBe("b");
+	});
+
+	it("denies a workspace inside the nexo home that is not the run's own workspace", async () => {
+		const nexoHome = mkdtempSync(join(tmpdir(), "nexo-home-"));
+		const own = join(nexoHome, "runs", "r1", "workspace");
+		mkdirSync(own, { recursive: true });
+		mkdirSync(join(nexoHome, "runs", "r2", "workspace"), { recursive: true });
+		mkdirSync(join(nexoHome, "sessions", "s1"), { recursive: true });
+		// A run workspace given without saying it is the run's own is not exempt.
+		const unnamed = setup({ workspaceRoot: own, nexoHome });
+		await expect(unnamed.tool("write").execute("1", { path: "a.txt", content: "a" })).rejects.toMatchObject({ code: "TOOL_DENIED" });
+		// A workspace that holds other runs' folders: the own workspace stays writable, the rest is refused.
+		const runs = setup({ workspaceRoot: join(nexoHome, "runs"), nexoHome, runWorkspace: own });
+		await expect(runs.tool("write").execute("2", { path: "r2/workspace/x.txt", content: "x" })).rejects.toMatchObject({ code: "TOOL_DENIED" });
+		await expect(runs.tool("write").execute("3", { path: "r2/run.json", content: "{}" })).rejects.toMatchObject({ code: "TOOL_DENIED" });
+		await expect(runs.tool("write").execute("4", { path: "r1/run.json", content: "{}" })).rejects.toMatchObject({ code: "TOOL_DENIED" });
+		await runs.tool("write").execute("5", { path: "r1/workspace/ok.txt", content: "ok" });
+		expect(readFileSync(join(own, "ok.txt"), "utf8")).toBe("ok");
+		expect(existsSync(join(nexoHome, "runs", "r2", "workspace", "x.txt"))).toBe(false);
+		// The sessions folder.
+		const sessions = setup({ workspaceRoot: join(nexoHome, "sessions"), nexoHome, runWorkspace: own });
+		await expect(sessions.tool("write").execute("6", { path: "s1/session.json", content: "{}" })).rejects.toMatchObject({ code: "TOOL_DENIED" });
+		expect(existsSync(join(nexoHome, "sessions", "s1", "session.json"))).toBe(false);
 	});
 });
 

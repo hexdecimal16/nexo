@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall, type TranscriptContext } from "@earendil-works/pi-ai";
@@ -49,7 +49,7 @@ describe("session turns", () => {
 			},
 		]);
 		const session = createSession(deps, { cwd });
-		expect(session.workspace).toBe(cwd);
+		expect(session.workspace).toBeNull();
 		const r1 = await session.turn("Hello there\nsecond line");
 		const r2 = await session.turn("What did I say?");
 		expect([r1.status, r2.status]).toEqual(["succeeded", "succeeded"]);
@@ -64,7 +64,7 @@ describe("session turns", () => {
 		expect(session.contextFraction).toBeGreaterThan(0);
 		expect(session.contextFraction).toBeLessThan(1);
 		expect(getRun(deps.db, r1.trajectoryId as string)).toMatchObject({ sessionId: session.id, turnIndex: 1 });
-		expect(readRunJson(r2.runDir as string)).toMatchObject({ sessionId: session.id, turnIndex: 2, workspace: cwd });
+		expect(readRunJson(r2.runDir as string)).toMatchObject({ sessionId: session.id, turnIndex: 2, workspace: join(r2.runDir as string, "workspace") });
 		const row = getSessionRow(deps.db, session.id);
 		expect(row).toMatchObject({ turns: 2, status: "active", title: "Hello there", cwd });
 		expect(row?.costUsd).toBeCloseTo(session.costUsd, 10);
@@ -400,7 +400,7 @@ describe("session fixes", () => {
 				return fauxAssistantMessage("done");
 			},
 		]);
-		const session = createSession(deps, { cwd });
+		const session = createSession(deps, { cwd, workspace: "." });
 		await session.turn("read big.txt");
 		expect(pointer).not.toBe("missing");
 		await session.turn("now read line 1500 of the saved output");
@@ -641,12 +641,8 @@ describe("session state", () => {
 		expect(session.model).toBeNull();
 	});
 
-	it("works in the given workspace and rejects a missing one", async () => {
-		const { env, deps, cwd } = sessionEnv();
-		env.faux.setResponses([fauxAssistantMessage([fauxToolCall("write", { path: "note.txt", content: "hi" })]), fauxAssistantMessage("wrote")]);
-		const session = createSession(deps, { cwd });
-		await session.turn("write a note");
-		expect(readFileSync(join(cwd, "note.txt"), "utf8")).toBe("hi");
+	it("rejects a missing --workspace directory", () => {
+		const { deps, cwd } = sessionEnv();
 		expectCode(() => createSession(deps, { cwd, workspace: join(cwd, "missing") }), "CONFIG_INVALID");
 	});
 
@@ -661,5 +657,169 @@ describe("session state", () => {
 		expect(listSessions(deps.db, { limit: 1 })).toHaveLength(1);
 		expect(existsSync(join(deps.paths.sessions, b.id, "session.json"))).toBe(true);
 		expect(() => listSessions(deps.db, { limit: 0 })).toThrow();
+	});
+});
+
+/** A prompter that allows every `ask` tool (bash). */
+const allowAll: Prompter = { interactive: true, confirm: async () => true };
+
+function workspaceOf(result: { runDir: string | null }): string {
+	return join(result.runDir as string, "workspace");
+}
+
+describe("turn workspaces", () => {
+	it("works in each turn's run folder and carries the previous turn's files forward", async () => {
+		const { env, deps, cwd } = sessionEnv({ prompter: allowAll });
+		env.faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("write", { path: "made/a.txt", content: "from the write tool" })]),
+			fauxAssistantMessage([fauxToolCall("bash", { command: "printf 'from bash' > b.txt" })]),
+			fauxAssistantMessage("made two files"),
+			fauxAssistantMessage([fauxToolCall("edit", { path: "made/a.txt", oldText: "write tool", newText: "second turn" })]),
+			fauxAssistantMessage("edited"),
+		]);
+		const session = createSession(deps, { cwd });
+		expect(session.workspace).toBeNull();
+		const r1 = await session.turn("make files");
+		expect(r1.status).toBe("succeeded");
+		const ws1 = workspaceOf(r1);
+		expect(readFileSync(join(ws1, "made", "a.txt"), "utf8")).toBe("from the write tool");
+		expect(readFileSync(join(ws1, "b.txt"), "utf8")).toBe("from bash");
+		expect(readdirSync(cwd)).toEqual([]);
+		const json1 = readRunJson(r1.runDir as string);
+		expect(json1.workspace).toBe(ws1);
+		expect(json1.workspaceFrom).toBeUndefined();
+
+		const r2 = await session.turn("now edit it");
+		expect(r2.status).toBe("succeeded");
+		const ws2 = workspaceOf(r2);
+		expect(ws2).not.toBe(ws1);
+		expect(readFileSync(join(ws2, "made", "a.txt"), "utf8")).toBe("from the second turn");
+		expect(readFileSync(join(ws2, "b.txt"), "utf8")).toBe("from bash");
+		expect(readFileSync(join(ws1, "made", "a.txt"), "utf8")).toBe("from the write tool");
+		const json2 = readRunJson(r2.runDir as string);
+		expect(json2.workspace).toBe(ws2);
+		expect(json2.workspaceFrom).toEqual({ runId: r1.trajectoryId, bytes: "from the write tool".length + "from bash".length });
+		expect(readdirSync(cwd)).toEqual([]);
+	});
+
+	it("copies symlinks as symlinks, without following them", async () => {
+		const { env, deps, cwd } = sessionEnv({ prompter: allowAll });
+		const outside = join(cwd, "outside.txt");
+		writeFileSync(outside, "outside");
+		env.faux.setResponses([fauxAssistantMessage([fauxToolCall("write", { path: "a.txt", content: "a" })]), fauxAssistantMessage("one"), fauxAssistantMessage("two")]);
+		const session = createSession(deps, { cwd });
+		const r1 = await session.turn("one");
+		symlinkSync("a.txt", join(workspaceOf(r1), "rel-link"));
+		symlinkSync(outside, join(workspaceOf(r1), "abs-link"));
+		const r2 = await session.turn("two");
+		const ws2 = workspaceOf(r2);
+		expect(lstatSync(join(ws2, "rel-link")).isSymbolicLink()).toBe(true);
+		expect(readlinkSync(join(ws2, "rel-link"))).toBe("a.txt");
+		expect(lstatSync(join(ws2, "abs-link")).isSymbolicLink()).toBe(true);
+		expect(readlinkSync(join(ws2, "abs-link"))).toBe(outside);
+		expect(readRunJson(r2.runDir as string).workspaceFrom).toEqual({ runId: r1.trajectoryId, bytes: 1 });
+	});
+
+	it("keeps the files after /clear: only the conversation starts over", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		env.faux.setResponses([fauxAssistantMessage([fauxToolCall("write", { path: "a.txt", content: "kept" })]), fauxAssistantMessage("one"), fauxAssistantMessage("two")]);
+		const session = createSession(deps, { cwd });
+		await session.turn("one");
+		session.clear();
+		const r2 = await session.turn("two");
+		expect(readFileSync(join(workspaceOf(r2), "a.txt"), "utf8")).toBe("kept");
+	});
+
+	it("shares a --workspace folder between turns and copies nothing into the run folders", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		const dir = realpathSync(mkdtempSync(join(tmpdir(), "nexo-explicit-")));
+		env.faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("write", { path: "note.txt", content: "hi" })]),
+			fauxAssistantMessage("wrote"),
+			fauxAssistantMessage([fauxToolCall("edit", { path: "note.txt", oldText: "hi", newText: "hello" })]),
+			fauxAssistantMessage("edited"),
+		]);
+		const session = createSession(deps, { cwd, workspace: dir });
+		expect(session.workspace).toBe(dir);
+		const r1 = await session.turn("write a note");
+		const r2 = await session.turn("edit it");
+		expect(readFileSync(join(dir, "note.txt"), "utf8")).toBe("hello");
+		for (const r of [r1, r2]) {
+			expect(readRunJson(r.runDir as string).workspace).toBe(dir);
+			expect(readRunJson(r.runDir as string).workspaceFrom).toBeUndefined();
+			expect(readdirSync(workspaceOf(r))).toEqual([]);
+		}
+		expect(JSON.parse(readFileSync(join(deps.paths.sessions, session.id, "session.json"), "utf8")).workspace).toBe(dir);
+	});
+
+	it("works in the current folder with --workspace .", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		env.faux.setResponses([fauxAssistantMessage([fauxToolCall("write", { path: "note.txt", content: "hi" })]), fauxAssistantMessage("wrote")]);
+		const session = createSession(deps, { cwd, workspace: "." });
+		expect(session.workspace).toBe(cwd);
+		await session.turn("write a note");
+		expect(readFileSync(join(cwd, "note.txt"), "utf8")).toBe("hi");
+	});
+
+	it("carries forward from the last turn after a resume", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		env.faux.setResponses([fauxAssistantMessage([fauxToolCall("write", { path: "a.txt", content: "turn one" })]), fauxAssistantMessage("one"), fauxAssistantMessage("two")]);
+		const session = createSession(deps, { cwd });
+		const r1 = await session.turn("one");
+		session.close();
+		expect(JSON.parse(readFileSync(join(deps.paths.sessions, session.id, "session.json"), "utf8")).workspace).toBeNull();
+		const resumed = resumeSession(deps, session.id);
+		expect(resumed.workspace).toBeNull();
+		const r2 = await resumed.turn("two");
+		expect(readFileSync(join(workspaceOf(r2), "a.txt"), "utf8")).toBe("turn one");
+		expect(readRunJson(r2.runDir as string).workspaceFrom).toMatchObject({ runId: r1.trajectoryId });
+		resumed.close();
+	});
+
+	it("keeps an older session's workspace folder on resume", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		env.faux.setResponses([fauxAssistantMessage("one"), fauxAssistantMessage([fauxToolCall("write", { path: "b.txt", content: "b" })]), fauxAssistantMessage("two")]);
+		const session = createSession(deps, { cwd });
+		await session.turn("one");
+		session.close();
+		// A session.json written before run-folder sessions: the workspace is the folder nexo was started in.
+		const file = join(deps.paths.sessions, session.id, "session.json");
+		writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), workspace: cwd }));
+		const resumed = resumeSession(deps, session.id);
+		expect(resumed.workspace).toBe(cwd);
+		const r2 = await resumed.turn("two");
+		expect(readFileSync(join(cwd, "b.txt"), "utf8")).toBe("b");
+		expect(readRunJson(r2.runDir as string).workspace).toBe(cwd);
+		expect(readRunJson(r2.runDir as string).workspaceFrom).toBeUndefined();
+		resumed.close();
+	});
+
+	it("runs ! commands in the folder nexo was started in before the first turn, then in the latest turn's workspace", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		env.faux.setResponses([fauxAssistantMessage("one"), fauxAssistantMessage("two")]);
+		const session = createSession(deps, { cwd });
+		expect(session.shellDir).toBe(cwd);
+		expect((await session.shell("pwd")).output.trim()).toBe(cwd);
+		const r1 = await session.turn("one");
+		expect(session.shellDir).toBe(workspaceOf(r1));
+		expect((await session.shell("pwd; printf x > from-shell.txt")).output.trim()).toBe(realpathSync(workspaceOf(r1)));
+		const r2 = await session.turn("two");
+		expect(readFileSync(join(workspaceOf(r2), "from-shell.txt"), "utf8")).toBe("x");
+	});
+
+	it("refuses a write tool write outside the turn's own workspace into the nexo home", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		env.faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("write", { path: "a.txt", content: "a" })]),
+			fauxAssistantMessage("one"),
+			fauxAssistantMessage([fauxToolCall("write", { path: "../../../sessions/x.txt", content: "x" })]),
+			fauxAssistantMessage("two"),
+		]);
+		const session = createSession(deps, { cwd });
+		await session.turn("one");
+		const events: EngineEvent[] = [];
+		await session.turn("two", { onEvent: (e) => events.push(e) });
+		expect(events.find((e) => e.type === "tool_end")).toMatchObject({ toolName: "write", isError: true });
+		expect(existsSync(join(deps.paths.sessions, "x.txt"))).toBe(false);
 	});
 });
