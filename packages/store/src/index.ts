@@ -19,3 +19,4 @@ export * from "./span-tree.ts";
 export * from "./spans.ts";
 export * from "./reindex.ts";
 export * from "./run-dir.ts";
+export * from "./workspace-copy.ts";

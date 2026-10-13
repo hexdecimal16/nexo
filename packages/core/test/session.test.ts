@@ -2,7 +2,7 @@ import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, readlink
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall, type TranscriptContext } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { getRun, getSessionRow, insertRun, latestFeedback, listSpans, readRunJson, SessionDir } from "@nexo/store";
 import { type NexoError, REDACTED } from "@nexo/telemetry";
 import type { Prompter } from "@nexo/tools";
@@ -807,19 +807,56 @@ describe("turn workspaces", () => {
 		expect(readFileSync(join(workspaceOf(r2), "from-shell.txt"), "utf8")).toBe("x");
 	});
 
-	it("refuses a write tool write outside the turn's own workspace into the nexo home", async () => {
+	it("refuses write tool writes into other runs' folders and the sessions folder under the nexo home", async () => {
 		const { env, deps, cwd } = sessionEnv();
+		const results: string[] = [];
+		const capture = (next: ReturnType<typeof fauxAssistantMessage>) => async (ctx: TranscriptContext) => {
+			results.push(lastToolResultText(ctx));
+			return next;
+		};
+		const first = createSession(deps, { cwd });
+		env.faux.setResponses([fauxAssistantMessage([fauxToolCall("write", { path: "a.txt", content: "a" })]), fauxAssistantMessage("one")]);
+		const r1 = await first.turn("one");
+		const otherRun = r1.trajectoryId as string;
+		// Sessions whose --workspace lies inside the nexo home: only a run's own workspace is writable there.
+		const inRuns = createSession(deps, { cwd, workspace: deps.paths.runs });
 		env.faux.setResponses([
-			fauxAssistantMessage([fauxToolCall("write", { path: "a.txt", content: "a" })]),
-			fauxAssistantMessage("one"),
-			fauxAssistantMessage([fauxToolCall("write", { path: "../../../sessions/x.txt", content: "x" })]),
-			fauxAssistantMessage("two"),
+			fauxAssistantMessage([fauxToolCall("write", { path: `${otherRun}/workspace/x.txt`, content: "x" })]),
+			capture(fauxAssistantMessage([fauxToolCall("write", { path: join(deps.paths.runs, otherRun, "run.json"), content: "{}" })])),
+			capture(fauxAssistantMessage("two")),
 		]);
+		await inRuns.turn("two");
+		const inSessions = createSession(deps, { cwd, workspace: deps.paths.sessions });
+		env.faux.setResponses([fauxAssistantMessage([fauxToolCall("write", { path: join(first.id, "session.json"), content: "{}" })]), capture(fauxAssistantMessage("three"))]);
+		await inSessions.turn("three");
+		expect(results).toHaveLength(3);
+		for (const text of results) expect(text).toMatch(/^TOOL_DENIED: Path ".*" is inside the nexo home/);
+		expect(existsSync(join(deps.paths.runs, otherRun, "workspace", "x.txt"))).toBe(false);
+		expect(readRunJson(join(deps.paths.runs, otherRun)).id).toBe(otherRun);
+		expect(JSON.parse(readFileSync(join(deps.paths.sessions, first.id, "session.json"), "utf8")).id).toBe(first.id);
+	});
+
+	it("ends a turn aborted before it starts without copying the previous workspace", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		env.faux.setResponses([fauxAssistantMessage([fauxToolCall("write", { path: "a.txt", content: "a" })]), fauxAssistantMessage("one")]);
 		const session = createSession(deps, { cwd });
 		await session.turn("one");
-		const events: EngineEvent[] = [];
-		await session.turn("two", { onEvent: (e) => events.push(e) });
-		expect(events.find((e) => e.type === "tool_end")).toMatchObject({ toolName: "write", isError: true });
-		expect(existsSync(join(deps.paths.sessions, "x.txt"))).toBe(false);
+		const ac = new AbortController();
+		ac.abort();
+		const r2 = await session.turn("two", { signal: ac.signal });
+		expect(r2.status).toBe("aborted");
+		expect(readdirSync(workspaceOf(r2))).toEqual([]);
+	});
+
+	it("looks up the folder for ! commands once per turn, not on every read", async () => {
+		const { env, deps, cwd } = sessionEnv();
+		env.faux.setResponses([fauxAssistantMessage("one")]);
+		const session = createSession(deps, { cwd });
+		const r1 = await session.turn("one");
+		expect(session.shellDir).toBe(workspaceOf(r1));
+		const prepare = vi.spyOn(deps.db, "prepare");
+		for (let i = 0; i < 5; i++) expect(session.shellDir).toBe(workspaceOf(r1));
+		expect(prepare).not.toHaveBeenCalled();
+		prepare.mockRestore();
 	});
 });
