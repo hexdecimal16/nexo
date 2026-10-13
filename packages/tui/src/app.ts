@@ -3,6 +3,8 @@ import {
 	type Component,
 	Container,
 	Editor,
+	isKeyRelease,
+	isKeyRepeat,
 	Loader,
 	matchesKey,
 	ProcessTerminal,
@@ -17,7 +19,7 @@ import { type ErrorPayload, toErrorPayload } from "@nexo/telemetry";
 import type { Prompter } from "@nexo/tools";
 import { createApprovalPrompter } from "./approvals.ts";
 import { helpText, parseSlashCommand, SLASH_COMMANDS } from "./commands.ts";
-import { Block, DynamicLine, SafeContainer, SafeMarkdown, SubagentLine, Ticker, ToolLine } from "./components.ts";
+import { Block, DynamicLine, SafeContainer, SafeMarkdown, SubagentLine, Ticker, ToolLine, ViewMode } from "./components.ts";
 import { SettingsScreen, type SettingsScreenMode } from "./settings-screen.ts";
 import { escapeControl, escapeControlKeepLines, formatError, oneLine, toolSummary, usd } from "./text.ts";
 import { editorTheme, markdownTheme, shellBorder, style } from "./theme.ts";
@@ -140,6 +142,7 @@ class InteractiveApp {
 	private lastScore: string | null = null;
 	private currentText: { component: SafeMarkdown; text: string } | null = null;
 	private tools = new Map<string, ToolLine>();
+	private readonly view = new ViewMode();
 	private subagents = new Map<string, SubagentLine>();
 	private tickTimer: NodeJS.Timeout | null = null;
 	private loader: Loader | null = null;
@@ -348,6 +351,8 @@ class InteractiveApp {
 	// Input
 
 	private onKey(data: string): { consume: boolean } | undefined {
+		// The kitty keyboard protocol also reports key releases; only presses count (the editor drops releases itself).
+		if (isKeyRelease(data)) return undefined;
 		if (this.exiting) {
 			if (matchesKey(data, "ctrl+c")) this.resolveForce();
 			return { consume: true };
@@ -370,6 +375,12 @@ class InteractiveApp {
 		}
 		if (matchesKey(data, "escape") && this.running && this.screen === "chat" && !this.editor.isShowingAutocomplete()) {
 			this.turnAbort?.abort();
+			return { consume: true };
+		}
+		if (matchesKey(data, "ctrl+o") && this.screen === "chat") {
+			if (isKeyRepeat(data)) return { consume: true };
+			this.view.verbose = !this.view.verbose;
+			this.tui.requestRender(true);
 			return { consume: true };
 		}
 		if (matchesKey(data, "ctrl+d") && this.screen === "chat" && this.session && !this.running && this.editor.getText() === "") {
@@ -493,14 +504,14 @@ class InteractiveApp {
 			case "tool_start": {
 				if (event.depth !== 0) return;
 				this.currentText = null;
-				const line = new ToolLine(toolSummary(event.toolName, event.args), this.ticker);
+				const line = new ToolLine(toolSummary(event.toolName, event.args), toolSummary(event.toolName, event.args, Number.POSITIVE_INFINITY), this.ticker, this.view);
 				this.tools.set(event.toolCallId, line);
 				this.chat.addChild(line);
 				break;
 			}
 			case "tool_end": {
 				if (event.depth !== 0) return;
-				this.tools.get(event.toolCallId)?.finish(event.isError, event.durationMs, event.preview);
+				this.tools.get(event.toolCallId)?.finish(event.isError, event.durationMs, event.output);
 				this.tools.delete(event.toolCallId);
 				break;
 			}
