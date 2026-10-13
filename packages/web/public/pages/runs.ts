@@ -1,6 +1,6 @@
 import type { MetaResponse, RunListResponse } from "../lib/api-types.ts";
 import { renderError } from "../lib/common-view.ts";
-import { type RunFilters, renderEmptyRuns, renderRunRows, renderSessionFilter, renderStatusOptions, runsQuery } from "../lib/runs-view.ts";
+import { type RunFilters, renderEmptyRuns, renderRunRows, renderRunsNote, renderSessionFilter, renderStatusOptions, runsQuery } from "../lib/runs-view.ts";
 import { asErrorBody, el, getJson } from "./api.ts";
 
 const filters: RunFilters = { tab: "all", status: "", skill: "", since: "", session: new URLSearchParams(location.search).get("session") ?? "", scored: "" };
@@ -20,7 +20,7 @@ async function load(append: boolean): Promise<void> {
 		const rows = page.runs.length === 0 && !append ? renderEmptyRuns(filters.tab) : renderRunRows(page.runs, Date.now());
 		if (append) body.insertAdjacentHTML("beforeend", rows.value);
 		else body.innerHTML = rows.value;
-		if (!append) sessionFilter.innerHTML = renderSessionFilter(filters.session, page.runs[0]?.sessionTitle ?? null).value;
+		if (!append) sessionFilter.innerHTML = `${renderSessionFilter(filters.session, page.runs[0]?.sessionTitle ?? null).value}${renderRunsNote(filters).value}`;
 		cursor = page.nextCursor;
 		more.hidden = cursor === null;
 	} catch (error) {

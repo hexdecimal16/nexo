@@ -149,19 +149,23 @@ export interface SessionSummary {
 }
 
 /**
- * Sessions, most recently updated first, with each one's latest turn and its count of unreviewed turns. Only root runs
+ * Sessions that ran a turn (as `listSessionRows({ withTurns: true })`), most recently updated first, with each one's latest turn and its count of unreviewed turns. Only root runs
  * count as turns, and optimization runs never do.
  */
 export function listSessionSummaries(db: Db, options: { limit?: number } = {}): SessionSummary[] {
-	const turn = "t.session_id = s.id AND t.parent_run_id IS NULL AND t.optim_run_id IS NULL";
 	const rows = db
 		.prepare(
-			`SELECT s.*,
-	(SELECT t.id FROM runs t WHERE ${turn} ORDER BY t.turn_index DESC, t.started_at DESC, t.id DESC LIMIT 1) AS last_id,
-	(SELECT t.status FROM runs t WHERE ${turn} ORDER BY t.turn_index DESC, t.started_at DESC, t.id DESC LIMIT 1) AS last_status,
-	(SELECT t.started_at FROM runs t WHERE ${turn} ORDER BY t.turn_index DESC, t.started_at DESC, t.id DESC LIMIT 1) AS last_started_at,
-	(SELECT COUNT(*) FROM runs t WHERE ${turn} AND t.status != 'running' AND NOT EXISTS (SELECT 1 FROM feedback f WHERE f.run_id = t.id)) AS unreviewed
-	FROM sessions s ORDER BY s.updated_at DESC, s.id DESC LIMIT ?`,
+			`WITH turns AS (
+	SELECT t.session_id, t.id, t.status, t.started_at,
+		ROW_NUMBER() OVER (PARTITION BY t.session_id ORDER BY t.turn_index DESC, t.started_at DESC, t.id DESC) AS recency,
+		(t.status != 'running' AND NOT EXISTS (SELECT 1 FROM feedback f WHERE f.run_id = t.id)) AS is_unreviewed
+	FROM runs t WHERE t.session_id IS NOT NULL AND t.parent_run_id IS NULL AND t.optim_run_id IS NULL
+)
+SELECT s.*, last.id AS last_id, last.status AS last_status, last.started_at AS last_started_at,
+	(SELECT COUNT(*) FROM turns u WHERE u.session_id = s.id AND u.is_unreviewed) AS unreviewed
+FROM sessions s LEFT JOIN turns last ON last.session_id = s.id AND last.recency = 1
+WHERE s.turns > 0 OR EXISTS (SELECT 1 FROM runs WHERE runs.session_id = s.id)
+ORDER BY s.updated_at DESC, s.id DESC LIMIT ?`,
 		)
 		.all(options.limit ?? 50);
 	return rows.map((row) => {

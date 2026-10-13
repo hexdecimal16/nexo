@@ -244,12 +244,13 @@ describe("listSessionSummaries", () => {
 		const optimization = turn("old", 2, "succeeded", { optimRunId: "optim1" });
 		recordFeedback(db, { runId: reviewed.id, verdict: "done", comment: "", redact, nowIso: "2026-10-10T03:00:00.000Z" });
 		const list = listSessionSummaries(db);
-		expect(list.map((s) => s.id)).toEqual(["new", "old", "empty"]);
+		expect(list.map((s) => s.id)).toEqual(["new", "old"]);
 		expect(list[0]).toMatchObject({ title: "title new", status: "closed", turns: 3, costUsd: 0.5, budgetUsd: 5, unreviewedTurns: 1 });
 		expect(list[0]?.lastTurn).toEqual({ runId: last.id, status: "running", startedAt: last.startedAt });
 		expect(list[1]?.unreviewedTurns).toBe(1);
 		expect(list[1]?.lastTurn?.runId).not.toBe(optimization.id);
-		expect(list[2]).toMatchObject({ unreviewedTurns: 0, lastTurn: null });
+		// "empty" never ran a turn: it is hidden and does not use up the limit.
+		expect(listSessionSummaries(db, { limit: 2 }).map((s) => s.id)).toEqual(["new", "old"]);
 		expect(listSessionSummaries(db, { limit: 1 }).map((s) => s.id)).toEqual(["new"]);
 	});
 

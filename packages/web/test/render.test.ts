@@ -7,8 +7,8 @@ import { durationMs, formatDuration, formatUsd } from "../public/lib/format.ts";
 import { esc, html } from "../public/lib/html.ts";
 import { createPoller, MAX_POLL_BACKOFF_MS, POLL_MS, pollDelay } from "../public/lib/poller.ts";
 import { renderChildren, renderFeedbackForm, renderRunHeader, shouldPoll } from "../public/lib/run-view.ts";
-import { renderSessionRows } from "../public/lib/sessions-view.ts";
-import { renderRunRows, renderSessionFilter, renderStatusOptions, runsQuery } from "../public/lib/runs-view.ts";
+import { renderSessionRows, renderSessionsLimitNote } from "../public/lib/sessions-view.ts";
+import { renderRunRows, renderRunsNote, renderSessionFilter, renderStatusOptions, runsQuery } from "../public/lib/runs-view.ts";
 import { findSpan, renderSpanDetail, renderSpanTree } from "../public/lib/span-view.ts";
 import { renderTimeline, timelineRows } from "../public/lib/timeline.ts";
 
@@ -124,7 +124,11 @@ describe("runs view", () => {
 		expectInert(markup);
 		expect(markup).toContain("s&amp;1");
 		expect(markup).toContain(`href="/"`);
-		const note = renderSessionFilter("", null).value;
+		expect(renderSessionFilter("", null).value).toBe("");
+		const f = { tab: "all" as const, status: "", skill: "", since: "", session: "", scored: "" };
+		expect(renderRunsNote({ ...f, tab: "review" }).value).toBe("");
+		expect(renderRunsNote({ ...f, session: "s1" }).value).toBe("");
+		const note = renderRunsNote(f).value;
 		expect(note).toContain("Chat turns are listed per session on the <a");
 		expect(note).toContain(">Sessions page</a>");
 		expect(note).toContain(`href="/sessions.html"`);
@@ -485,5 +489,12 @@ describe("sessions view", () => {
 
 	it("says so when there are no sessions", () => {
 		expect(renderSessionRows([]).value).toContain("No sessions yet");
+	});
+});
+
+describe("sessions limit note", () => {
+	it("appears only when the page is full", () => {
+		expect(renderSessionsLimitNote(199, 200).value).toBe("");
+		expect(renderSessionsLimitNote(200, 200).value).toContain("Showing the 200 most recently updated sessions");
 	});
 });
