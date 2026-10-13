@@ -39,6 +39,6 @@ export function helpText(): string {
 	const width = Math.max(...SLASH_COMMANDS.map((c) => `/${c.name}${c.argumentHint ? ` ${c.argumentHint}` : ""}`.length));
 	const lines = SLASH_COMMANDS.map((c) => `${`/${c.name}${c.argumentHint ? ` ${c.argumentHint}` : ""}`.padEnd(width)}  ${c.description ?? ""}`);
 	lines.push("", `${"!<command>".padEnd(width)}  Run a shell command; its output goes to the model with your next message`);
-	lines.push("", "enter send · shift+enter newline · ↑↓ history · esc/ctrl-c stop a turn · ctrl-c twice or ctrl-d quit");
+	lines.push("", "enter send · shift+enter newline · ↑↓ history · ctrl+o expand tool output · esc/ctrl-c stop a turn · ctrl-c twice or ctrl-d quit");
 	return lines.join("\n");
 }

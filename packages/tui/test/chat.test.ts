@@ -84,6 +84,56 @@ describe("chat screen", () => {
 		await h.done;
 	});
 
+	it("expands every tool line to its full arguments and output on ctrl+o", async () => {
+		const h = await startHarness();
+		const { writeFileSync } = await import("node:fs");
+		const name = `${"long-name-".repeat(10)}END.txt`;
+		writeFileSync(`${h.cwd}/${name}`, Array.from({ length: 10 }, (_, i) => `row ${i + 1}`).join("\n"));
+		h.faux.setResponses([fauxAssistantMessage([fauxToolCall("read", { path: name })]), fauxAssistantMessage("read it")]);
+		submit(h.terminal, "read long");
+		await until(() => !h.session().running && h.session().turns === 1);
+		await until(() => expect(h.terminal.output()).toContain("more lines (ctrl+o to expand)"));
+		expect(h.terminal.output()).not.toContain("row 10");
+		expect(h.terminal.output()).not.toContain("END.txt");
+		h.terminal.send(KEY.ctrlO);
+		await until(() => {
+			expect(h.terminal.output()).toContain("row 10");
+			expect(h.terminal.output()).toContain("END.txt");
+		});
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
+	it("toggles on a kitty ctrl+o press and ignores its release", async () => {
+		const h = await startHarness();
+		const { writeFileSync } = await import("node:fs");
+		writeFileSync(`${h.cwd}/rows.txt`, Array.from({ length: 10 }, (_, i) => `row ${i + 1}`).join("\n"));
+		h.faux.setResponses([fauxAssistantMessage([fauxToolCall("read", { path: "rows.txt" })]), fauxAssistantMessage("read it")]);
+		submit(h.terminal, "read rows");
+		await until(() => !h.session().running && h.session().turns === 1);
+		h.terminal.send(KEY.ctrlOPress);
+		h.terminal.send(KEY.ctrlORelease);
+		await new Promise((r) => setTimeout(r, 100));
+		expect(h.terminal.screen()).toContain("row 10");
+		h.terminal.send(KEY.ctrlOPress);
+		h.terminal.send(KEY.ctrlORelease);
+		await new Promise((r) => setTimeout(r, 100));
+		expect(h.terminal.screen()).not.toContain("row 10");
+		expect(h.terminal.screen()).toContain("more lines (ctrl+o to expand)");
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
+	it("does not count a kitty ctrl+c release as a second ctrl+c", async () => {
+		const h = await startHarness();
+		h.terminal.send(KEY.ctrlC);
+		h.terminal.send(KEY.ctrlCRelease);
+		await new Promise((r) => setTimeout(r, 100));
+		expect(h.terminal.stopped).toBe(false);
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
 	it("escapes control characters in tool arguments and results", async () => {
 		const h = await startHarness();
 		h.faux.setResponses([fauxAssistantMessage([fauxToolCall("read", { path: "evil\x1b[31m.txt" })]), fauxAssistantMessage("ok")]);

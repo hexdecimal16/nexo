@@ -1,7 +1,7 @@
 import { chmodSync, writeFileSync } from "node:fs";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import { Block, DynamicLine, MaskedInput, SafeMarkdown, SubagentLine, Ticker, ToolLine } from "../src/components.ts";
+import { Block, DynamicLine, MaskedInput, SafeMarkdown, SubagentLine, Ticker, ToolLine, ViewMode } from "../src/components.ts";
 import { SettingsScreen } from "../src/settings-screen.ts";
 import { markdownTheme } from "../src/theme.ts";
 import { KEY, until } from "./fake-terminal.ts";
@@ -17,9 +17,12 @@ function fits(lines: string[], width: number): void {
 describe("narrow terminals", () => {
 	it("keeps every component within the width with long unbroken strings", () => {
 		const ticker = new Ticker();
-		const tool = new ToolLine(`bash(${LONG})`, ticker);
+		const view = new ViewMode();
+		const tool = new ToolLine(`bash(${LONG})`, `bash(${LONG})`, ticker, view);
 		fits(tool.render(40), 40);
 		tool.finish(false, 12, `${LONG}\n${LONG}`);
+		fits(tool.render(40), 40);
+		view.verbose = true;
 		fits(tool.render(40), 40);
 		fits(new SubagentLine(LONG, 3, ticker).render(40), 40);
 		fits(new Block(`${LONG}\n${LONG}`, (s) => s, "› ").render(40), 40);
@@ -29,6 +32,25 @@ describe("narrow terminals", () => {
 		for (let i = 0; i < 100; i++) masked.handleInput("a");
 		fits(masked.render(40), 40);
 		fits(masked.render(3), 3);
+	});
+
+	it("wraps a verbose tool line to the full output and collapses it again", () => {
+		const view = new ViewMode();
+		const output = Array.from({ length: 10 }, (_, i) => `row ${i + 1}`).join("\n");
+		const tool = new ToolLine("read(short)", `read(${LONG})`, new Ticker(), view);
+		tool.finish(false, 5, output);
+		const collapsed = tool.render(40).join("\n");
+		expect(collapsed).toContain("row 3");
+		expect(collapsed).not.toContain("row 4");
+		expect(collapsed).toContain("7 more lines (ctrl+o to expand)");
+		view.verbose = true;
+		const lines = tool.render(40);
+		fits(lines, 40);
+		const expanded = lines.join("\n");
+		expect(expanded).toContain("row 10");
+		expect(expanded.replace(/\x1b\[[0-9;]*m|\s+/g, "")).toContain(LONG);
+		view.verbose = false;
+		expect(tool.render(40).join("\n")).not.toContain("row 10");
 	});
 
 	it("renders the settings screen with a long filter and long values at 40 columns", () => {

@@ -69,6 +69,12 @@ export class FakeTerminal implements Terminal {
 		return stripTerminalSequences(this.writes.join(""));
 	}
 
+	/** What the last full redraw (clear screen and scrollback) and everything after it wrote, with escape sequences removed. */
+	screen(): string {
+		const raw = this.raw();
+		return stripTerminalSequences(raw.slice(raw.lastIndexOf("\x1b[3J")));
+	}
+
 	/** Raw output including escape sequences. */
 	raw(): string {
 		return this.writes.join("");
@@ -80,6 +86,11 @@ export const KEY = {
 	escape: "\x1b",
 	ctrlC: "\x03",
 	ctrlD: "\x04",
+	ctrlO: "\x0f",
+	/** Kitty keyboard protocol: ctrl+o press, then its release. */
+	ctrlOPress: "\x1b[111;5u",
+	ctrlORelease: "\x1b[111;5:3u",
+	ctrlCRelease: "\x1b[99;5:3u",
 	up: "\x1b[A",
 	down: "\x1b[B",
 	backspace: "\x7f",
