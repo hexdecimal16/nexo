@@ -20,3 +20,8 @@ export function renderSessionRows(sessions: readonly SessionListItem[]): SafeHtm
 	</tr>`,
 	)}`;
 }
+
+/** A muted line when the list is cut at `limit`; empty otherwise. */
+export function renderSessionsLimitNote(count: number, limit: number): SafeHtml {
+	return count >= limit ? html`<p class="muted">Showing the ${limit} most recently updated sessions.</p>` : html``;
+}
