@@ -28,6 +28,8 @@ import {
 	listDisagreements,
 	listFeedback,
 	listScores,
+	listSessionSummaries,
+	MAX_RUN_PAGE,
 	listSpans,
 	loadSpanTree,
 	queryRuns,
@@ -83,6 +85,7 @@ import type {
 	ReadOnlyInfo,
 	RunDetailResponse,
 	RunListResponse,
+	SessionListResponse,
 	SpanResponse,
 	SpanTreeResponse,
 } from "../public/lib/api-types.ts";
@@ -137,6 +140,11 @@ export function listRunsResponse(ctx: ApiContext, params: URLSearchParams): RunL
 	if (skill !== undefined) query.skill = skill;
 	const session = optional(params, "session");
 	if (session !== undefined) query.sessionId = session;
+	const oneShot = optional(params, "oneShot");
+	if (oneShot !== undefined) {
+		if (oneShot !== "true" && oneShot !== "false") throw invalidRequest("oneShot must be true or false", { oneShot });
+		query.oneShot = oneShot === "true";
+	}
 	const reviewed = optional(params, "reviewed");
 	if (reviewed !== undefined) {
 		if (reviewed !== "true" && reviewed !== "false") throw invalidRequest("reviewed must be true or false", { reviewed });
@@ -149,6 +157,13 @@ export function listRunsResponse(ctx: ApiContext, params: URLSearchParams): RunL
 	const cursor = optional(params, "cursor");
 	if (cursor !== undefined) query.cursor = cursor;
 	return queryRuns(ctx.db, query);
+}
+
+/** `GET /api/sessions?limit=`: chat sessions, most recently updated first, with their turn aggregates. */
+export function listSessionsResponse(ctx: ApiContext, params: URLSearchParams): SessionListResponse {
+	const limit = intParam(params, "limit", 50);
+	if (limit < 1 || limit > MAX_RUN_PAGE) throw invalidRequest(`limit must be an integer from 1 to ${MAX_RUN_PAGE}`, { limit });
+	return { sessions: listSessionSummaries(ctx.db, { limit }) };
 }
 
 export function runDetailResponse(ctx: ApiContext, id: string): RunDetailResponse {

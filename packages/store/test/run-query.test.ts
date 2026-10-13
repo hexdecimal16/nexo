@@ -179,3 +179,17 @@ describe("costReport", () => {
 		expect(costReport(db, { by: "model", since: "2026-10-01" }).rows.map((r) => r.key)).toEqual(["faux/m-a", "faux/m-b", "faux/m-c"]);
 	});
 });
+
+describe("queryRuns oneShot", () => {
+	it("leaves out session turns, keeps one-shot runs, and the review queue still holds turns", () => {
+		const db = openDb(":memory:");
+		const oneShot = runRow({ status: "succeeded", startedAt: "2026-10-10T00:00:01.000Z" });
+		const turn = runRow({ status: "succeeded", sessionId: "s1", turnIndex: 1, startedAt: "2026-10-10T00:00:02.000Z" });
+		insertRun(db, oneShot);
+		insertRun(db, turn);
+		expect(queryRuns(db, { oneShot: true }).runs.map((r) => r.id)).toEqual([oneShot.id]);
+		expect(queryRuns(db, {}).runs.map((r) => r.id)).toEqual([turn.id, oneShot.id]);
+		expect(queryRuns(db, { reviewed: false }).runs.map((r) => r.id)).toEqual([turn.id, oneShot.id]);
+		expect(queryRuns(db, { sessionId: "s1" }).runs.map((r) => r.id)).toEqual([turn.id]);
+	});
+});

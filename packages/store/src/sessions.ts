@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { SQLInputValue } from "node:sqlite";
 import { NexoError, type Redactor } from "@nexo/telemetry";
 import type { Db } from "./db.ts";
+import type { RunStatus } from "./runs.ts";
 import { insertRow } from "./sql.ts";
 
 export type SessionStatus = "active" | "closed";
@@ -129,6 +130,55 @@ export function listSessionRows(db: Db, options: { limit?: number; withTurns?: b
 		.prepare(`SELECT * FROM sessions ${where}ORDER BY updated_at DESC, id DESC LIMIT ?`)
 		.all(options.limit ?? 20)
 		.map(decode);
+}
+
+/** One row of the Sessions page: the session's totals plus what its turns (root runs) look like. */
+export interface SessionSummary {
+	id: string;
+	title: string;
+	status: SessionStatus;
+	turns: number;
+	costUsd: number;
+	budgetUsd: number;
+	createdAt: string;
+	updatedAt: string;
+	/** The newest turn; null before the first one is indexed. */
+	lastTurn: { runId: string; status: RunStatus; startedAt: string } | null;
+	/** Finished turns without a human verdict (the review queue's notion of unreviewed). */
+	unreviewedTurns: number;
+}
+
+/**
+ * Sessions, most recently updated first, with each one's latest turn and its count of unreviewed turns. Only root runs
+ * count as turns, and optimization runs never do.
+ */
+export function listSessionSummaries(db: Db, options: { limit?: number } = {}): SessionSummary[] {
+	const turn = "t.session_id = s.id AND t.parent_run_id IS NULL AND t.optim_run_id IS NULL";
+	const rows = db
+		.prepare(
+			`SELECT s.*,
+	(SELECT t.id FROM runs t WHERE ${turn} ORDER BY t.turn_index DESC, t.started_at DESC, t.id DESC LIMIT 1) AS last_id,
+	(SELECT t.status FROM runs t WHERE ${turn} ORDER BY t.turn_index DESC, t.started_at DESC, t.id DESC LIMIT 1) AS last_status,
+	(SELECT t.started_at FROM runs t WHERE ${turn} ORDER BY t.turn_index DESC, t.started_at DESC, t.id DESC LIMIT 1) AS last_started_at,
+	(SELECT COUNT(*) FROM runs t WHERE ${turn} AND t.status != 'running' AND NOT EXISTS (SELECT 1 FROM feedback f WHERE f.run_id = t.id)) AS unreviewed
+	FROM sessions s ORDER BY s.updated_at DESC, s.id DESC LIMIT ?`,
+		)
+		.all(options.limit ?? 50);
+	return rows.map((row) => {
+		const session = decode(row);
+		return {
+			id: session.id,
+			title: session.title,
+			status: session.status,
+			turns: session.turns,
+			costUsd: session.costUsd,
+			budgetUsd: session.budgetUsd,
+			createdAt: session.createdAt,
+			updatedAt: session.updatedAt,
+			lastTurn: row.last_id === null ? null : { runId: String(row.last_id), status: row.last_status as RunStatus, startedAt: String(row.last_started_at) },
+			unreviewedTurns: Number(row.unreviewed),
+		};
+	});
 }
 
 export function deleteSessionRow(db: Db, id: string): void {

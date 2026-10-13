@@ -187,6 +187,8 @@ export interface RunQuery {
 	rootOnly?: boolean;
 	/** Only the turns of this session. */
 	sessionId?: string;
+	/** true: only one-shot runs, leaving out session turns. */
+	oneShot?: boolean;
 	/** true: runs with at least one score. false: finished runs without scores. */
 	scored?: boolean;
 	/** Only the runs of this optimization. Without it, optimization runs (rollouts, the optimizer) are left out. */
@@ -296,6 +298,7 @@ export function queryRuns(db: Db, query: RunQuery = {}): RunPage {
 		where.push("r.session_id = ?");
 		args.push(query.sessionId);
 	}
+	if (query.oneShot) where.push("r.session_id IS NULL");
 	if (query.optimRunId) {
 		where.push("r.optim_run_id = ?");
 		args.push(query.optimRunId);

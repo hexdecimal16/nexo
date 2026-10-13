@@ -22,6 +22,7 @@ import {
 	playbooksResponse,
 	retireMemoryResponse,
 	retirePlaybookItemResponse,
+	listSessionsResponse,
 	runDetailResponse,
 	serveRunFile,
 	spanResponse,
@@ -72,6 +73,7 @@ const ROUTES = {
 	span: new RegExp(`^/api/runs/${RUN_ID}/spans/${RUN_ID}$`),
 	files: new RegExp(`^/api/runs/${RUN_ID}/files(?:/(.*))?$`),
 	feedback: new RegExp(`^/api/runs/${RUN_ID}/feedback$`),
+	sessions: /^\/api\/sessions$/,
 	costs: /^\/api\/costs$/,
 	calibration: /^\/api\/judge\/calibration$/,
 	memories: /^\/api\/memories$/,
@@ -180,6 +182,10 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 		if (ROUTES.runs.test(path)) {
 			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
 			return sendJson(res, 200, listRunsResponse(ctx, url.searchParams));
+		}
+		if (ROUTES.sessions.test(path)) {
+			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
+			return sendJson(res, 200, listSessionsResponse(ctx, url.searchParams));
 		}
 		if ((m = ROUTES.run.exec(path))) {
 			if (method !== "GET") throw methodNotAllowed(method, path, "GET");

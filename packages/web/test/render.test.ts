@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CostResponse, RunDetailResponse, RunSummary, Span, SpanNode } from "../public/lib/api-types.ts";
+import type { CostResponse, SessionListItem, RunDetailResponse, RunSummary, Span, SpanNode } from "../public/lib/api-types.ts";
 import { renderError, sessionLink, statusBadge } from "../public/lib/common-view.ts";
 import { costQuery, renderCostTable, renderDimensionOptions } from "../public/lib/cost-view.ts";
 import { filePath, parseUnifiedDiff, renderFile, renderListing } from "../public/lib/files-view.ts";
@@ -7,6 +7,7 @@ import { durationMs, formatDuration, formatUsd } from "../public/lib/format.ts";
 import { esc, html } from "../public/lib/html.ts";
 import { createPoller, MAX_POLL_BACKOFF_MS, POLL_MS, pollDelay } from "../public/lib/poller.ts";
 import { renderChildren, renderFeedbackForm, renderRunHeader, shouldPoll } from "../public/lib/run-view.ts";
+import { renderSessionRows } from "../public/lib/sessions-view.ts";
 import { renderRunRows, renderSessionFilter, renderStatusOptions, runsQuery } from "../public/lib/runs-view.ts";
 import { findSpan, renderSpanDetail, renderSpanTree } from "../public/lib/span-view.ts";
 import { renderTimeline, timelineRows } from "../public/lib/timeline.ts";
@@ -112,10 +113,10 @@ describe("runs view", () => {
 	it("builds list queries; the review tab asks for reviewed=false", () => {
 		expect(runsQuery({ tab: "review", status: "", skill: " ", since: "", session: "", scored: "" }, null)).toBe("/api/runs?reviewed=false&limit=50");
 		expect(runsQuery({ tab: "all", status: "failed", skill: "a b", since: "2026-10-01", session: "", scored: "" }, "c&d", 10)).toBe(
-			"/api/runs?status=failed&skill=a+b&since=2026-10-01&limit=10&cursor=c%26d",
+			"/api/runs?oneShot=true&status=failed&skill=a+b&since=2026-10-01&limit=10&cursor=c%26d",
 		);
 		expect(runsQuery({ tab: "all", status: "", skill: "", since: "", session: "s&1", scored: "" }, null)).toBe("/api/runs?session=s%261&limit=50");
-		expect(runsQuery({ tab: "all", status: "", skill: "", since: "", session: "", scored: "false" }, null)).toBe("/api/runs?scored=false&limit=50");
+		expect(runsQuery({ tab: "all", status: "", skill: "", since: "", session: "", scored: "false" }, null)).toBe("/api/runs?oneShot=true&scored=false&limit=50");
 	});
 
 	it("shows the session filter with an escaped title and a link that clears it", () => {
@@ -123,7 +124,10 @@ describe("runs view", () => {
 		expectInert(markup);
 		expect(markup).toContain("s&amp;1");
 		expect(markup).toContain(`href="/"`);
-		expect(renderSessionFilter("", null).value).toBe("");
+		const note = renderSessionFilter("", null).value;
+		expect(note).toContain("Chat turns are listed per session on the <a");
+		expect(note).toContain(">Sessions page</a>");
+		expect(note).toContain(`href="/sessions.html"`);
 		expect(sessionLink("a b")).toBe("/?session=a%20b");
 	});
 
@@ -442,5 +446,44 @@ describe("poller", () => {
 		expect(h.timers.map((t) => t.ms)).toEqual([POLL_MS, 2 * POLL_MS, 4 * POLL_MS, POLL_MS]);
 		expect(h.errors).toHaveLength(2);
 		expect(pollDelay(10)).toBe(MAX_POLL_BACKOFF_MS);
+	});
+});
+
+function sessionItem(overrides: Partial<SessionListItem> = {}): SessionListItem {
+	return {
+		id: "01SESSION",
+		title: "Fix the build",
+		status: "active",
+		turns: 3,
+		costUsd: 0.25,
+		budgetUsd: 5,
+		createdAt: "2026-10-10T09:00:00.000Z",
+		updatedAt: "2026-10-10T10:00:00.000Z",
+		lastTurn: { runId: "01RUN", status: "succeeded", startedAt: "2026-10-10T09:59:00.000Z" },
+		unreviewedTurns: 0,
+		...overrides,
+	};
+}
+
+describe("sessions view", () => {
+	it("escapes hostile titles and ids, and links the title to the session's turns", () => {
+		const markup = renderSessionRows([sessionItem({ id: "a&b", title: XSS })]).value;
+		expectInert(markup);
+		expect(markup).toContain(`href="/?session=a%26b"`);
+		expect(markup).toContain(`href="/run.html?id=01RUN"`);
+	});
+
+	it("shows cost of budget, status, last turn and a highlight only for unreviewed turns", () => {
+		const markup = renderSessionRows([sessionItem({ unreviewedTurns: 2 }), sessionItem({ id: "x", status: "closed", lastTurn: null })]).value;
+		expect(markup).toContain("$0.2500 of $5.00");
+		expect(markup).toContain("closed");
+		const [first, second] = markup.split("</tr>");
+		expect(first).toContain(`class="num warn"`);
+		expect(second).not.toContain("warn");
+		expect(second).toContain("–");
+	});
+
+	it("says so when there are no sessions", () => {
+		expect(renderSessionRows([]).value).toContain("No sessions yet");
 	});
 });
