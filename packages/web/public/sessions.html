@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="nexo-token" content="{{NEXO_TOKEN}}">
+<title>nexo · sessions</title>
+<link rel="stylesheet" href="/style.css">
+<script type="module" src="/pages/sessions.ts"></script>
+</head>
+<body>
+<nav class="top"><a href="/" class="brand">nexo</a><a href="/">Runs</a><a href="/sessions.html">Sessions</a><a href="/cost.html">Cost</a><a href="/learning.html">Learning</a><a href="/judge.html">Judge</a><a href="/optim.html">Optimization</a></nav>
+<main>
+<h1>Sessions</h1>
+<p class="muted">Each chat message is a turn. Open a session to see its turns and review them.</p>
+<div id="error"></div>
+<div class="table-wrap">
+<table class="runs">
+<thead><tr><th>Title</th><th>Status</th><th class="num">Turns</th><th class="num">Cost</th><th class="num">Unreviewed</th><th>Last turn</th><th>Updated (UTC)</th></tr></thead>
+<tbody id="sessions-body"></tbody>
+</table>
+</div>
+</main>
+</body>
+</html>

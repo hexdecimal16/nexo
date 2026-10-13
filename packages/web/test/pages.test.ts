@@ -13,7 +13,7 @@ afterAll(async () => {
 	await server.close();
 });
 
-const PAGES = ["/", "/run.html", "/cost.html", "/judge.html", "/learning.html", "/optim.html"];
+const PAGES = ["/", "/run.html", "/cost.html", "/judge.html", "/learning.html", "/optim.html", "/sessions.html"];
 
 /** Every browser module reachable from the pages, following static `from "./x.ts"` imports. */
 async function reachableModules(): Promise<Map<string, string>> {
@@ -48,10 +48,16 @@ describe("pages", () => {
 		expect((await raw(server.port, "/style.css")).headers["content-type"]).toBe("text/css; charset=utf-8");
 	});
 
+	it("link every page to the Sessions page, and serve it under the page CSP", async () => {
+		for (const page of PAGES) expect((await raw(server.port, page)).text, page).toContain(`<a href="/sessions.html">Sessions</a>`);
+		const res = await raw(server.port, "/sessions.html");
+		expect(res.headers["content-security-policy"]).toContain("script-src 'self'");
+	});
+
 	it("serve browser modules that parse as JavaScript", async () => {
 		const modules = await reachableModules();
 		expect([...modules.keys()].sort()).toEqual(
-			expect.arrayContaining(["/lib/html.ts", "/lib/judge-view.ts", "/lib/learning-view.ts", "/lib/optim-view.ts", "/lib/poller.ts", "/lib/run-view.ts", "/lib/score-view.ts", "/lib/span-view.ts", "/lib/timeline.ts", "/pages/api.ts", "/pages/cost.ts", "/pages/judge.ts", "/pages/learning.ts", "/pages/optim.ts", "/pages/run.ts", "/pages/runs.ts"]),
+			expect.arrayContaining(["/lib/html.ts", "/lib/judge-view.ts", "/lib/learning-view.ts", "/lib/optim-view.ts", "/lib/poller.ts", "/lib/run-view.ts", "/lib/score-view.ts", "/lib/span-view.ts", "/lib/timeline.ts", "/pages/api.ts", "/pages/cost.ts", "/pages/judge.ts", "/pages/learning.ts", "/pages/optim.ts", "/pages/run.ts", "/pages/runs.ts", "/pages/sessions.ts", "/lib/sessions-view.ts"]),
 		);
 		for (const [path, code] of modules) {
 			const check = spawnSync(process.execPath, ["--check", "--input-type=module"], { input: code, encoding: "utf8" });

@@ -11,6 +11,8 @@ import {
 	getSessionRow,
 	insertRun,
 	listSessionRows,
+	listSessionSummaries,
+	recordFeedback,
 	openDb,
 	queryRuns,
 	reindex,
@@ -207,5 +209,57 @@ describe("reindex sessions", () => {
 		expect(getRun(db, "r1")).toMatchObject({ sessionId: "s1", turnIndex: 1 });
 		expect(listSessionRows(db).map((s) => s.id)).toEqual(["s1"]);
 		expect(getSessionRow(db, "s1")?.dirPath).toBe(join(sessionsRoot, "s1"));
+	});
+});
+
+describe("listSessionSummaries", () => {
+	const sessionRow = (id: string, updatedAt: string, overrides: Partial<Parameters<typeof upsertSessionRow>[1]> = {}) => ({
+		id,
+		title: `title ${id}`,
+		cwd: "/w",
+		status: "active" as const,
+		budgetUsd: 5,
+		costUsd: 0.5,
+		turns: 3,
+		createdAt: "2026-10-10T00:00:00.000Z",
+		updatedAt,
+		dirPath: `/tmp/sessions/${id}`,
+		...overrides,
+	});
+
+	it("aggregates the last turn and the unreviewed turns, newest update first", () => {
+		const db = openDb(":memory:");
+		upsertSessionRow(db, sessionRow("old", "2026-10-10T01:00:00.000Z"));
+		upsertSessionRow(db, sessionRow("new", "2026-10-10T02:00:00.000Z", { status: "closed" }));
+		upsertSessionRow(db, sessionRow("empty", "2026-10-10T00:30:00.000Z", { turns: 0 }));
+		const turn = (sessionId: string, turnIndex: number, status: "succeeded" | "running" | "failed", extra = {}) => {
+			const row = runRow({ sessionId, turnIndex, status, startedAt: `2026-10-10T00:0${turnIndex}:00.000Z`, ...extra });
+			insertRun(db, row);
+			return row;
+		};
+		const reviewed = turn("new", 1, "succeeded");
+		turn("new", 2, "failed");
+		const last = turn("new", 3, "running");
+		turn("old", 1, "succeeded");
+		const optimization = turn("old", 2, "succeeded", { optimRunId: "optim1" });
+		recordFeedback(db, { runId: reviewed.id, verdict: "done", comment: "", redact, nowIso: "2026-10-10T03:00:00.000Z" });
+		const list = listSessionSummaries(db);
+		expect(list.map((s) => s.id)).toEqual(["new", "old", "empty"]);
+		expect(list[0]).toMatchObject({ title: "title new", status: "closed", turns: 3, costUsd: 0.5, budgetUsd: 5, unreviewedTurns: 1 });
+		expect(list[0]?.lastTurn).toEqual({ runId: last.id, status: "running", startedAt: last.startedAt });
+		expect(list[1]?.unreviewedTurns).toBe(1);
+		expect(list[1]?.lastTurn?.runId).not.toBe(optimization.id);
+		expect(list[2]).toMatchObject({ unreviewedTurns: 0, lastTurn: null });
+		expect(listSessionSummaries(db, { limit: 1 }).map((s) => s.id)).toEqual(["new"]);
+	});
+
+	it("does not count subagent runs or one-shot runs", () => {
+		const db = openDb(":memory:");
+		upsertSessionRow(db, sessionRow("s", "2026-10-10T01:00:00.000Z"));
+		const root = runRow({ sessionId: "s", turnIndex: 1, status: "succeeded" });
+		insertRun(db, root);
+		insertRun(db, runRow({ parentRunId: root.id, rootRunId: root.id, sessionId: "s", status: "succeeded" }));
+		insertRun(db, runRow({ status: "succeeded" }));
+		expect(listSessionSummaries(db)[0]).toMatchObject({ unreviewedTurns: 1, lastTurn: { runId: root.id } });
 	});
 });

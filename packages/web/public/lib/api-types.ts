@@ -98,6 +98,25 @@ export interface RunListResponse {
 	nextCursor: string | null;
 }
 
+export interface SessionListItem {
+	id: string;
+	title: string;
+	status: "active" | "closed";
+	turns: number;
+	costUsd: number;
+	budgetUsd: number;
+	createdAt: string;
+	updatedAt: string;
+	/** The newest turn; null before the first one is indexed. */
+	lastTurn: { runId: string; status: RunStatus; startedAt: string } | null;
+	/** Finished turns without a human verdict. */
+	unreviewedTurns: number;
+}
+
+export interface SessionListResponse {
+	sessions: SessionListItem[];
+}
+
 export interface ModelInfo {
 	provider: string;
 	id: string;

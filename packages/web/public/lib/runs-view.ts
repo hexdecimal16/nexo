@@ -19,10 +19,14 @@ export interface RunFilters {
 
 export const PAGE_SIZE = 50;
 
-/** API path for one page of the runs list. The review tab asks for finished runs without feedback. */
+/**
+ * API path for one page of the runs list. Without a session filter the list holds one-shot runs only; chat turns are
+ * listed per session. The review tab asks for finished runs without feedback, chat turns included.
+ */
 export function runsQuery(filters: RunFilters, cursor: string | null, limit: number = PAGE_SIZE): string {
 	const params = new URLSearchParams();
 	if (filters.session) params.set("session", filters.session);
+	else if (filters.tab !== "review") params.set("oneShot", "true");
 	if (filters.tab === "review") params.set("reviewed", "false");
 	if (filters.status) params.set("status", filters.status);
 	if (filters.skill.trim()) params.set("skill", filters.skill.trim());
@@ -49,9 +53,9 @@ export function renderRunRows(runs: RunSummary[], nowMs: number): SafeHtml {
 	)}`;
 }
 
-/** The active session filter, with a link back to all runs; empty without one. */
+/** The active session filter, with a link back to all runs; without one, the pointer to the Sessions page. */
 export function renderSessionFilter(sessionId: string, title: string | null): SafeHtml {
-	if (!sessionId) return html``;
+	if (!sessionId) return html`<p class="muted">Chat turns are listed per session on the <a href="/sessions.html">Sessions page</a>.</p>`;
 	return html`<p class="session-filter">Turns of session <a class="mono" href="${sessionLink(sessionId)}">${title || sessionId}</a> <span class="muted mono">${sessionId}</span> · <a href="/">show all runs</a></p>`;
 }
 
