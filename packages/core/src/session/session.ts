@@ -154,6 +154,8 @@ export class Session {
 	private lastModelInfo: RunModelInfo | null = null;
 	private busy = false;
 	private compactRequested = false;
+	/** The latest turn's workspace for `shellDir`, looked up once per turn; undefined until then, null for none. */
+	private latestWorkspace: string | null | undefined;
 	private onEvent: ((event: EngineEvent) => void) | undefined;
 	/** Runs this process's learn jobs in the background after each turn and verdict (spec §8.1). */
 	private learner: LearnWorker;
@@ -201,7 +203,8 @@ export class Session {
 	 */
 	get shellDir(): string {
 		if (this.state.workspace !== null) return this.state.workspace;
-		return latestSessionRunWorkspace(this.deps.db, this.id)?.dir ?? this.state.cwd;
+		this.latestWorkspace ??= latestSessionRunWorkspace(this.deps.db, this.id)?.dir ?? null;
+		return this.latestWorkspace ?? this.state.cwd;
 	}
 	get status(): SessionStatus {
 		return this.state.status;
@@ -319,6 +322,7 @@ export class Session {
 			this.learner.kick();
 			return result;
 		} finally {
+			this.latestWorkspace = undefined;
 			this.onEvent = undefined;
 			this.busy = false;
 		}

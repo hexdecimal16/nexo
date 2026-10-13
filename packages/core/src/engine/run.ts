@@ -540,7 +540,9 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		if (!parent && sharedWorkspace) changeTracker = createChangeTracker(sharedWorkspace, runDir.changesDir, (s) => deps.redact(s));
 		// A session turn continues from the previous turn's files.
 		const from = request.workspaceFrom;
-		if (from && !parent && !sharedWorkspace && !rollout) workspaceFrom = { runId: from.runId, bytes: runDir.copyIntoWorkspace(from.dir) };
+		if (from && !parent && !sharedWorkspace && !rollout) {
+			workspaceFrom = { runId: from.runId, bytes: await runDir.copyIntoWorkspace(from, { signal: input.signal }) };
+		}
 
 		// Snapshot the exact artifacts this run uses.
 		const nowIso = now().toISOString();
@@ -604,15 +606,17 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			optimRunId,
 		});
 	} catch (caught) {
-		logger.error("run setup failed", { error: caught });
+		const setupStatus: RunStatus = input.signal?.aborted ? "aborted" : "failed";
+		if (setupStatus === "aborted") logger.info("run aborted during setup", { error: caught });
+		else logger.error("run setup failed", { error: caught });
 		const payload = deps.redact(toErrorPayload(caught));
 		try {
-			runDir.writeRunJson(runJson("failed", "", payload));
+			runDir.writeRunJson(runJson(setupStatus, "", payload));
 		} catch {}
 		return {
 			trajectoryId: runId,
 			runDir: runDir.root,
-			status: "failed",
+			status: setupStatus,
 			output: "",
 			costUsd: 0,
 			costUnknown: false,

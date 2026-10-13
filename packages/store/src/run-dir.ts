@@ -1,10 +1,11 @@
-import { appendFileSync, constants, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { type ErrorPayload, NexoError, type Redactor } from "@nexo/telemetry";
 import type { HumanVerdict } from "./feedback.ts";
 import type { RunStatus } from "./runs.ts";
 import type { ScoreRow } from "./scores.ts";
 import type { SpanRow } from "./spans.ts";
+import { copyWorkspaceTree, emptyDir, type WorkspaceCopyOptions } from "./workspace-copy.ts";
 
 export interface ResolvedModelInfo {
 	provider: string;
@@ -58,17 +59,6 @@ export interface RunJson {
 	workspaceFrom?: { runId: string; bytes: number };
 }
 
-/** Total size of the regular files under `dir`, not following symlinks. */
-function regularFileBytes(dir: string): number {
-	let total = 0;
-	for (const entry of readdirSync(dir, { withFileTypes: true })) {
-		const path = join(dir, entry.name);
-		if (entry.isDirectory()) total += regularFileBytes(path);
-		else if (entry.isFile()) total += lstatSync(path).size;
-	}
-	return total;
-}
-
 const SUBDIRS = ["artifacts", "context", "workspace", "tool_outputs", "scores", "subagents"] as const;
 
 /** One trajectory's directory (`~/.nexo/runs/{id}` or `.../subagents/{id}`). Every write is redacted. */
@@ -120,26 +110,26 @@ export class RunDir {
 	}
 
 	/**
-	 * Copies `source` into the empty `workspace/` folder and returns the bytes of regular files copied. Files are cloned
-	 * copy-on-write where the file system supports it, else copied; symlinks are copied as links, their targets unchanged.
-	 * Throws STORE_IO when the copy fails.
+	 * Copies a previous turn's workspace (`from.dir`, of run `from.runId`) into the empty `workspace/` folder and returns
+	 * the bytes of regular files copied (see `copyWorkspaceTree`: a clone on macOS APFS and on Linux file systems with
+	 * reflinks, a plain copy otherwise; symlinks copied as links). On failure or abort the folder is emptied again; a
+	 * failure throws STORE_IO naming the source, an abort INTERNAL.
 	 */
-	copyIntoWorkspace(source: string): number {
+	async copyIntoWorkspace(from: { runId: string; dir: string }, options: WorkspaceCopyOptions = {}): Promise<number> {
 		try {
-			cpSync(source, this.workspaceDir, {
-				recursive: true,
-				mode: constants.COPYFILE_FICLONE,
-				dereference: false,
-				verbatimSymlinks: true,
-				preserveTimestamps: true,
-			});
-			return regularFileBytes(this.workspaceDir);
+			return await copyWorkspaceTree(from.dir, this.workspaceDir, options);
 		} catch (cause) {
+			try {
+				await emptyDir(this.workspaceDir);
+			} catch {}
+			if (options.signal?.aborted) {
+				throw new NexoError({ code: "INTERNAL", message: `The copy of run ${from.runId}'s workspace was aborted`, context: { source: from.dir }, cause });
+			}
 			throw new NexoError({
 				code: "STORE_IO",
-				message: `Cannot copy the workspace ${source} into ${this.workspaceDir}`,
-				hint: "Check that the previous turn's workspace is readable and the disk has space",
-				context: { source, workspace: this.workspaceDir },
+				message: `Cannot copy the workspace of the previous turn (run ${from.runId}, ${from.dir}) into ${this.workspaceDir}`,
+				hint: `Check that ${from.dir} is readable and the disk has space; remove that folder to start the next turn from the turn before it (or empty)`,
+				context: { sourceRunId: from.runId, source: from.dir, workspace: this.workspaceDir },
 				cause,
 			});
 		}
