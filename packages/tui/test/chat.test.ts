@@ -85,7 +85,7 @@ describe("chat screen", () => {
 	});
 
 	it("expands every tool line to its full arguments and output on ctrl+o", async () => {
-		const h = await startHarness();
+		const h = await startHarness({ workspace: "." });
 		const { writeFileSync } = await import("node:fs");
 		const name = `${"long-name-".repeat(10)}END.txt`;
 		writeFileSync(`${h.cwd}/${name}`, Array.from({ length: 10 }, (_, i) => `row ${i + 1}`).join("\n"));
@@ -105,7 +105,7 @@ describe("chat screen", () => {
 	});
 
 	it("toggles on a kitty ctrl+o press and ignores its release", async () => {
-		const h = await startHarness();
+		const h = await startHarness({ workspace: "." });
 		const { writeFileSync } = await import("node:fs");
 		writeFileSync(`${h.cwd}/rows.txt`, Array.from({ length: 10 }, (_, i) => `row ${i + 1}`).join("\n"));
 		h.faux.setResponses([fauxAssistantMessage([fauxToolCall("read", { path: "rows.txt" })]), fauxAssistantMessage("read it")]);
