@@ -160,7 +160,11 @@ describe("end-of-run continuation outcomes", () => {
 			depth: 0,
 			trigger: "verify_fail",
 			error: { code: result.continuationError?.code, message: expect.stringContaining("invalid request 400") },
+			model: "faux/fast",
+			effort: expect.any(String),
 		});
+		expect(events.find((e) => e.type === "escalation")).toMatchObject({ applied: true, model: "faux/slow", effort: expect.any(String) });
+		expect(events.find((e) => e.type === "run_start")).toMatchObject({ depth: 0, model: "faux/fast", effort: expect.any(String) });
 		expect(result.scores).toEqual([expect.objectContaining({ round: 0, passed: false })]);
 		expect(rowsOf(env, result.trajectoryId as string)).toEqual([[0, false]]);
 		const span = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.kind === "escalation");

@@ -163,6 +163,8 @@ class InteractiveApp {
 	private loader: Loader | null = null;
 	private lastCtrlC = Number.NEGATIVE_INFINITY;
 	private defaultModel = "";
+	/** Model and effort of the running turn's root run, from its run_start and escalation events; null between turns. */
+	private liveModel: { model: string; effort: string } | null = null;
 	private defaultEffort = "";
 
 	private exiting = false;
@@ -352,9 +354,11 @@ class InteractiveApp {
 		const session = this.session;
 		if (!session) return style.gray(this.screen === "settings" ? "nexo · setup" : "nexo · opening…");
 		if (this.shellMode()) return shellBorder(`! shell mode · output goes to the model with your next message · ${escapeControl(session.shellDir)}`);
+		// During a turn: the model the root run is on now (its start model, then S2 once an escalation applies).
+		const live = this.running ? this.liveModel : null;
 		const last = session.lastModel;
-		const model = session.model ?? (last ? `${last.provider}/${last.id}` : this.defaultModel || "model ?");
-		const effort = session.effort ?? last?.effort ?? (this.defaultEffort || "default effort");
+		const model = live?.model ?? session.modelOverride ?? (last ? `${last.provider}/${last.id}` : this.defaultModel || "model ?");
+		const effort = live?.effort ?? session.effort ?? last?.effort ?? (this.defaultEffort || "default effort");
 		const turn = this.running ? this.turnCost : this.lastTurnCost;
 		const spent = session.costUsd + (this.running ? this.turnCost : 0);
 		const fraction = session.contextFraction;
@@ -462,6 +466,7 @@ class InteractiveApp {
 			this.sayError(toErrorPayload(error));
 		} finally {
 			this.running = false;
+			this.liveModel = null;
 			this.turnAbort = null;
 			this.stopTicker();
 			for (const line of this.tools.values()) line.interrupt();
@@ -532,7 +537,10 @@ class InteractiveApp {
 				break;
 			}
 			case "run_start": {
-				if (event.depth === 0) return;
+				if (event.depth === 0) {
+					this.liveModel = { model: event.model, effort: event.effort };
+					return;
+				}
 				const line = new SubagentLine(escapeControl(oneLine(event.instruction, 70)), event.depth, this.ticker);
 				this.subagents.set(event.runId, line);
 				this.chat.addChild(line);
@@ -550,6 +558,7 @@ class InteractiveApp {
 			case "escalation": {
 				if (event.depth !== 0) return;
 				this.currentText = null;
+				if (event.applied) this.liveModel = { model: event.model, effort: event.effort };
 				const why = `${event.trigger}: ${escapeControl(oneLine(event.reason, 120))}`;
 				this.chat.addChild(
 					event.applied
@@ -561,6 +570,7 @@ class InteractiveApp {
 			case "escalation_failed": {
 				if (event.depth !== 0) return;
 				this.currentText = null;
+				this.liveModel = { model: event.model, effort: event.effort };
 				const error = `[${escapeControl(oneLine(event.error.code, 40))}] ${escapeControl(oneLine(event.error.message, 120))}`;
 				this.chat.addChild(new Block(`✗ s2 continuation failed ${error}; kept the previous answer`, style.red, "  "));
 				break;
