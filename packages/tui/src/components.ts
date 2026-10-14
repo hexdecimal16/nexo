@@ -1,5 +1,5 @@
 import { type Component, Container, CURSOR_MARKER, type Focusable, Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { duration, previewLines, usd } from "./text.ts";
+import { duration, previewLines, resultLines, usd } from "./text.ts";
 import { style } from "./theme.ts";
 
 export const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -74,21 +74,32 @@ export class Block implements Component {
 
 type LineState = "running" | "ok" | "error";
 
-/** `● tool(args)` with a spinner while running, then `✓`/`✗`, duration and a short result preview. */
+/** Whether tool lines show their full arguments and output (ctrl+o); shared by every line in the chat. */
+export class ViewMode {
+	verbose = false;
+}
+
+/** `● tool(args)` with a spinner while running, then `✓`/`✗`, duration and a short result preview, or everything when verbose. */
 export class ToolLine implements Component {
 	private state: LineState = "running";
 	private durationMs = 0;
 	private preview: string[] = [];
+	private output: string[] = [];
 	private readonly summary: string;
+	private readonly fullSummary: string;
 	private readonly ticker: Ticker;
-	constructor(summary: string, ticker: Ticker) {
+	private readonly view: ViewMode;
+	constructor(summary: string, fullSummary: string, ticker: Ticker, view: ViewMode) {
 		this.summary = summary;
+		this.fullSummary = fullSummary;
 		this.ticker = ticker;
+		this.view = view;
 	}
-	finish(isError: boolean, durationMs: number, preview: string): void {
+	finish(isError: boolean, durationMs: number, output: string): void {
 		this.state = isError ? "error" : "ok";
 		this.durationMs = durationMs;
-		this.preview = previewLines(preview);
+		this.preview = previewLines(output);
+		this.output = resultLines(output);
 	}
 	/** Marks a line still running when its turn ended (aborted or failed). */
 	interrupt(): void {
@@ -97,9 +108,21 @@ export class ToolLine implements Component {
 	render(width: number): string[] {
 		const mark = this.state === "running" ? style.cyan(this.ticker.spinner) : this.state === "ok" ? style.green("✓") : style.red("✗");
 		const tail = this.state === "running" ? "" : style.gray(` ${duration(this.durationMs)}`);
-		const lines = ["", truncateToWidth(`${mark} ${style.bold(this.summary)}${tail}`, width)];
-		this.preview.forEach((line, i) => {
-			lines.push(truncateToWidth(style.gray(`${i === 0 ? "  ⎿ " : "    "}${line}`), width));
+		if (!this.view.verbose) {
+			const lines = ["", truncateToWidth(`${mark} ${style.bold(this.summary)}${tail}`, width)];
+			this.preview.forEach((line, i) => {
+				lines.push(truncateToWidth(style.gray(`${i === 0 ? "  ⎿ " : "    "}${line}`), width));
+			});
+			return lines;
+		}
+		const lines = [""];
+		wrapTextWithAnsi(`${style.bold(this.fullSummary)}${tail}`, Math.max(1, width - 2)).forEach((w, i) => {
+			lines.push(truncateToWidth(`${i === 0 ? `${mark} ` : "  "}${w}`, width));
+		});
+		this.output.forEach((line, i) => {
+			wrapTextWithAnsi(line, Math.max(1, width - 4)).forEach((w, j) => {
+				lines.push(truncateToWidth(style.gray(`${i === 0 && j === 0 ? "  ⎿ " : "    "}${w}`), width));
+			});
 		});
 		return lines;
 	}

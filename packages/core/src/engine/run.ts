@@ -112,7 +112,7 @@ export interface EngineDeps {
 	mcp?: McpHub;
 }
 
-/** Longest tool result text carried by a `tool_end` event. */
+/** Longest tool result text carried by a `tool_end` preview (`output` carries all of it). */
 export const TOOL_END_PREVIEW_CHARS = 2_000;
 
 /**
@@ -122,7 +122,7 @@ export type EngineEvent =
 	| { type: "run_start"; runId: string; parentRunId: string | null; instruction: string; depth: number }
 	| { type: "text_delta"; runId: string; depth: number; delta: string }
 	| { type: "tool_start"; runId: string; depth: number; toolName: string; toolCallId: string; args: unknown }
-	| { type: "tool_end"; runId: string; depth: number; toolName: string; toolCallId: string; isError: boolean; durationMs: number; preview: string }
+	| { type: "tool_end"; runId: string; depth: number; toolName: string; toolCallId: string; isError: boolean; durationMs: number; preview: string; output: string }
 	| { type: "llm_end"; runId: string; depth: number; costUsd: number; costUnknown: boolean; tokensIn: number; tokensOut: number }
 	| { type: "compaction_start"; runId: string; depth: number }
 	| { type: "compaction_end"; runId: string; depth: number; ok: boolean; costUsd: number }
@@ -1014,6 +1014,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				}
 				case "tool_execution_end": {
 					const text = contentText((event.result as { content?: unknown } | undefined)?.content);
+					const output = deps.redact(text);
 					deps.onEvent?.({
 						type: "tool_end",
 						runId,
@@ -1022,7 +1023,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 						toolCallId: event.toolCallId,
 						isError: event.isError,
 						durationMs: event.durationMs ?? 0,
-						preview: deps.redact(text).slice(0, TOOL_END_PREVIEW_CHARS),
+						preview: output.slice(0, TOOL_END_PREVIEW_CHARS),
+						output,
 					});
 					const spanId = toolSpans.get(event.toolCallId);
 					if (spanId) {
@@ -1030,7 +1032,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 						recorder.finish(spanId, {
 							status: event.isError ? "error" : "ok",
 							payloadRef,
-							attrs: { durationMs: event.durationMs, result: payloadRef ? undefined : deps.redact(text) },
+							attrs: { durationMs: event.durationMs, result: payloadRef ? undefined : output },
 						});
 					}
 					const failures = monitor.toolResult(event.isError);

@@ -80,15 +80,17 @@ describe("engine history and session links", () => {
 
 	it("redacts a tool_end preview before cutting it", async () => {
 		const workspace = mkdtempSync(join(tmpdir(), "nexo-ws-"));
-		writeFileSync(join(workspace, "big.txt"), `${"a".repeat(1990)}sk-ant-abcdefghijklmnopqrstuvwxyz0123`);
+		writeFileSync(join(workspace, "big.txt"), `${"a".repeat(1990)}sk-ant-abcdefghijklmnopqrstuvwxyz0123 ${"b".repeat(100)}`);
 		const env = makeEnv();
 		const events: EngineEvent[] = [];
 		env.deps.onEvent = (e) => events.push(e);
 		env.faux.setResponses([fauxAssistantMessage([fauxToolCall("read", { path: "big.txt" })]), fauxAssistantMessage("read")]);
 		await createEngine(env.deps).run({ instruction: "read big", workspace });
-		const end = events.find((e) => e.type === "tool_end") as { preview: string };
+		const end = events.find((e) => e.type === "tool_end") as { preview: string; output: string };
 		expect(end.preview).not.toContain("sk-ant");
 		expect(end.preview.length).toBeLessThanOrEqual(2000);
+		expect(end.output).not.toContain("sk-ant");
+		expect(end.output).toContain("b".repeat(100));
 	});
 
 	it("lets prepareHistory replace the history using a compaction span charged to the run", async () => {
