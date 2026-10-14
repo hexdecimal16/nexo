@@ -9,7 +9,7 @@ import type {
 	SpanTreeResponse,
 } from "../lib/api-types.ts";
 import { renderError } from "../lib/common-view.ts";
-import { filePath, renderFile, renderListing } from "../lib/files-view.ts";
+import { filePath, mediaKind, renderFile, renderListing, renderMedia } from "../lib/files-view.ts";
 import { html, type SafeHtml } from "../lib/html.ts";
 import { createPoller } from "../lib/poller.ts";
 import { renderChildren, renderFeedbackForm, renderRunHeader, shouldPoll } from "../lib/run-view.ts";
@@ -106,6 +106,13 @@ async function loadDir(path: string): Promise<void> {
 }
 
 async function loadFile(fileRunId: string, path: string, full = false): Promise<void> {
+	const kind = mediaKind(path);
+	if (kind) {
+		fileView.innerHTML = renderMedia(path, kind, filePath(fileRunId, path)).value;
+		fileView.dataset.run = fileRunId;
+		fileView.scrollIntoView({ block: "nearest" });
+		return;
+	}
 	try {
 		const { text, truncatedSize } = await getText(filePath(fileRunId, path, full));
 		fileView.innerHTML = renderFile(path, text, truncatedSize).value;

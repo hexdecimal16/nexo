@@ -201,7 +201,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 		}
 		if ((m = ROUTES.files.exec(path))) {
 			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
-			return serveRunFile(ctx, res, m[1] as string, decodePath(m[2] ?? ""), url.searchParams.get("full") === "1");
+			return serveRunFile(ctx, res, m[1] as string, decodePath(m[2] ?? ""), url.searchParams.get("full") === "1", req.headers.range);
 		}
 		if ((m = ROUTES.feedback.exec(path))) {
 			if (method !== "POST") throw methodNotAllowed(method, path, "POST");

@@ -1,6 +1,6 @@
 import { closeSync, constants, createReadStream, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readSync, type Stats, statSync } from "node:fs";
 import type { ServerResponse } from "node:http";
-import { join, relative, sep } from "node:path";
+import { extname, join, relative, sep } from "node:path";
 import {
 	agreementStats,
 	approveOptimRun,
@@ -262,6 +262,50 @@ export function costResponse(ctx: ApiContext, params: URLSearchParams): CostResp
 	return costReport(ctx.db, { by: optional(params, "by") ?? "day", since: optional(params, "since"), now: ctx.now() });
 }
 
+/**
+ * Media types served under their own content type so the run page can play or show them. Only formats that cannot run
+ * script are listed: HTML, SVG and everything else stay `text/plain` or `application/octet-stream`.
+ */
+const MEDIA_TYPES: Record<string, string> = {
+	".mp4": "video/mp4",
+	".m4v": "video/mp4",
+	".webm": "video/webm",
+	".mov": "video/quicktime",
+	".mp3": "audio/mpeg",
+	".m4a": "audio/mp4",
+	".wav": "audio/wav",
+	".ogg": "audio/ogg",
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".gif": "image/gif",
+	".webp": "image/webp",
+};
+
+export function mediaType(path: string): string | undefined {
+	return MEDIA_TYPES[extname(path).toLowerCase()];
+}
+
+/**
+ * Parses a single-range `Range` header against a file of `size` bytes. Returns null for no header or a multi-range
+ * request (served whole), the inclusive byte span for a satisfiable range, or "unsatisfiable".
+ */
+export function parseRange(header: string | undefined, size: number): { start: number; end: number } | "unsatisfiable" | null {
+	if (header === undefined) return null;
+	const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+	if (!m) return /^bytes=[\d\s,-]+$/.test(header.trim()) && header.includes(",") ? null : "unsatisfiable";
+	const [, first, last] = m as unknown as [string, string, string];
+	if (first === "") {
+		const suffix = Number(last);
+		if (last === "" || suffix === 0 || size === 0) return "unsatisfiable";
+		return { start: Math.max(0, size - suffix), end: size - 1 };
+	}
+	const start = Number(first);
+	const end = last === "" ? size - 1 : Math.min(Number(last), size - 1);
+	if (start >= size || (last !== "" && Number(last) < start)) return "unsatisfiable";
+	return { start, end };
+}
+
 function looksBinary(sample: Buffer): boolean {
 	return sample.includes(0);
 }
@@ -273,13 +317,13 @@ function entryKind(stat: Stats): FileEntry["kind"] {
 }
 
 /**
- * Streams the first `length` bytes of an open regular file into a response whose status line and content-length are
- * already sent. A read error or a short read (the file shrank) destroys the connection, so the client sees a failed
+ * Streams `length` bytes from offset `start` of an open regular file into a response whose status line and
+ * content-length are already sent. A read error or a short read (the file shrank) destroys the connection, so the client sees a failed
  * download instead of hanging on a body that never completes; neither can crash the server.
  */
-export function pipeFileRange(res: ServerResponse, fd: number, length: number): void {
+export function pipeFileRange(res: ServerResponse, fd: number, length: number, start = 0): void {
 	let sent = 0;
-	const stream = createReadStream("", { fd, start: 0, end: length - 1, autoClose: true });
+	const stream = createReadStream("", { fd, start, end: start + length - 1, autoClose: true });
 	stream.on("data", (chunk) => {
 		sent += chunk.length;
 	});
@@ -294,10 +338,11 @@ export function pipeFileRange(res: ServerResponse, fd: number, length: number): 
  * Serves a file or a directory listing from a run directory. Paths go through `resolveConfined`, so `..` and
  * symlinks cannot leave the run directory. Listings use lstat: a symlink is reported as `symlink` without following it.
  * Only regular files are served (a FIFO or device would block the server); the file is opened non-blocking and checked
- * with fstat, so it cannot be swapped between the check and the read. File bodies are always `text/plain` or
- * `application/octet-stream` with a sandbox CSP, so agent-written HTML never renders as a page.
+ * with fstat, so it cannot be swapped between the check and the read. Media files (`mediaType`) are served whole under
+ * their own type with byte-range support so video can seek; every other body is `text/plain` or
+ * `application/octet-stream` with a sandbox CSP, so agent-written HTML or SVG never renders as a page.
  */
-export function serveRunFile(ctx: ApiContext, res: ServerResponse, id: string, relPath: string, full: boolean): void {
+export function serveRunFile(ctx: ApiContext, res: ServerResponse, id: string, relPath: string, full: boolean, range?: string): void {
 	const run = requireRun(ctx.db, id);
 	if (!existsSync(run.dirPath)) {
 		throw new NexoError({
@@ -375,6 +420,11 @@ export function serveRunFile(ctx: ApiContext, res: ServerResponse, id: string, r
 		closeSync(fd);
 		throw error;
 	}
+	const media = mediaType(target);
+	if (media !== undefined) {
+		serveMedia(res, fd, size, media, range);
+		return;
+	}
 	const truncated = !full && size > MAX_FILE_PREVIEW_BYTES;
 	// The byte count is fixed when the file is opened: a file still being appended to (trajectory.jsonl of a live run)
 	// is served up to that length, which keeps content-length correct.
@@ -393,6 +443,32 @@ export function serveRunFile(ctx: ApiContext, res: ServerResponse, id: string, r
 		return;
 	}
 	pipeFileRange(res, fd, length);
+}
+
+/**
+ * Media bodies cannot run script, so they skip `sandbox`: a sandboxed media document has an opaque origin, and the
+ * same-origin resource policy would then block it from loading its own file when opened in a tab.
+ */
+const MEDIA_CSP = "default-src 'none'; media-src 'self'; img-src 'self'";
+
+function serveMedia(res: ServerResponse, fd: number, size: number, type: string, rangeHeader: string | undefined): void {
+	const base = { ...SECURITY_HEADERS, "content-type": type, "content-security-policy": MEDIA_CSP, "cache-control": "no-store", "accept-ranges": "bytes" };
+	const range = parseRange(rangeHeader, size);
+	if (range === "unsatisfiable") {
+		closeSync(fd);
+		res.writeHead(416, { ...base, "content-range": `bytes */${size}`, "content-length": 0 });
+		res.end();
+		return;
+	}
+	const start = range?.start ?? 0;
+	const length = range ? range.end - range.start + 1 : size;
+	res.writeHead(range ? 206 : 200, { ...base, "content-length": length, ...(range ? { "content-range": `bytes ${range.start}-${range.end}/${size}` } : {}) });
+	if (length === 0) {
+		closeSync(fd);
+		res.end();
+		return;
+	}
+	pipeFileRange(res, fd, length, start);
 }
 
 function intParam(params: URLSearchParams, name: string, fallback: number): number {

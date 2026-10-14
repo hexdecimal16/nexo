@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CostResponse, SessionListItem, RunDetailResponse, RunSummary, Span, SpanNode } from "../public/lib/api-types.ts";
 import { renderError, sessionLink, statusBadge } from "../public/lib/common-view.ts";
 import { costQuery, renderCostTable, renderDimensionOptions } from "../public/lib/cost-view.ts";
-import { filePath, parseUnifiedDiff, renderFile, renderListing } from "../public/lib/files-view.ts";
+import { filePath, mediaKind, parseUnifiedDiff, renderFile, renderListing, renderMedia } from "../public/lib/files-view.ts";
 import { durationMs, formatDuration, formatUsd } from "../public/lib/format.ts";
 import { esc, html } from "../public/lib/html.ts";
 import { createPoller, MAX_POLL_BACKOFF_MS, POLL_MS, pollDelay } from "../public/lib/poller.ts";
@@ -297,6 +297,27 @@ describe("files view", () => {
 		const file = renderFile("notes.html", XSS, 5 * 1024 * 1024).value;
 		expectInert(file);
 		expect(file).toContain("first 1 MB of 5.0 MB");
+	});
+
+	it("classifies media files by extension and leaves everything else to the text view", () => {
+		expect(mediaKind("workspace/clip.MP4")).toBe("video");
+		expect(mediaKind("a/b.webm")).toBe("video");
+		expect(mediaKind("song.mp3")).toBe("audio");
+		expect(mediaKind("pic.jpeg")).toBe("image");
+		for (const path of ["x.svg", "x.html", "notes.txt", "mp4", "dir.mp4/file", "run.json"]) expect(mediaKind(path), path).toBeNull();
+	});
+
+	it("renders players and images with escaped names and sources", () => {
+		const src = filePath("r1", `workspace/${XSS}.mp4`);
+		const video = renderMedia(`workspace/${XSS}.mp4`, "video", src).value;
+		expectInert(video);
+		expect(video).toContain(`<video class="media" controls preload="metadata" src="/api/runs/r1/files/workspace/`);
+		expect(video).toContain(`rel="noopener noreferrer"`);
+		expect(renderMedia("a.mp3", "audio", "/x").value).toContain(`<audio class="media" controls`);
+		const img = renderMedia(`"${XSS}.png`, "image", "/x").value;
+		expect(img.match(/<img/g)).toHaveLength(1);
+		expect(img).not.toContain("<script");
+		expect(img).toContain(`<img class="media" alt="&quot;&lt;img src=x onerror=&quot;alert(1)&quot;&gt;`);
 	});
 });
 

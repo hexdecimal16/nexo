@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { request } from "node:http";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { insertRun, insertSpan, latestFeedback, listFeedback } from "@nexo/store";
@@ -23,7 +24,21 @@ afterAll(async () => {
 	rmSync(fx.home, { recursive: true, force: true });
 });
 
-const get = (path: string) => raw(server.port, path);
+const get = (path: string, headers?: Record<string, string>) => raw(server.port, path, { headers });
+
+/** A GET whose body is kept as bytes, for binary media responses. */
+function rawBytes(path: string, headers: Record<string, string>): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: Buffer }> {
+	return new Promise((resolve, reject) => {
+		const req = request({ host: "127.0.0.1", port: server.port, path, headers }, (res) => {
+			const chunks: Buffer[] = [];
+			res.on("data", (c: Buffer) => chunks.push(c));
+			res.on("error", reject);
+			res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks) }));
+		});
+		req.on("error", reject);
+		req.end();
+	});
+}
 const post = (path: string, body: unknown, token: string | null = server.token) =>
 	raw(server.port, path, {
 		method: "POST",
@@ -192,6 +207,59 @@ describe("GET /api/runs/{id}/files/{path}", () => {
 		expect(res.headers["content-type"]).toBe("text/plain; charset=utf-8");
 		expect(res.headers["content-security-policy"]).toContain("sandbox");
 		expect(res.text).toBe(XSS);
+	});
+
+	it("serves media files with their own type, untruncated, with byte ranges", async () => {
+		const bytes = Buffer.alloc(MAX_FILE_PREVIEW_BYTES + 4096);
+		for (let i = 0; i < bytes.length; i++) bytes[i] = i % 251;
+		writeFileSync(join(fx.root.dirPath, "workspace", "clip.MP4"), bytes);
+		writeFileSync(join(fx.root.dirPath, "workspace", "pic.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0]));
+		const path = `/api/runs/${fx.root.id}/files/workspace/clip.MP4`;
+
+		const whole = await rawBytes(path, {});
+		expect(whole.status).toBe(200);
+		expect(whole.headers["content-type"]).toBe("video/mp4");
+		expect(whole.headers["accept-ranges"]).toBe("bytes");
+		expect(whole.body).toEqual(bytes);
+		expect(whole.headers["x-nexo-truncated"]).toBeUndefined();
+		expect(whole.headers["x-content-type-options"]).toBe("nosniff");
+		expect(whole.headers["content-security-policy"]).toBe("default-src 'none'; media-src 'self'; img-src 'self'");
+
+		const mid = await rawBytes(path, { range: "bytes=10-19" });
+		expect(mid.status).toBe(206);
+		expect(mid.headers["content-range"]).toBe(`bytes 10-19/${bytes.length}`);
+		expect(mid.body).toEqual(bytes.subarray(10, 20));
+		const open = await rawBytes(path, { range: `bytes=${bytes.length - 5}-` });
+		expect(open.status).toBe(206);
+		expect(open.body).toEqual(bytes.subarray(bytes.length - 5));
+		const suffix = await rawBytes(path, { range: "bytes=-3" });
+		expect(suffix.headers["content-range"]).toBe(`bytes ${bytes.length - 3}-${bytes.length - 1}/${bytes.length}`);
+		expect(suffix.body).toEqual(bytes.subarray(bytes.length - 3));
+		const clamped = await rawBytes(path, { range: `bytes=${bytes.length - 2}-${bytes.length + 100}` });
+		expect(clamped.status).toBe(206);
+		expect(clamped.body).toEqual(bytes.subarray(bytes.length - 2));
+
+		for (const range of [`bytes=${bytes.length}-`, "bytes=20-10", "bytes=-0", "items=0-1", "bytes=x-y"]) {
+			const res = await get(path, { range });
+			expect(res.status, range).toBe(416);
+			expect(res.headers["content-range"], range).toBe(`bytes */${bytes.length}`);
+		}
+		const multi = await rawBytes(path, { range: "bytes=0-1,5-6" });
+		expect(multi.status).toBe(200);
+		expect(multi.body.length).toBe(bytes.length);
+
+		const png = await get(`/api/runs/${fx.root.id}/files/workspace/pic.png`);
+		expect(png.headers["content-type"]).toBe("image/png");
+	});
+
+	it("keeps HTML and SVG as non-rendering text even with byte ranges", async () => {
+		writeFileSync(join(fx.root.dirPath, "workspace", "evil.svg"), `<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`);
+		const svg = await get(`/api/runs/${fx.root.id}/files/workspace/evil.svg`);
+		expect(svg.headers["content-type"]).toBe("text/plain; charset=utf-8");
+		const html = await get(`/api/runs/${fx.root.id}/files/changes/after/x.html`, { range: "bytes=0-3" });
+		expect(html.status).toBe(200);
+		expect(html.headers["content-type"]).toBe("text/plain; charset=utf-8");
+		expect(html.text).toBe(XSS);
 	});
 
 	it("truncates files over 1 MiB unless full=1", async () => {
