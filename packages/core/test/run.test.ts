@@ -112,6 +112,15 @@ describe("engine run", () => {
 		expect(result).toMatchObject({ status: "budget_exceeded", trajectoryId: null, error: { code: "BUDGET_EXCEEDED" } });
 	});
 
+	it("caps a one-shot run at what is left of the daily budget and says so when it runs out", async () => {
+		const env = makeEnv({ config: { budgets: { perRunUsd: 1, dailyUsd: 0.3 } } });
+		env.faux.setResponses([fauxAssistantMessage("never sent")]);
+		const result = await createEngine(env.deps).run({ instruction: "expensive", model: "faux/pricey" });
+		expect(result.status).toBe("budget_exceeded");
+		expect(result.error?.message).toBe("Run budget of $0.30 is not enough to continue ($0.0000 spent; capped by what is left of the daily budget)");
+		expect(result.error?.hint).toContain("budgets.dailyUsd");
+	});
+
 	it("retries retryable provider errors and succeeds", async () => {
 		const env = makeEnv();
 		env.faux.setResponses([

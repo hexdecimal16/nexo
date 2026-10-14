@@ -450,6 +450,7 @@ class InteractiveApp {
 	// Turns
 
 	private async runTurn(session: Session, text: string): Promise<void> {
+		if (session.continuesOnS2) this.say("continuing on s2 — the previous turn stopped on it before finishing");
 		const abort = new AbortController();
 		this.turnAbort = abort;
 		this.running = true;

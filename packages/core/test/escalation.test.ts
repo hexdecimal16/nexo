@@ -174,9 +174,29 @@ describe("end-of-run continuation outcomes", () => {
 		expect(result.model).toMatchObject({ provider: "faux", id: "fast" });
 	});
 
-	it("keeps the scored answer when the S2 continuation exceeds the run budget", async () => {
+	it("suppresses an escalation the remaining budget cannot afford two S2 requests of", async () => {
 		const env = judgeEnv({ config: { ...contains, pricingOverrides: { "faux/slow": { input: 1_000_000_000, output: 1_000_000_000 } } } });
+		const events: EngineEvent[] = [];
+		env.deps.onEvent = (e) => events.push(e);
 		route(env, [fauxAssistantMessage("not yet"), fauxAssistantMessage("never sent")]);
+		const result = await createEngine(env.deps).run({ instruction: "Finish", budgetUsd: 1 });
+		expect(result).toMatchObject({ status: "succeeded", output: "not yet", escalations: 0 });
+		expect(result.continuationError).toBeUndefined();
+		expect(events.find((e) => e.type === "escalation")).toMatchObject({ applied: false, blockedBy: "budget_headroom", model: "faux/fast" });
+		const span = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.kind === "escalation");
+		expect(span?.attrs).toMatchObject({ applied: false, blockedBy: "budget_headroom", blockedReason: expect.stringContaining("2 S2 requests") });
+	});
+
+	it("keeps the scored answer when the S2 continuation spends past the run budget", async () => {
+		// The pre-call estimate (one output token) passes the headroom check; the actual reply costs more than the budget.
+		const env = judgeEnv({
+			config: { ...contains, budgets: { estimateOutputTokens: 1 }, pricingOverrides: { "faux/slow": { input: 0, output: 100_000 } } },
+		});
+		route(env, [
+			fauxAssistantMessage("not yet"),
+			fauxAssistantMessage([fauxText("working ".repeat(40)), fauxToolCall("write", { path: "a.txt", content: "x" })]),
+			fauxAssistantMessage("never sent"),
+		]);
 		const result = await createEngine(env.deps).run({ instruction: "Finish", budgetUsd: 1 });
 		expect(result).toMatchObject({ status: "succeeded", output: "not yet", escalations: 1 });
 		expect(result.error).toBeUndefined();

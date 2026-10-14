@@ -97,6 +97,33 @@ describe("scores and escalations in the chat", () => {
 		await h.done;
 	});
 
+	it("continues on S2 after a turn stopped on S2 unfinished, and says so", async () => {
+		const h = await startHarness({
+			overrides: {
+				...FAUX_ROLES,
+				budgets: { perRunUsd: 1, perSessionUsd: 10, estimateOutputTokens: 1 },
+				pricingOverrides: { "faux/slow": { input: 0, output: 100_000 } },
+				scoring: { scorers: [{ kind: "contains", name: "says-done", text: "DONE" }] },
+			},
+		});
+		let release: () => void = () => {};
+		h.faux.setResponses([
+			fauxAssistantMessage("not yet"),
+			fauxAssistantMessage([fauxToolCall("write", { path: "a.txt", content: "x" })]),
+			() => new Promise((resolve) => (release = () => resolve(fauxAssistantMessage("DONE")))),
+		]);
+		submit(h.terminal, "finish it");
+		await until(() => expect(h.terminal.output()).toContain("s2 continuation failed"));
+		await until(() => !h.session().running);
+		submit(h.terminal, "please continue");
+		await until(() => expect(h.terminal.output()).toContain("continuing on s2 — the previous turn stopped on it"));
+		await until(() => expect(footer(h.terminal.output())).toMatch(/^faux\/slow · .*running…$/));
+		release();
+		await until(() => !h.session().running);
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
 	it("summarizes a turn's scores for the footer", () => {
 		expect(scoreSummary({})).toBeNull();
 		expect(scoreSummary({ scores: [scoreRow("r", { value: 0.5 }), scoreRow("r", { value: 1 })] })).toBe("score 0.75 ✓");

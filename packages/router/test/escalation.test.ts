@@ -88,6 +88,9 @@ describe("escalationBlock", () => {
 		expect(escalationBlock(open)).toBeNull();
 		expect(escalationBlock({ ...open, spentFraction: 0.8 })).toBeNull();
 		expect(escalationBlock({ ...open, spentFraction: 0.81 })).toBe("budget_cutoff");
+		expect(escalationBlock({ ...open, s2CallsAffordable: 2 })).toBeNull();
+		expect(escalationBlock({ ...open, s2CallsAffordable: 1.99 })).toBe("budget_headroom");
+		expect(escalationBlock({ ...open, s2CallsAffordable: 0, spentFraction: 0.9 })).toBe("budget_cutoff");
 		expect(escalationBlock({ ...open, escalations: 1 })).toBe("max_escalations");
 		expect(escalationBlock({ ...open, userPinned: true })).toBe("user_model");
 		expect(escalationBlock({ ...open, modelAllowed: false, userPinned: true })).toBe("model_not_allowed");

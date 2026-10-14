@@ -2,7 +2,7 @@ import type { Model, Usage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import type { NexoError } from "@nexo/telemetry";
 import { addSpend, dayScope, getSpent, monthScope, openDb } from "@nexo/store";
-import { budgetLine, checkAdmission, estimateCallCostUsd, priceUsage, recordSpend, RunBudget } from "../src/index.ts";
+import { budgetExhaustedError, budgetLine, checkAdmission, estimateCallCostUsd, priceUsage, recordSpend, RunBudget, runBudgetLimit } from "../src/index.ts";
 
 function model(cost: Partial<Model<string>["cost"]> = {}, maxTokens = 1000): Model<string> {
 	return {
@@ -82,6 +82,40 @@ describe("RunBudget", () => {
 
 describe("admission", () => {
 	const now = new Date("2026-10-10T10:00:00.000Z");
+
+	it("caps a run's budget at the smallest of its own, the session's and what is left of the day and month", () => {
+		const db = openDb(":memory:");
+		const budgets = { dailyUsd: 10, monthlyUsd: 100 };
+		expect(runBudgetLimit(db, budgets, now, { run: 0.5 })).toEqual({ usd: 0.5, by: "run" });
+		expect(runBudgetLimit(db, budgets, now, { run: 0.5, session: 0.2 })).toEqual({ usd: 0.2, by: "session" });
+		addSpend(db, [dayScope(now), monthScope(now)], 9.9, now.toISOString());
+		const daily = runBudgetLimit(db, budgets, now, { run: 0.5, session: 0.2 });
+		expect(daily.by).toBe("daily");
+		expect(daily.usd).toBeCloseTo(0.1);
+		addSpend(db, [monthScope(now)], 90.05, now.toISOString());
+		const monthly = runBudgetLimit(db, budgets, now, { run: 0.5 });
+		expect(monthly.by).toBe("monthly");
+		expect(monthly.usd).toBeCloseTo(0.05);
+		addSpend(db, [dayScope(now), monthScope(now)], 1, now.toISOString());
+		expect(runBudgetLimit(db, budgets, now, { run: 0.5 }).usd).toBe(0);
+	});
+
+	it("explains an exhausted budget by the limit that capped it, for chat turns and one-shot runs", () => {
+		const budget = new RunBudget(0.5);
+		budget.charge(0.42);
+		const run = budgetExhaustedError(budget, "run", false);
+		expect(run).toMatchObject({ code: "BUDGET_EXCEEDED", message: "Run budget of $0.50 is not enough to continue ($0.4200 spent)", hint: expect.stringContaining("--budget") });
+		const turn = budgetExhaustedError(budget, "run", true);
+		expect(turn.message).toBe("Turn budget of $0.50 is not enough to continue ($0.4200 spent)");
+		expect(turn.hint).toContain("budgets.perRunUsd");
+		expect(turn.hint).not.toContain("--budget");
+		expect(budgetExhaustedError(budget, "session", true)).toMatchObject({
+			message: "Turn budget of $0.50 is not enough to continue ($0.4200 spent; capped by the session's remaining budget)",
+			hint: expect.stringContaining("/budget <usd>"),
+		});
+		expect(budgetExhaustedError(budget, "daily", true).hint).toContain("budgets.dailyUsd");
+		expect(budgetExhaustedError(budget, "monthly", false).message).toContain("capped by what is left of the monthly budget");
+	});
 
 	it("admits under the limits and records spend to day, month and run scopes", () => {
 		const db = openDb(":memory:");

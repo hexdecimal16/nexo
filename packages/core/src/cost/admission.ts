@@ -1,5 +1,6 @@
 import { addSpend, type Db, dayScope, getSpent, monthScope } from "@nexo/store";
 import { NexoError } from "@nexo/telemetry";
+import type { RunBudget } from "./budget.ts";
 
 export function sessionScope(sessionId: string): string {
 	return `session:${sessionId}`;
@@ -48,4 +49,49 @@ export function recordSpend(db: Db, rootRunId: string, usd: number, now: Date, s
 	if (sessionId) scopes.push(sessionScope(sessionId));
 	if (optimRunId) scopes.push(optimScope(optimRunId));
 	addSpend(db, scopes, usd, now.toISOString());
+}
+
+/** Which limit set a run's budget: its own (`--budget` / `budgets.perRunUsd`), the session's remainder, or what is left of the day or month. */
+export type BudgetLimit = "run" | "session" | "daily" | "monthly";
+
+/**
+ * The budget a run may spend: the smallest of its own limit, the session's remaining budget (chat turns) and what is
+ * left of the daily and monthly caps, with the limit that set it. Admission only checks the caps when a run starts, so
+ * this keeps one run from spending past them.
+ */
+export function runBudgetLimit(db: Db, budgets: { dailyUsd: number; monthlyUsd: number }, now: Date, limits: { run: number; session?: number }): { usd: number; by: BudgetLimit } {
+	const candidates: { usd: number; by: BudgetLimit }[] = [
+		{ usd: limits.run, by: "run" },
+		...(limits.session !== undefined ? [{ usd: limits.session, by: "session" as const }] : []),
+		{ usd: budgets.dailyUsd - getSpent(db, dayScope(now)), by: "daily" },
+		{ usd: budgets.monthlyUsd - getSpent(db, monthScope(now)), by: "monthly" },
+	];
+	let best = candidates[0] as { usd: number; by: BudgetLimit };
+	for (const c of candidates) if (c.usd < best.usd) best = c;
+	return { usd: Math.max(0, best.usd), by: best.by };
+}
+
+const CAPPED_BY: Record<Exclude<BudgetLimit, "run">, string> = {
+	session: "capped by the session's remaining budget",
+	daily: "capped by what is left of the daily budget",
+	monthly: "capped by what is left of the monthly budget",
+};
+
+/** BUDGET_EXCEEDED for a run whose budget is spent or too small for its next request, naming the limit that set it and the fix that applies (`chat`: a session turn). */
+export function budgetExhaustedError(budget: RunBudget, by: BudgetLimit, chat: boolean): NexoError {
+	const capped = by === "run" ? "" : `; ${CAPPED_BY[by]}`;
+	const hint = {
+		run: chat
+			? "Each chat turn is capped by budgets.perRunUsd; raise it in /settings (/budget raises the session's cap, not a turn's)"
+			: "Pass --budget or raise budgets.perRunUsd",
+		session: "Raise the session's budget with /budget <usd>, then continue",
+		daily: "Raise budgets.dailyUsd or wait until tomorrow (UTC)",
+		monthly: "Raise budgets.monthlyUsd or wait until next month (UTC)",
+	}[by];
+	return new NexoError({
+		code: "BUDGET_EXCEEDED",
+		message: `${chat ? "Turn" : "Run"} budget of $${budget.limitUsd.toFixed(2)} is not enough to continue ($${budget.spentUsd.toFixed(4)} spent${capped})`,
+		hint,
+		context: { limitUsd: budget.limitUsd, spentUsd: budget.spentUsd, limitedBy: by },
+	});
 }

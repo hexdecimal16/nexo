@@ -26,8 +26,9 @@ import {
 import { type BashOutcome, runBash } from "@nexo/tools";
 import { createRedactor, type ErrorPayload, NexoError, type Redactor, toErrorPayload } from "@nexo/telemetry";
 import type { NexoConfig } from "../config/schema.ts";
-import { checkAdmission, sessionScope } from "../cost/admission.ts";
+import { checkAdmission, runBudgetLimit, sessionScope } from "../cost/admission.ts";
 import { RunBudget } from "../cost/budget.ts";
+import { estimateCallCostUsd } from "../cost/pricing.ts";
 import {
 	createEngineEnv,
 	type EngineDeps,
@@ -242,6 +243,10 @@ export class Session {
 			return ref;
 		}
 	}
+	/** True when the next turn starts on S2 because the latest one stopped on S2 unfinished (and no `/model` override is set). */
+	get continuesOnS2(): boolean {
+		return this.state.continueOnS2 === true && this.state.model === null;
+	}
 	/** The `/effort` override, or null. */
 	get effort(): Effort | null {
 		return isEffort(this.state.effort) ? this.state.effort : null;
@@ -303,6 +308,7 @@ export class Session {
 			} catch (error) {
 				return refusedResult(this.env.deps.redact(toErrorPayload(error)));
 			}
+			const limit = runBudgetLimit(this.deps.db, config.budgets, this.env.now(), { run: config.budgets.perRunUsd, session: remaining });
 			const turnIndex = this.state.turns + 1;
 			this.onEvent = options.onEvent;
 			const sent = withShellNotes(this.state.pendingShell ?? [], instruction);
@@ -312,15 +318,17 @@ export class Session {
 				request: {
 					instruction: sent,
 					history: buildHistory(this.lines, this.env.now().getTime()),
-					prepareHistory: this.compactionHook(turnIndex),
+					prepareHistory: this.compactionHook(turnIndex, limit.usd),
 					sessionId: this.id,
 					turnIndex,
 					...(workspace !== null ? { workspace } : {}),
 					...(previous ? { workspaceFrom: previous } : {}),
 					...(this.state.model ? { model: this.state.model } : {}),
+					...(this.continuesOnS2 ? { startOnS2: true } : {}),
 					...(this.effort ? { effort: this.effort } : {}),
 				},
-				budget: new RunBudget(Math.min(config.budgets.perRunUsd, remaining)),
+				budget: new RunBudget(limit.usd),
+				budgetLimit: limit.by,
 				signal: options.signal,
 				...(this.memoryContext
 					? { memoryContext: this.memoryContext }
@@ -414,6 +422,7 @@ export class Session {
 		this.compactRequested = false;
 		this.state.context = null;
 		this.state.pendingShell = [];
+		this.state.continueOnS2 = false;
 		this.save();
 	}
 
@@ -498,11 +507,20 @@ export class Session {
 		void previous.stop();
 	}
 
-	/** Compacts before the turn's first request when forced or when the request would pass `session.compactAt`. */
-	private compactionHook(turnIndex: number): HistoryPreparer {
+	/**
+	 * Compacts before the turn's first request when forced, when the request would pass `session.compactAt` of the
+	 * context window, or when one S2 request with this history would cost more than `session.compactAtBudgetShare` of
+	 * the turn's budget (every follow-up sends the whole history, and any turn may escalate to S2).
+	 */
+	private compactionHook(turnIndex: number, turnBudgetUsd: number): HistoryPreparer {
 		return async (ctx) => {
-			const threshold = this.env.deps.config.session.compactAt * ctx.model.contextWindow;
-			if (!this.compactRequested && ctx.estimateTokens(ctx.history) <= threshold) return ctx.history;
+			const { config } = this.env.deps;
+			const tokens = ctx.estimateTokens(ctx.history);
+			const overWindow = tokens > config.session.compactAt * ctx.model.contextWindow;
+			const s2 = this.env.registry.get(config.models.s2.provider, config.models.s2.id);
+			const share = config.session.compactAtBudgetShare;
+			const overBudget = share > 0 && estimateCallCostUsd(s2, config.pricingOverrides, tokens * 4, config.budgets.estimateOutputTokens) > share * turnBudgetUsd;
+			if (!this.compactRequested && !overWindow && !overBudget) return ctx.history;
 			const active = activeMessageLines(this.lines);
 			const turnIndexes = [...new Set(active.map((l) => l.turnIndex))].sort((a, b) => a - b);
 			const replacedThroughTurn = turnIndexes[turnIndexes.length - KEEP_VERBATIM_TURNS - 1];
@@ -511,7 +529,6 @@ export class Session {
 				return ctx.history;
 			}
 			const old = active.filter((l) => l.turnIndex <= replacedThroughTurn).map((l) => l.message as Message);
-			const { config } = this.env.deps;
 			const s1 = this.env.registry.get(config.models.s1.provider, config.models.s1.id);
 			const maxChars = Math.floor(s1.contextWindow * COMPACTION_INPUT_WINDOW_SHARE * 4) - COMPACTION_SYSTEM_PROMPT.length;
 			const text = renderForSummary(latestCompaction(this.lines)?.summary ?? "", old, maxChars);
@@ -537,6 +554,10 @@ export class Session {
 		this.appendLines(messages.map((message) => ({ type: "message", turnIndex, message })));
 		this.state.turns = turnIndex;
 		this.state.costUsd += result.costUsd;
+		// S2 work that stopped unfinished (out of budget, failed, aborted, or a failed S2 continuation) goes on on S2 in
+		// the next turn; a finished S2 turn, or one on a model the user chose, does not carry.
+		const stoppedOnS2 = result.model?.role === "s2" && result.status !== "succeeded";
+		this.state.continueOnS2 = this.state.model === null && (stoppedOnS2 || result.continuationError !== undefined);
 		this.state.lastRunId = result.trajectoryId;
 		this.state.pendingShell = [];
 		if (!this.state.title) this.state.title = titleFrom(this.env.deps.redact(instruction));

@@ -101,6 +101,12 @@ export const EDITABLE_SETTINGS: readonly SettingDefinition[] = [
 		type: { kind: "number", integer: false, exclusiveMin: 0, max: 1 },
 	},
 	{
+		key: "session.compactAtBudgetShare",
+		label: "Compact at budget share",
+		description: "Also compact when one S2 request with the history would cost more than this share of a turn's budget (0 to 1; 0 = off)",
+		type: { kind: "number", integer: false, min: 0, max: 1 },
+	},
+	{
 		key: "spawn.maxParallelSubagents",
 		label: "Parallel subagents",
 		description: "Most subagents one run may have working at the same time",
