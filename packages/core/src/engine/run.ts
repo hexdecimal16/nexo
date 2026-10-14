@@ -69,7 +69,7 @@ import {
 import { realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { NexoConfig } from "../config/schema.ts";
-import { checkAdmission, recordSpend } from "../cost/admission.ts";
+import { type BudgetLimit, budgetExhaustedError, checkAdmission, recordSpend, runBudgetLimit } from "../cost/admission.ts";
 import { budgetLine, RunBudget } from "../cost/budget.ts";
 import { estimateCallCostUsd, priceUsage } from "../cost/pricing.ts";
 import { classifyProviderError, contextOverflowError, providerRetryDelayMs, toolErrorText, withToolErrorCodes } from "./errors.ts";
@@ -211,6 +211,11 @@ export interface RunRequest {
 	 * recorded as run.json `workspaceFrom`. Ignored with `workspace`, for subagents and for rollouts.
 	 */
 	workspaceFrom?: { runId: string; dir: string };
+	/**
+	 * Start on the S2 role, as if already escalated: a session turn after one that stopped on S2. Ignored when the user
+	 * chose the model, for subagents, and when the run's skill does not allow S2.
+	 */
+	startOnS2?: boolean;
 }
 
 export interface RunModelInfo {
@@ -218,6 +223,8 @@ export interface RunModelInfo {
 	id: string;
 	effort: Effort;
 	contextWindow: number;
+	/** The role the model was used in (s1, s2), or null for a model chosen outside the roles. */
+	role: "s1" | "s2" | null;
 }
 
 export interface RunResult {
@@ -288,6 +295,8 @@ export interface RolloutOptions {
 export interface ExecuteInput {
 	request: RunRequest;
 	budget: RunBudget;
+	/** Which limit set `budget` (default "run"); named in the BUDGET_EXCEEDED message and hint. */
+	budgetLimit?: BudgetLimit;
 	parent?: ParentLink;
 	signal?: AbortSignal;
 	/**
@@ -391,12 +400,16 @@ export function createEngine(deps: EngineDeps): Engine {
 				return failedResult(deps.redact, error, "budget_exceeded");
 			}
 			let budget: RunBudget;
+			let limit: { usd: number; by: BudgetLimit };
 			try {
-				budget = new RunBudget(request.budgetUsd ?? deps.config.budgets.perRunUsd);
+				const own = request.budgetUsd ?? deps.config.budgets.perRunUsd;
+				new RunBudget(own); // validates --budget / budgets.perRunUsd
+				limit = runBudgetLimit(deps.db, deps.config.budgets, now(), { run: own });
+				budget = new RunBudget(limit.usd);
 			} catch (error) {
 				return failedResult(deps.redact, error);
 			}
-			return executeRun(env, { request, budget, signal });
+			return executeRun(env, { request, budget, budgetLimit: limit.by, signal });
 		},
 	};
 }
@@ -454,6 +467,20 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		model = env.registry.get(resolved.provider, resolved.id);
 		resolved = { ...resolved, effort: env.registry.clampEffort(model, resolved.effort) };
 		escalationTarget = env.registry.get(config.models.s2.provider, config.models.s2.id);
+		const s2Allowed = isModelAllowed("s2", skill?.meta.modelAllowed ?? ["s1", "s2"], { s1: config.models.s1, s2: config.models.s2 });
+		if (request.startOnS2 && !parent && resolved.source !== "user" && resolved.role !== "s2" && s2Allowed) {
+			// Same model and effort an escalation would switch to.
+			const s2 = config.models.s2;
+			model = escalationTarget;
+			resolved = {
+				provider: s2.provider,
+				id: s2.id,
+				role: "s2",
+				effort: env.registry.clampEffort(escalationTarget, s2.effort ?? resolved.effort),
+				source: "router",
+				effortSource: "router",
+			};
+		}
 		// A rollout always works in its own run workspace, never in a --workspace directory.
 		sharedWorkspace = rollout ? null : resolveSharedWorkspace(request, parent);
 		runDir = parent ? parent.runDir.child(runId) : RunDir.create(rollout?.runsRoot ?? deps.paths.runs, runId, deps.redact);
@@ -674,9 +701,12 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		// System 1 -> System 2 escalation (spec §7.2).
 		const monitor = new TriggerMonitor(policy);
 		const blockedOnce = new Set<string>();
+		/** Estimated cost of one S2 request at the run's current context size; set once the agent exists. */
+		let s2RequestUsd: () => number = () => 0;
 		/** Why an escalation may not happen now, or null when it may. Reserved budget counts as spent. */
-		const currentBlock = (): EscalationBlock | null =>
-			escalationBlock({
+		const currentBlock = (): EscalationBlock | null => {
+			const perS2Request = s2RequestUsd();
+			return escalationBlock({
 				escalations,
 				maxEscalations: config.router.maxEscalations,
 				spentFraction: 1 - budget.remainingFraction(),
@@ -684,7 +714,10 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				skillAllows: skill?.meta.escalate ?? true,
 				modelAllowed: isModelAllowed("s2", skill?.meta.modelAllowed ?? ["s1", "s2"], { s1: config.models.s1, s2: config.models.s2 }),
 				userPinned: resolved.source === "user",
+				// Unpriced S2 (estimate 0): the headroom check is skipped and the cutoff alone applies.
+				...(perS2Request > 0 ? { s2CallsAffordable: budget.remainingUsd() / perS2Request } : {}),
 			});
+		};
 		/**
 		 * Applies or records one escalation and returns its span when it took effect, else null. An applied end-of-run
 		 * escalation's span is left open for the caller, which finishes it once the continuation has run.
@@ -884,7 +917,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				throw new NexoError({
 					code: "BUDGET_EXCEEDED",
 					message: `The run budget cannot cover the compaction call (estimated $${estimate.toFixed(4)}, $${budget.remainingUsd().toFixed(4)} left)`,
-					hint: "Raise the run budget (or the session budget) so the compaction call fits",
+					hint: budgetExhaustedError(budget, input.budgetLimit ?? "run", sessionId !== null && !parent).hint,
 				});
 			}
 			const span = recorder.start({
@@ -975,6 +1008,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				return { content: [{ type: "text", text: toolOutputExcerpt(text, pointer) }, ...nonText] };
 			},
 		});
+		s2RequestUsd = () => estimateCallCostUsd(escalationTarget, overrides, requestChars(runAgent.state.messages, tools), config.budgets.estimateOutputTokens);
 		agent = runAgent;
 		seededCount = runAgent.state.messages.length;
 
@@ -1108,11 +1142,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			output = assistantText(last);
 			if (budgetExceeded) {
 				status = "budget_exceeded";
-				error = new NexoError({
-					code: "BUDGET_EXCEEDED",
-					message: `Run budget of $${budget.limitUsd.toFixed(2)} exhausted ($${budget.spentUsd.toFixed(4)} spent)`,
-					hint: "Pass --budget or raise budgets.perRunUsd",
-				}).toPayload();
+				error = budgetExhaustedError(budget, input.budgetLimit ?? "run", sessionId !== null && !parent).toPayload();
 			} else if (input.signal?.aborted || last?.stopReason === "aborted") {
 				status = "aborted";
 			} else if (last?.stopReason === "error") {
@@ -1282,7 +1312,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 }
 
 function modelInfo(model: Model<Api>, resolved: ResolvedModel): RunModelInfo {
-	return { provider: model.provider, id: model.id, effort: resolved.effort, contextWindow: model.contextWindow };
+	return { provider: model.provider, id: model.id, effort: resolved.effort, contextWindow: model.contextWindow, role: resolved.role ?? null };
 }
 
 /** The pi messages appended after the seeded system prompt and history, without system messages. */

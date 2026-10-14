@@ -170,7 +170,10 @@ export function endOfRunSignals(policy: RouterPolicy, evidence: EndOfRunEvidence
 	return out;
 }
 
-export type EscalationBlock = "skill_disabled" | "model_not_allowed" | "user_model" | "max_escalations" | "budget_cutoff";
+export type EscalationBlock = "skill_disabled" | "model_not_allowed" | "user_model" | "max_escalations" | "budget_cutoff" | "budget_headroom";
+
+/** S2 requests at the run's current context size that the remaining run budget must cover for an escalation to apply. */
+export const MIN_AFFORDABLE_S2_CALLS = 2;
 
 /** Human-readable reason for each block, used in logs and on screen. */
 export const ESCALATION_BLOCK_REASONS: Record<EscalationBlock, string> = {
@@ -179,6 +182,7 @@ export const ESCALATION_BLOCK_REASONS: Record<EscalationBlock, string> = {
 	user_model: "the user chose the model",
 	max_escalations: "router.maxEscalations reached",
 	budget_cutoff: "budgets.escalationCutoff reached",
+	budget_headroom: `the remaining run budget cannot cover ${MIN_AFFORDABLE_S2_CALLS} S2 requests at the current context size`,
 };
 
 export interface EscalationGate {
@@ -195,6 +199,8 @@ export interface EscalationGate {
 	modelAllowed: boolean;
 	/** True when the user chose the model explicitly (`--model`, `/model` or a project pin). */
 	userPinned: boolean;
+	/** How many S2 requests at the current context size the remaining run budget covers; absent when unknown (unpriced). */
+	s2CallsAffordable?: number;
 }
 
 /** Why an escalation may not happen now, or null when it may. */
@@ -204,5 +210,6 @@ export function escalationBlock(gate: EscalationGate): EscalationBlock | null {
 	if (gate.userPinned) return "user_model";
 	if (gate.escalations >= gate.maxEscalations) return "max_escalations";
 	if (gate.spentFraction > gate.cutoff) return "budget_cutoff";
+	if (gate.s2CallsAffordable !== undefined && gate.s2CallsAffordable < MIN_AFFORDABLE_S2_CALLS) return "budget_headroom";
 	return null;
 }

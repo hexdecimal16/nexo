@@ -140,6 +140,29 @@ describe("session turns", () => {
 		expect(line).toMatch(/of \$0\.20 remaining/);
 	});
 
+	it("names the session's remaining budget and /budget when it is what stopped the turn", async () => {
+		const { env, deps, cwd } = sessionEnv({ config: { budgets: { perSessionUsd: 0.2, perRunUsd: 0.5 } } });
+		env.faux.setResponses([fauxAssistantMessage("never sent")]);
+		const result = await createSession(deps, { cwd, model: "faux/pricey" }).turn("expensive");
+		expect(result.status).toBe("budget_exceeded");
+		expect(result.error?.message).toBe("Turn budget of $0.20 is not enough to continue ($0.0000 spent; capped by the session's remaining budget)");
+		expect(result.error?.hint).toContain("/budget <usd>");
+		expect(result.error?.hint).not.toContain("--budget");
+	});
+
+	it("caps a turn at what is left of the daily budget", async () => {
+		const { env, deps, cwd } = sessionEnv({ config: { budgets: { perSessionUsd: 5, perRunUsd: 0.5, dailyUsd: 0.3 } } });
+		let line = "";
+		env.faux.setResponses([
+			async (ctx) => {
+				line = JSON.stringify(ctx.messages.at(-1));
+				return fauxAssistantMessage("ok");
+			},
+		]);
+		await createSession(deps, { cwd }).turn("hi");
+		expect(line).toMatch(/of \$0\.30 remaining/);
+	});
+
 	it("applies a reloaded config from the next turn", async () => {
 		const { env, deps, cwd } = sessionEnv();
 		const lines: string[] = [];
@@ -201,6 +224,45 @@ describe("session turns", () => {
 		const marker = session.transcript().find((l) => l.type === "compaction");
 		expect(marker).toEqual({ type: "compaction", turnIndex: 4, summary: "SUMMARY-OF-ONE", replacedThroughTurn: 1 });
 		expect(session.transcript().filter((l) => l.type === "message")).toHaveLength(8);
+	});
+
+	it("compacts when one S2 request with the history would cost more than compactAtBudgetShare of the turn budget", async () => {
+		// compactAt is out of reach; S2 (faux/slow) input costs $5 per million tokens, and each answer adds about 5k tokens.
+		const { env, deps, cwd } = sessionEnv({
+			config: { session: { compactAt: 1, compactAtBudgetShare: 0.05 }, budgets: { perRunUsd: 1, perSessionUsd: 10, estimateOutputTokens: 1 } },
+		});
+		const long = (label: string) => fauxAssistantMessage(`${label} ${"word ".repeat(4000)}`);
+		let summarized = false;
+		env.faux.setResponses([
+			long("ANSWER-ONE"),
+			long("ANSWER-TWO"),
+			long("ANSWER-THREE"),
+			async () => {
+				summarized = true;
+				return fauxAssistantMessage("SUMMARY-OF-ONE");
+			},
+			fauxAssistantMessage("ANSWER-FOUR"),
+		]);
+		const session = createSession(deps, { cwd });
+		await session.turn("QUESTION-ONE");
+		await session.turn("QUESTION-TWO");
+		await session.turn("QUESTION-THREE");
+		expect(session.transcript().some((l) => l.type === "compaction")).toBe(false);
+		await session.turn("QUESTION-FOUR");
+		expect(summarized).toBe(true);
+		expect(session.transcript().find((l) => l.type === "compaction")).toMatchObject({ turnIndex: 4, summary: "SUMMARY-OF-ONE", replacedThroughTurn: 1 });
+	});
+
+	it("does not compact on cost when compactAtBudgetShare is 0", async () => {
+		const { env, deps, cwd } = sessionEnv({
+			config: { session: { compactAt: 1, compactAtBudgetShare: 0 }, budgets: { perRunUsd: 1, perSessionUsd: 10, estimateOutputTokens: 1 } },
+		});
+		const long = (label: string) => fauxAssistantMessage(`${label} ${"word ".repeat(4000)}`);
+		env.faux.setResponses([long("A1"), long("A2"), long("A3"), fauxAssistantMessage("A4")]);
+		const session = createSession(deps, { cwd });
+		for (const q of ["Q1", "Q2", "Q3", "Q4"]) await session.turn(q);
+		expect(session.transcript().some((l) => l.type === "compaction")).toBe(false);
+		expect(session.turns).toBe(4);
 	});
 
 	it("compacts on request before the next turn, and clear starts a fresh conversation", async () => {
@@ -281,6 +343,81 @@ describe("session turns", () => {
 		release();
 		await pending;
 		expect(session.running).toBe(false);
+	});
+});
+
+describe("continuing on S2", () => {
+	const contains = { scoring: { scorers: [{ kind: "contains" as const, name: "says-done", text: "DONE" }] } };
+	it("starts the next turn on S2 after a turn ran out of budget on S2, and back on S1 after S2 succeeds", async () => {
+		// Turn 1 escalates (verify_fail) and its S2 continuation runs out of the turn budget; turn 2 continues on S2.
+		const { env, deps, cwd } = sessionEnv({
+			config: { ...contains, budgets: { perRunUsd: 1, perSessionUsd: 10, estimateOutputTokens: 1 }, pricingOverrides: { "faux/slow": { input: 0, output: 100_000 } } },
+		});
+		const starts: string[] = [];
+		env.faux.setResponses([
+			fauxAssistantMessage("not yet"),
+			fauxAssistantMessage([fauxToolCall("write", { path: "a.txt", content: "x" })]),
+			fauxAssistantMessage("DONE"),
+			fauxAssistantMessage("DONE again"),
+		]);
+		const session = createSession(deps, { cwd });
+		const onEvent = (e: EngineEvent) => {
+			if (e.type === "run_start" && e.depth === 0) starts.push(e.model);
+		};
+		const first = await session.turn("finish it", { onEvent });
+		expect(first.continuationError).toMatchObject({ code: "BUDGET_EXCEEDED" });
+		expect(session.continuesOnS2).toBe(true);
+		const second = await session.turn("please continue", { onEvent });
+		expect(starts).toEqual(["faux/fast", "faux/slow"]);
+		expect(second.status).toBe("succeeded");
+		expect(session.continuesOnS2).toBe(false);
+		await session.turn("thanks", { onEvent });
+		expect(starts.at(-1)).toBe("faux/fast");
+	});
+
+	it("carries S2 across resume, and /model or /clear override it", async () => {
+		const { env, deps, cwd } = sessionEnv({ config: { budgets: { perRunUsd: 1, perSessionUsd: 10 } } });
+		const starts: string[] = [];
+		const onEvent = (e: EngineEvent) => {
+			if (e.type === "run_start" && e.depth === 0) starts.push(e.model);
+		};
+		env.faux.setResponses([
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "401 Unauthorized: bad key" }),
+			fauxAssistantMessage("ok"),
+			fauxAssistantMessage("ok"),
+			fauxAssistantMessage("ok"),
+		]);
+		const session = createSession(deps, { cwd, model: "s2" });
+		await session.turn("fails on s2", { onEvent });
+		// A turn the user pinned to S2 is not carried: the override already decides the model.
+		expect(session.continuesOnS2).toBe(false);
+		session.setModel(null);
+		expect(session.continuesOnS2).toBe(false);
+
+		const carried = createSession(deps, { cwd });
+		await carried.turn("warm up", { onEvent });
+		// As if that turn had stopped on S2 (an empty session is not kept on close, so it needs a turn).
+		(carried as unknown as { state: { continueOnS2: boolean } }).state.continueOnS2 = true;
+		expect(carried.continuesOnS2).toBe(true);
+		carried.setModel("s1");
+		expect(carried.continuesOnS2).toBe(false);
+		carried.setModel(null);
+		expect(carried.continuesOnS2).toBe(true);
+		carried.close();
+		const resumed = resumeSession(deps, carried.id);
+		expect(resumed.continuesOnS2).toBe(true);
+		resumed.setModel("s1");
+		await resumed.turn("pinned", { onEvent });
+		expect(starts.at(-1)).toBe("faux/fast");
+		resumed.setModel(null);
+		// A turn on a model the user chose is the latest turn now, so nothing carries.
+		expect(resumed.continuesOnS2).toBe(false);
+		(resumed as unknown as { state: { continueOnS2: boolean } }).state.continueOnS2 = true;
+		resumed.clear();
+		expect(resumed.continuesOnS2).toBe(false);
+		await resumed.turn("fresh", { onEvent });
+		expect(starts.at(-1)).toBe("faux/fast");
+		resumed.close();
 	});
 });
 

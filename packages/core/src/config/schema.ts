@@ -106,7 +106,11 @@ export const ConfigSchema = Type.Object(
 			{ additionalProperties: false },
 		),
 		session: Type.Object(
-			{ compactAt: Type.Number({ exclusiveMinimum: 0, maximum: 1 }) },
+			{
+				compactAt: Type.Number({ exclusiveMinimum: 0, maximum: 1 }),
+				/** Also compact when one S2 request with the history would cost more than this share of the turn's budget; 0 turns it off. */
+				compactAtBudgetShare: Type.Number({ minimum: 0, maximum: 1 }),
+			},
 			{ additionalProperties: false },
 		),
 		spawn: Type.Object(
@@ -235,7 +239,7 @@ export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 		escalationCutoff: 0.8,
 		estimateOutputTokens: 4096,
 	},
-	session: { compactAt: 0.8 },
+	session: { compactAt: 0.8, compactAtBudgetShare: 0.2 },
 	spawn: { maxParallelSubagents: 4, maxDepth: 4 },
 	skills: { dirs: ["$NEXO_HOME/skills", "./.nexo/skills"], pins: {} },
 	tools: {

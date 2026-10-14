@@ -255,6 +255,7 @@ describe("config settings", () => {
 			"tools.policy.spawn",
 			"tools.nonInteractiveAsk",
 			"session.compactAt",
+			"session.compactAtBudgetShare",
 			"spawn.maxParallelSubagents",
 			"models.judge",
 			"scoring.judge",
@@ -308,6 +309,7 @@ describe("config settings", () => {
 			["budgets.perRunUsd", -1, "/budgets/perRunUsd"],
 			["tools.policy.bash", "maybe", "/tools/policy/bash"],
 			["session.compactAt", 1.5, "/session/compactAt"],
+			["session.compactAtBudgetShare", -0.1, "/session/compactAtBudgetShare"],
 			["spawn.maxParallelSubagents", 1.5, "/spawn/maxParallelSubagents"],
 			["models.s1.effort", "turbo", "/models/s1/effort"],
 		];

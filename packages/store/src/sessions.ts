@@ -38,6 +38,8 @@ export interface SessionJson {
 	context: { tokens: number; window: number } | null;
 	/** `!` shell commands run since the last turn, sent to the model with the next message; absent in older files. */
 	pendingShell?: ShellNote[];
+	/** The latest turn stopped on S2 without finishing, so the next turn starts on S2; absent in older files. */
+	continueOnS2?: boolean;
 }
 
 /** A `!` shell command the user ran, as the model will read it; `output` is redacted and capped. */
