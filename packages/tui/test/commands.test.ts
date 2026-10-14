@@ -52,7 +52,7 @@ describe("slash commands", () => {
 		await until(() => expect(h.session().model).toBe("s2"));
 		submit(h.terminal, "/effort high");
 		await until(() => expect(h.session().effort).toBe("high"));
-		await until(() => expect(h.terminal.output()).toMatch(/s2 · high/));
+		await until(() => expect(h.terminal.output()).toMatch(/faux\/slow · high/));
 
 		submit(h.terminal, "/budget lots");
 		await until(() => expect(h.terminal.output()).toMatch(/error \[INVALID_REQUEST\] Budget must be a positive number/));

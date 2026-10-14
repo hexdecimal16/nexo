@@ -230,6 +230,18 @@ export class Session {
 	get model(): string | null {
 		return this.state.model;
 	}
+	/** The `/model` override as `provider/id` (a role such as "s2" resolved against the config), or null. */
+	get modelOverride(): string | null {
+		const ref = this.state.model;
+		if (ref === null) return null;
+		try {
+			const { config } = this.env.deps;
+			const parsed = parseModelRef(ref, { s1: config.models.s1, s2: config.models.s2 });
+			return `${parsed.provider}/${parsed.id}`;
+		} catch {
+			return ref;
+		}
+	}
 	/** The `/effort` override, or null. */
 	get effort(): Effort | null {
 		return isEffort(this.state.effort) ? this.state.effort : null;

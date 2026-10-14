@@ -119,7 +119,16 @@ export const TOOL_END_PREVIEW_CHARS = 2_000;
  * Live progress of a run tree. Payloads are redacted except `text_delta.delta`, which is raw: a secret can be split across
  * deltas, so a consumer redacts the accumulated text. `depth` is 0 for the root run and grows by one per subagent level. */
 export type EngineEvent =
-	| { type: "run_start"; runId: string; parentRunId: string | null; instruction: string; depth: number }
+	| {
+			type: "run_start";
+			runId: string;
+			parentRunId: string | null;
+			instruction: string;
+			depth: number;
+			/** `provider/id` and effort the run starts on. */
+			model: string;
+			effort: Effort;
+	  }
 	| { type: "text_delta"; runId: string; depth: number; delta: string }
 	| { type: "tool_start"; runId: string; depth: number; toolName: string; toolCallId: string; args: unknown }
 	| { type: "tool_end"; runId: string; depth: number; toolName: string; toolCallId: string; isError: boolean; durationMs: number; preview: string; output: string }
@@ -136,8 +145,9 @@ export type EngineEvent =
 			/** False when the escalation was suppressed; `blockedBy` says why. */
 			applied: boolean;
 			blockedBy: EscalationBlock | null;
-			/** `provider/id` of the model the run continues with. */
+			/** `provider/id` and effort of the model the run continues with. */
 			model: string;
+			effort: Effort;
 	  }
 	| {
 			/** An applied end-of-run escalation whose S2 continuation failed or ran out of budget; the previous answer is kept. */
@@ -146,6 +156,9 @@ export type EngineEvent =
 			depth: number;
 			trigger: EscalationTrigger;
 			error: { code: string; message: string };
+			/** `provider/id` and effort of the model the run is back on (the one that wrote the kept answer). */
+			model: string;
+			effort: Effort;
 	  }
 	| {
 			type: "score";
@@ -648,7 +661,15 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		});
 		const rootSpan = runSpan;
 		runDir.writeRunJson(runJson("running", "", null));
-		deps.onEvent?.({ type: "run_start", runId, parentRunId: parent?.runId ?? null, instruction: deps.redact(request.instruction), depth });
+		deps.onEvent?.({
+			type: "run_start",
+			runId,
+			parentRunId: parent?.runId ?? null,
+			instruction: deps.redact(request.instruction),
+			depth,
+			model: `${model.provider}/${model.id}`,
+			effort: resolved.effort,
+		});
 
 		// System 1 -> System 2 escalation (spec §7.2).
 		const monitor = new TriggerMonitor(policy);
@@ -720,6 +741,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				applied: blockedBy === null,
 				blockedBy,
 				model: to,
+				effort: active.resolved.effort,
 			});
 			logger.info(blockedBy ? "escalation suppressed" : "escalated to s2", {
 				trigger: signal.trigger,
@@ -1171,6 +1193,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 								depth,
 								trigger: combined.trigger,
 								error: { code: continuationError.code, message: continuationError.message },
+								model: `${active.model.provider}/${active.model.id}`,
+								effort: active.resolved.effort,
 							});
 						}
 					} finally {
