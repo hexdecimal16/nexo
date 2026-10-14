@@ -17,6 +17,13 @@ export function classifyProviderError(message: string): NexoError {
 	if (/timed? ?out|timeout|etimedout/.test(lower)) {
 		return new NexoError({ code: "PROVIDER_TIMEOUT", message, retryable: true, hint: "Retry the run; check network connectivity" });
 	}
+	if (/\b400\b|bad request|invalid_argument|invalid_request_error/.test(lower)) {
+		return new NexoError({
+			code: "PROVIDER_UNAVAILABLE",
+			message,
+			hint: "The provider rejected the request as invalid (HTTP 400); retrying sends the same request. The message above says which part it refused",
+		});
+	}
 	return new NexoError({ code: "PROVIDER_UNAVAILABLE", message, retryable: true, hint: "The provider returned an error; retry later" });
 }
 

@@ -73,7 +73,7 @@ import { checkAdmission, recordSpend } from "../cost/admission.ts";
 import { budgetLine, RunBudget } from "../cost/budget.ts";
 import { estimateCallCostUsd, priceUsage } from "../cost/pricing.ts";
 import { classifyProviderError, contextOverflowError, retryDelayMs, toolErrorText, withToolErrorCodes } from "./errors.ts";
-import { assistantText, contentText, estimatePromptChars, lastAssistant, recordedContent, withBudgetLine } from "./messages.ts";
+import { assistantText, contentText, estimatePromptChars, foreignToolCallsAsText, lastAssistant, recordedContent, withBudgetLine } from "./messages.ts";
 import { DEFAULT_PLANNER_PROMPT, DEFAULT_SYSTEM_PROMPT, renderSystemPrompt } from "./prompts.ts";
 import { type ApiKeyResolver, createGatedStreamFn } from "./provider-gate.ts";
 import { Recorder } from "./recorder.ts";
@@ -930,7 +930,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				if (requestModel.provider === target.provider && requestModel.id === target.id) return undefined;
 				return { model: target, thinkingLevel: active.resolved.effort };
 			},
-			transformContext: async (messages) => withBudgetLine(messages, budgetLine(budget)),
+			transformContext: async (messages) => withBudgetLine(foreignToolCallsAsText(messages, active.model), budgetLine(budget)),
 			beforeToolCall: async ({ toolCall, args }, signal) => {
 				if (budget.isExhausted()) {
 					budgetExceeded = true;

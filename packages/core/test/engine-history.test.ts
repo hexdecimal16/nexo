@@ -44,6 +44,28 @@ describe("engine history and session links", () => {
 		expect(result.model?.contextWindow).toBeGreaterThan(0);
 	});
 
+	it("passes another model's tool calls through unchanged to a non-Google target", async () => {
+		const env = makeEnv();
+		let roles: string[] = [];
+		let calls = 0;
+		env.faux.setResponses([
+			async (ctx) => {
+				roles = ctx.messages.filter((m) => m.role !== "system").map((m) => m.role);
+				calls = ctx.messages.filter((m) => m.role === "assistant").flatMap((m) => (m.content as { type: string }[]).filter((b) => b.type === "toolCall")).length;
+				return fauxAssistantMessage("ok");
+			},
+		]);
+		const earlier = { ...fauxAssistantMessage([fauxToolCall("bash", { command: "ls" })]), provider: "google-vertex", model: "gemini-3.5-flash-lite" };
+		const toolCallId = (earlier.content[0] as { id: string }).id;
+		const result = await createEngine(env.deps).run({
+			instruction: "next",
+			history: [user("first"), earlier, { role: "toolResult", toolCallId, toolName: "bash", content: [{ type: "text", text: "a.txt" }], isError: false, timestamp: 1 }],
+		});
+		expect(result.status).toBe("succeeded");
+		expect(roles).toEqual(["user", "assistant", "toolResult", "user"]);
+		expect(calls).toBe(1);
+	});
+
 	it("records the session link on the root run and charges the session ledger, children included", async () => {
 		const env = makeEnv();
 		useDispatcher(env, {
