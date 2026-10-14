@@ -194,6 +194,18 @@ describe("provider error classification", () => {
 		expect(classifyProviderError(message).code).toBe(code);
 	});
 
+	it("marks a provider 400 as a non-retryable invalid request", () => {
+		const gemini = `{"error":{"message":"{\\n  \\"error\\": {\\n    \\"code\\": 400,\\n    \\"message\\": \\"Function call is missing a thought_signature\\",\\n    \\"status\\": \\"INVALID_ARGUMENT\\"\\n  }\\n}\\n","code":400,"status":"Bad Request"}}`;
+		for (const message of [gemini, "400 Bad Request: messages.1.content is empty", "invalid_request_error: bad tool schema"]) {
+			const error = classifyProviderError(message);
+			expect(error.code, message).toBe("PROVIDER_UNAVAILABLE");
+			expect(error.retryable, message).toBe(false);
+			expect(error.hint, message).toContain("rejected the request as invalid");
+		}
+		expect(classifyProviderError("503 Service Unavailable").retryable).toBe(true);
+		expect(classifyProviderError("Request failed after 4000ms").retryable).toBe(true);
+	});
+
 	it("parses retry-after hints", () => {
 		expect(retryAfterMs("rate limited, retry-after: 7")).toBe(7000);
 		expect(retryAfterMs("no hint")).toBeUndefined();
