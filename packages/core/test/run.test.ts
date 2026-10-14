@@ -128,6 +128,53 @@ describe("engine run", () => {
 		expect(getRun(env.deps.db, result.trajectoryId as string)?.costUsd).toBeCloseTo(result.costUsd, 10);
 	});
 
+	it("counts retries per failure streak, so a rate limit after progress gets the full retry allowance", async () => {
+		const env = makeEnv({ config: { providers: { faux: { maxRetries: 3, rateLimitBaseDelayMs: 5000 } } } });
+		const sleeps: number[] = [];
+		env.deps.sleep = async (ms) => {
+			sleeps.push(ms);
+		};
+		const limited = () => fauxAssistantMessage("", { stopReason: "error", errorMessage: "429 Resource exhausted" });
+		env.faux.setResponses([
+			limited(),
+			fauxAssistantMessage([fauxToolCall("write", { path: "a.txt", content: "1" })]),
+			limited(),
+			limited(),
+			limited(),
+			fauxAssistantMessage("Done after three more."),
+		]);
+		const result = await createEngine(env.deps).run({ instruction: "work through rate limits" });
+		expect(result).toMatchObject({ status: "succeeded", output: "Done after three more." });
+		expect(sleeps).toHaveLength(4);
+		const [first, ...streak] = sleeps as [number, number, number, number];
+		expect(first).toBeGreaterThanOrEqual(4000);
+		expect(first).toBeLessThanOrEqual(6000);
+		expect(streak[0]).toBeGreaterThanOrEqual(4000);
+		expect(streak[1]).toBeGreaterThanOrEqual(8000);
+		expect(streak[2]).toBeGreaterThanOrEqual(16_000);
+	});
+
+	it("gives up after maxRetries consecutive rate limits", async () => {
+		const env = makeEnv({ config: { providers: { faux: { maxRetries: 2, rateLimitBaseDelayMs: 0 } } } });
+		const limited = () => fauxAssistantMessage("", { stopReason: "error", errorMessage: "429 Too Many Requests" });
+		env.faux.setResponses([limited(), limited(), limited(), fauxAssistantMessage("never")]);
+		const result = await createEngine(env.deps).run({ instruction: "x" });
+		expect(result).toMatchObject({ status: "failed", error: { code: "PROVIDER_RATE_LIMIT" } });
+		expect(listSpans(env.deps.db, result.trajectoryId as string).filter((s) => s.kind === "llm_call")).toHaveLength(3);
+	});
+
+	it("stops waiting on a rate limit when the run is aborted", async () => {
+		const env = makeEnv({ config: { providers: { faux: { rateLimitBaseDelayMs: 60_000 } } } });
+		delete env.deps.sleep;
+		const controller = new AbortController();
+		env.faux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "429 Too Many Requests" }), fauxAssistantMessage("never")]);
+		const started = Date.now();
+		setTimeout(() => controller.abort(), 50);
+		const result = await createEngine(env.deps).run({ instruction: "x" }, controller.signal);
+		expect(result.status).toBe("aborted");
+		expect(Date.now() - started).toBeLessThan(5000);
+	});
+
 	it("fails with PROVIDER_AUTH on non-retryable auth errors", async () => {
 		const env = makeEnv();
 		env.faux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "401 Unauthorized: invalid x-api-key" })]);

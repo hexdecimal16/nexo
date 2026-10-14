@@ -194,7 +194,7 @@ describe("chat screen", () => {
 	});
 
 	it("shows model, effort, turn and session cost, cap and context in the footer", async () => {
-		const h = await startHarness({ overrides: { models: { s1: { provider: "faux", id: "slow" }, s2: { provider: "faux", id: "slow" } }, providers: { faux: { retryBaseDelayMs: 0 } }, budgets: { perSessionUsd: 5 } } });
+		const h = await startHarness({ overrides: { models: { s1: { provider: "faux", id: "slow" }, s2: { provider: "faux", id: "slow" } }, providers: { faux: { retryBaseDelayMs: 0, rateLimitBaseDelayMs: 0 } }, budgets: { perSessionUsd: 5 } } });
 		expect(h.terminal.output()).toContain("faux/slow");
 		expect(h.terminal.output()).toContain("$0.00/$5.00");
 		h.faux.setResponses([fauxAssistantMessage("x".repeat(400))]);
@@ -306,7 +306,7 @@ describe("chat screen", () => {
 	});
 
 	it("renders a budget refusal inline as error [CODE] message — hint", async () => {
-		const h = await startHarness({ overrides: { models: { s1: { provider: "faux", id: "pricey" }, s2: { provider: "faux", id: "slow" } }, providers: { faux: { retryBaseDelayMs: 0 } }, budgets: { perSessionUsd: 0.001, estimateOutputTokens: 1 } } });
+		const h = await startHarness({ overrides: { models: { s1: { provider: "faux", id: "pricey" }, s2: { provider: "faux", id: "slow" } }, providers: { faux: { retryBaseDelayMs: 0, rateLimitBaseDelayMs: 0 } }, budgets: { perSessionUsd: 0.001, estimateOutputTokens: 1 } } });
 		h.faux.setResponses([fauxAssistantMessage("x".repeat(2000))]);
 		submit(h.terminal, "spend it");
 		await until(() => !h.session().running && h.session().turns === 1);

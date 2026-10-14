@@ -39,7 +39,7 @@ function setup(): { env: NodeJS.ProcessEnv; cwd: string; models: ReturnType<type
 		join(home, "config.json"),
 		JSON.stringify({
 			models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "slow" } },
-			providers: { faux: { retryBaseDelayMs: 0 } },
+			providers: { faux: { retryBaseDelayMs: 0, rateLimitBaseDelayMs: 0 } },
 			router: { maxEscalations: 0 },
 			scoring: { scorers: [{ kind: "contains", text: "tested" }] },
 			learning: { enabled: false },

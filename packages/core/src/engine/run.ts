@@ -72,7 +72,7 @@ import type { NexoConfig } from "../config/schema.ts";
 import { checkAdmission, recordSpend } from "../cost/admission.ts";
 import { budgetLine, RunBudget } from "../cost/budget.ts";
 import { estimateCallCostUsd, priceUsage } from "../cost/pricing.ts";
-import { classifyProviderError, contextOverflowError, retryDelayMs, toolErrorText, withToolErrorCodes } from "./errors.ts";
+import { classifyProviderError, contextOverflowError, providerRetryDelayMs, toolErrorText, withToolErrorCodes } from "./errors.ts";
 import { assistantText, contentText, estimatePromptChars, foreignToolCallsAsText, lastAssistant, recordedContent, withBudgetLine } from "./messages.ts";
 import { DEFAULT_PLANNER_PROMPT, DEFAULT_SYSTEM_PROMPT, renderSystemPrompt } from "./prompts.ts";
 import { type ApiKeyResolver, createGatedStreamFn } from "./provider-gate.ts";
@@ -467,6 +467,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	let active = { model, resolved };
 	let escalations = 0;
 	let continuationFailure: ErrorPayload | null = null;
+	/** Model calls of this run that ended without an error; the retry loop resets its attempt count when this grows. */
+	let completedCalls = 0;
 	/** Every model that generated part of the run (S1, and S2 after an escalation), for the judge's same-family check. */
 	const usedModels = new Map<string, { provider: string; id: string }>([[`${model.provider}/${model.id}`, { provider: model.provider, id: model.id }]]);
 	/** Every scorer result of the run, and those of its latest round. */
@@ -983,6 +985,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				case "message_end": {
 					if (event.message.role !== "assistant" || !llmSpan) break;
 					const msg = event.message as AssistantMessage;
+					if (msg.stopReason !== "error" && msg.stopReason !== "aborted") completedCalls++;
 					const priced = chargeCall(active.model, msg);
 					const content = deps.redact(recordedContent(msg));
 					const contentJson = JSON.stringify(content);
@@ -1059,14 +1062,20 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		/** Sends one prompt (the instruction, or a continuation), retries retryable provider errors, and sets status and output. */
 		const drive = async (text: string): Promise<void> => {
 			await runAgent.prompt(text);
-			const providerCfg = config.providers[active.model.provider] ?? {};
-			const maxRetries = providerCfg.maxRetries ?? 3;
-			const baseDelay = providerCfg.retryBaseDelayMs ?? 1000;
-			for (let attempt = 1; ; attempt++) {
+			// Retries are counted per streak of consecutive failures: a successful call since the last retry starts over.
+			let attempt = 0;
+			let succeededCalls = completedCalls;
+			for (;;) {
 				const last = lastAssistant(runAgent.state.messages);
 				if (!last || last.stopReason !== "error" || isContextOverflow(last) || !isRetryableAssistantError(last)) break;
-				if (attempt > maxRetries || input.signal?.aborted || budgetExceeded) break;
-				const delay = retryDelayMs(attempt, baseDelay, last.errorMessage ?? "");
+				if (completedCalls !== succeededCalls) {
+					attempt = 0;
+					succeededCalls = completedCalls;
+				}
+				attempt++;
+				const providerCfg = config.providers[active.model.provider] ?? {};
+				if (attempt > (providerCfg.maxRetries ?? 3) || input.signal?.aborted || budgetExceeded) break;
+				const delay = providerRetryDelayMs(attempt, last.errorMessage ?? "", providerCfg);
 				logger.warn("retrying provider error", { attempt, delay_ms: Math.round(delay), error_message: last.errorMessage });
 				await env.sleep(delay, input.signal);
 				runAgent.state.messages = runAgent.state.messages.slice(0, -1);

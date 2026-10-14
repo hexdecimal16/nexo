@@ -36,7 +36,7 @@ describe("settings in a session", () => {
 			cwd,
 			env: {},
 			models,
-			overrides: { models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "slow" } }, providers: { faux: { retryBaseDelayMs: 0 } }, learning: { enabled: false } },
+			overrides: { models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "slow" } }, providers: { faux: { retryBaseDelayMs: 0, rateLimitBaseDelayMs: 0 } }, learning: { enabled: false } },
 		});
 		const { config, hash } = settings.loadConfig();
 		const logger = createLogger({ dir: paths.logs, component: "test", redact: settings.redact });

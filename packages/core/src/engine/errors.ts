@@ -11,7 +11,7 @@ export function classifyProviderError(message: string): NexoError {
 			hint: "Set the provider's API key environment variable (for example ANTHROPIC_API_KEY or OPENAI_API_KEY) or log in with pi-ai",
 		});
 	}
-	if (/\b429\b|rate.?limit|too many requests/.test(lower)) {
+	if (/\b429\b|rate.?limit|too many requests|resource.?exhausted/.test(lower)) {
 		return new NexoError({ code: "PROVIDER_RATE_LIMIT", message, retryable: true, hint: "Lower providers.<name>.maxConcurrent or retry later" });
 	}
 	if (/timed? ?out|timeout|etimedout/.test(lower)) {
@@ -40,9 +40,28 @@ export function retryAfterMs(errorMessage: string): number | undefined {
 	return match?.[1] ? Math.round(Number(match[1]) * 1000) : undefined;
 }
 
+const RATE_LIMIT_MAX_DELAY_MS = 60_000;
+
+/**
+ * Backoff before retry `attempt` (1-based, counted per streak of consecutive failures) of a retryable provider error.
+ * A rate limit waits `rateLimitBaseDelayMs` (default 5 s) doubling per attempt up to a minute, ±20% so parallel callers
+ * spread out; quota windows are seconds to a minute long and providers such as Vertex send no retry-after. Other
+ * errors use `retryDelayMs`. A retry-after in the message is always waited at least.
+ */
+export function providerRetryDelayMs(
+	attempt: number,
+	errorMessage: string,
+	cfg: { retryBaseDelayMs?: number; rateLimitBaseDelayMs?: number },
+	random: () => number = Math.random,
+): number {
+	if (classifyProviderError(errorMessage).code !== "PROVIDER_RATE_LIMIT") return retryDelayMs(attempt, cfg.retryBaseDelayMs ?? 1000, errorMessage, random);
+	const base = Math.min(RATE_LIMIT_MAX_DELAY_MS, (cfg.rateLimitBaseDelayMs ?? 5000) * 2 ** (attempt - 1));
+	return Math.max(Math.round(base * (0.8 + 0.4 * random())), retryAfterMs(errorMessage) ?? 0);
+}
+
 /** Backoff before retry `attempt` (1-based) of a retryable provider error: full jitter on an exponential base, at least the provider's retry-after. */
-export function retryDelayMs(attempt: number, baseDelayMs: number, errorMessage: string): number {
-	return Math.max(Math.random() * baseDelayMs * 2 ** (attempt - 1), retryAfterMs(errorMessage) ?? 0);
+export function retryDelayMs(attempt: number, baseDelayMs: number, errorMessage: string, random: () => number = Math.random): number {
+	return Math.max(random() * baseDelayMs * 2 ** (attempt - 1), retryAfterMs(errorMessage) ?? 0);
 }
 
 /** The text the model sees for a failed tool call: code, retryability, message and hint. */

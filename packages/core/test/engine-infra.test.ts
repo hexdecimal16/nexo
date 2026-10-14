@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { createRedactor, REDACTED } from "@nexo/telemetry";
 import { insertRun, listSpans, openDb, RunDir } from "@nexo/store";
 import { runRow } from "../../store/test/fixtures.ts";
-import { classifyProviderError, retryAfterMs } from "../src/engine/errors.ts";
+import { classifyProviderError, providerRetryDelayMs, retryAfterMs } from "../src/engine/errors.ts";
 import { assistantText, withBudgetLine } from "../src/engine/messages.ts";
 import { createGatedStreamFn } from "../src/engine/provider-gate.ts";
 import { Recorder } from "../src/engine/recorder.ts";
@@ -204,6 +204,29 @@ describe("provider error classification", () => {
 		}
 		expect(classifyProviderError("503 Service Unavailable").retryable).toBe(true);
 		expect(classifyProviderError("Request failed after 4000ms").retryable).toBe(true);
+	});
+
+	it("treats Vertex RESOURCE_EXHAUSTED as a rate limit", () => {
+		const vertex = `{"error":{"message":"{\\n  \\"error\\": {\\n \\"code\\": 429,\\n \\"message\\": \\"Resource exhausted. Please try again later.\\",\\n \\"status\\": \\"RESOURCE_EXHAUSTED\\"\\n }\\n}\\n","code":429,"status":"Too Many Requests"}}`;
+		expect(classifyProviderError(vertex)).toMatchObject({ code: "PROVIDER_RATE_LIMIT", retryable: true });
+		expect(classifyProviderError("RESOURCE_EXHAUSTED: quota")).toMatchObject({ code: "PROVIDER_RATE_LIMIT" });
+	});
+
+	it("waits seconds, doubling to a one-minute cap, between rate-limit retries", () => {
+		const mid = () => 0.5;
+		const delays = [1, 2, 3, 4, 5, 6].map((attempt) => providerRetryDelayMs(attempt, "429 Too Many Requests", {}, mid));
+		expect(delays).toEqual([5000, 10_000, 20_000, 40_000, 60_000, 60_000]);
+		expect(providerRetryDelayMs(1, "429", {}, () => 0)).toBe(4000);
+		expect(providerRetryDelayMs(1, "429", {}, () => 0.999_999)).toBeCloseTo(6000, -1);
+		expect(providerRetryDelayMs(2, "429", { rateLimitBaseDelayMs: 1000 }, mid)).toBe(2000);
+		expect(providerRetryDelayMs(3, "429", { rateLimitBaseDelayMs: 0 }, mid)).toBe(0);
+		expect(providerRetryDelayMs(1, "rate limited, retry-after: 90", {}, mid)).toBe(90_000);
+	});
+
+	it("keeps the short full-jitter backoff for other retryable errors", () => {
+		expect(providerRetryDelayMs(1, "503 Service Unavailable", {}, () => 0.5)).toBe(500);
+		expect(providerRetryDelayMs(3, "503 Service Unavailable", { retryBaseDelayMs: 100 }, () => 0.5)).toBe(200);
+		expect(providerRetryDelayMs(1, "503, retry-after: 3", {}, () => 0)).toBe(3000);
 	});
 
 	it("parses retry-after hints", () => {

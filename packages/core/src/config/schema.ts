@@ -60,6 +60,7 @@ export const ConfigSchema = Type.Object(
 					maxConcurrent: Type.Optional(Type.Integer({ minimum: 1 })),
 					maxRetries: Type.Optional(Type.Integer({ minimum: 0, maximum: 10 })),
 					retryBaseDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
+					rateLimitBaseDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
 				},
 				{ additionalProperties: false },
 			),
