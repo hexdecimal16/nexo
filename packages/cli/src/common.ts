@@ -29,10 +29,8 @@ export interface CliOptions {
 	signal?: AbortSignal;
 	/** Default: the process streams. */
 	stdio?: CliStdio;
-	/** Terminal for the chat and settings screens. Default: pi-tui's ProcessTerminal. */
+	/** Terminal for the chat, settings and `--resume` picker screens. Default: pi-tui's ProcessTerminal. */
 	terminal?: InteractiveOptions["terminal"];
-	/** Asks the `--resume` picker question. Default: a readline asker on stdin and stderr. */
-	lineAsker?: LineAsker;
 	/** Receives the crash handlers of interactive mode. Default: `process`. */
 	proc?: ProcessLike;
 	/** Called with the exit code when interactive mode ends, so a stuck turn cannot keep the process alive. bin.ts passes process.exit. */

@@ -69,14 +69,15 @@ const EXIT_TIMEOUT_MS = 5000;
 /** Started TUIs, so `restoreTerminal` can stop them from a crash handler. */
 const activeTuis = new Set<TuiMainScreen>();
 
-function startTui(tui: TuiMainScreen): void {
+/** Starts a TUI that `restoreTerminal` puts back on exit or crash. */
+export function startTui(tui: TuiMainScreen): void {
 	// Links render as "text (url)": an OSC 8 hyperlink would hide the real target behind the text.
 	setCapabilityOverrides({ hyperlinks: false });
 	activeTuis.add(tui);
 	tui.start();
 }
 
-function stopTui(tui: TuiMainScreen): void {
+export function stopTui(tui: TuiMainScreen): void {
 	if (!activeTuis.delete(tui)) return;
 	tui.stop();
 }
