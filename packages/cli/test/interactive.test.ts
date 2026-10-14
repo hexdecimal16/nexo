@@ -186,7 +186,7 @@ describe("routing", () => {
 		expect(terminal.stopped).toBe(true);
 	});
 
-	it("resumes a session picked by number", async () => {
+	it("resumes the session picked in the searchable list", async () => {
 		const h = home(roles);
 		// create a real session first
 		const terminal1 = new FakeTerminal();
@@ -202,35 +202,30 @@ describe("routing", () => {
 		const ids = db.prepare("SELECT id FROM sessions").all().map((r) => String(r.id));
 		expect(ids).toHaveLength(1);
 		const t = io();
-		const asked: string[] = [];
 		const terminal2 = new FakeTerminal();
-		const done = runCli(["--resume"], t, {
-			...h,
-			models: fauxModels(),
-			stdio: ttyStdio(),
-			terminal: terminal2,
-			proc: new EventEmitter() as never,
-			lineAsker: { ask: async (q) => (asked.push(q), "1"), close: () => asked.push("closed") },
-		});
-		await until(() => terminal2.started && terminal2.output().includes("nexo session"));
-		expect(t.err()).toContain(ids[0]);
-		expect(asked.at(-1)).toBe("closed");
+		const done = runCli(["--resume"], t, { ...h, models: fauxModels(), stdio: ttyStdio(), terminal: terminal2, proc: new EventEmitter() as never });
+		await until(() => expect(terminal2.output()).toContain("Resume a session"));
+		expect(terminal2.output()).toContain("hello there");
+		expect(terminal2.output()).toContain(ids[0]);
+		terminal2.send(KEY.enter);
+		await until(() => expect(terminal2.output()).toContain(`nexo session ${ids[0]}`));
 		terminal2.send(KEY.ctrlD);
 		expect(await done).toBe(0);
 	});
 
-	it("reports no sessions to resume as NOT_FOUND and treats a blank pick as cancel", async () => {
+	it("reports no sessions to resume as NOT_FOUND and treats esc in the picker as cancel", async () => {
 		const h = home(roles);
 		const t = io();
-		const code = await runCli(["--resume"], t, { ...h, models: fauxModels(), stdio: ttyStdio(), lineAsker: { ask: async () => "1" } });
+		const code = await runCli(["--resume"], t, { ...h, models: fauxModels(), stdio: ttyStdio() });
 		expect(code).toBe(1);
 		expect(t.err()).toContain("error [NOT_FOUND]");
 		addSession(h, "01SESSIONAAAAAAAAAAAAAAAAA");
-		const t2 = io();
 		const terminal = new FakeTerminal();
-		expect(await runCli(["--resume"], t2, { ...h, models: fauxModels(), stdio: ttyStdio(), terminal, lineAsker: { ask: async () => "" } })).toBe(0);
-		expect(terminal.started).toBe(false);
-		expect(await runCli(["--resume"], io(), { ...h, models: fauxModels(), stdio: ttyStdio(), terminal, lineAsker: { ask: async () => "9" } })).toBe(2);
+		const done = runCli(["--resume"], io(), { ...h, models: fauxModels(), stdio: ttyStdio(), terminal });
+		await until(() => expect(terminal.output()).toContain("Resume a session"));
+		terminal.send(KEY.escape);
+		expect(await done).toBe(0);
+		expect(terminal.output()).not.toContain("nexo session");
 	});
 
 	it("routes first run (no config) to the setup screen before the chat", async () => {
@@ -539,20 +534,12 @@ describe("signals and prompts", () => {
 		const h = home(roles);
 		addSession(h, "01SESSIONAAAAAAAAAAAAAAAAA");
 		const ac = new AbortController();
-		let received: AbortSignal | undefined;
-		const lineAsker = {
-			ask: (_q: string, signal?: AbortSignal) =>
-				new Promise<string | null>((resolve) => {
-					received = signal;
-					signal?.addEventListener("abort", () => resolve(null));
-				}),
-		};
 		const terminal = new FakeTerminal();
-		const done = runCli(["--resume"], io(), { ...h, models: fauxModels(), stdio: ttyStdio(), terminal, signal: ac.signal, lineAsker });
-		await until(() => received !== undefined);
+		const done = runCli(["--resume"], io(), { ...h, models: fauxModels(), stdio: ttyStdio(), terminal, signal: ac.signal });
+		await until(() => expect(terminal.output()).toContain("Resume a session"));
 		ac.abort();
 		expect(await done).toBe(EXIT_SIGINT);
-		expect(terminal.started).toBe(false);
+		expect(terminal.output()).not.toContain("nexo session");
 	});
 
 	it("redacts a stored key in crash output and in interactive errors", async () => {

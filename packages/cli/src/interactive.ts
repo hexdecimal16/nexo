@@ -6,9 +6,8 @@ import { EFFORTS, type Effort } from "@nexo/router";
 import { BUNDLED_SKILLS_DIR, loadSkills } from "@nexo/skills";
 import { ensureNexoDirs, getSessionRow, openDb, resolveNexoPaths, sessionNotFound } from "@nexo/store";
 import { NexoError, toErrorPayload } from "@nexo/telemetry";
-import { escapeControl, oneLine, restoreTerminal, runInteractive, runSettingsScreen } from "@nexo/tui";
+import { restoreTerminal, runInteractive, runSessionPicker, runSettingsScreen } from "@nexo/tui";
 import { type CliIO, type CliOptions, type CliStdio, EXIT_SIGINT, exitCodeFor, printError, type ProcessLike, requireTerminal, usageError } from "./common.ts";
-import { createTtyLineAsker, type LineAsker } from "./review.ts";
 import { openLogger } from "./runtime.ts";
 
 export interface CrashHandlerOptions {
@@ -77,24 +76,7 @@ export function parseInteractiveArgs(args: string[]): InteractiveArgs {
 	return { resume, workspace: values.workspace, model: values.model, effort: values.effort as Effort | undefined };
 }
 
-const PICKER_LIMIT = 20;
-
-/** A numbered list on stderr and one question; "" means a deliberate cancel (blank answer), null means the input ended or was aborted. */
-async function pickSession(io: CliIO, asker: LineAsker, rows: ReturnType<typeof listSessions>, signal?: AbortSignal): Promise<string | null> {
-	io.stderr.write("Recent sessions:\n");
-	rows.forEach((row, i) => {
-		const title = oneLine(escapeControl(row.title), 50) || "(untitled)";
-		io.stderr.write(`  ${String(i + 1).padStart(2)}. ${row.id}  ${title}  (${row.turns} turns, ${row.updatedAt.slice(0, 16).replace("T", " ")})\n`);
-	});
-	const answer = await asker.ask(`Resume which session? [1-${rows.length}, Enter to cancel] `, signal);
-	if (answer === null) return null;
-	const trimmed = answer.trim();
-	if (trimmed === "") return "";
-	const index = /^\d+$/.test(trimmed) ? Number(trimmed) : 0;
-	const row = rows[index - 1];
-	if (!row) throw usageError(`"${escapeControl(trimmed).slice(0, 40)}" is not a number from 1 to ${rows.length}`);
-	return row.id;
-}
+const PICKER_LIMIT = 50;
 
 /**
  * `nexo` and `nexo --resume [id]`: the chat. First run (no valid config) opens setup inside runInteractive.
@@ -118,14 +100,8 @@ export async function interactiveCommand(args: string[], io: CliIO, options: Cli
 			if (rows.length === 0) {
 				throw new NexoError({ code: "NOT_FOUND", message: "No sessions to resume", hint: "Run `nexo` to start one" });
 			}
-			const asker = options.lineAsker ?? createTtyLineAsker(stdio.stdin, io.stderr as NodeJS.WritableStream);
-			try {
-				resumeId = await pickSession(io, asker, rows, options.signal);
-			} finally {
-				asker.close?.();
-			}
-			if (resumeId === null) return EXIT_SIGINT;
-			if (resumeId === "") return 0;
+			resumeId = await runSessionPicker({ sessions: rows, terminal: options.terminal, signal: options.signal });
+			if (resumeId === null) return options.signal?.aborted ? EXIT_SIGINT : 0;
 		}
 		if (!getSessionRow(db, resumeId)) throw sessionNotFound(resumeId);
 	}
