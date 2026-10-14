@@ -47,14 +47,20 @@ export function toolSummary(toolName: string, args: unknown, max = 80): string {
 	return `${escapeControl(toolName)}(${escapeControl(oneLine(subject, max))})`;
 }
 
-/** The first `maxLines` non-empty lines of a tool result, control-escaped. */
-export function previewLines(preview: string, maxLines = 3): string[] {
-	const lines = preview
+/** The non-empty lines of a tool result, control-escaped. */
+export function resultLines(output: string): string[] {
+	return output
 		.split(/\r?\n/)
 		.map((l) => l.trimEnd())
-		.filter((l) => l.length > 0);
-	const out = lines.slice(0, maxLines).map((l) => escapeControl(l.replace(/\t/g, "  ")));
-	if (lines.length > maxLines) out.push(`… ${lines.length - maxLines} more line${lines.length - maxLines === 1 ? "" : "s"}`);
+		.filter((l) => l.length > 0)
+		.map((l) => escapeControl(l.replace(/\t/g, "  ")));
+}
+
+/** The first `maxLines` non-empty lines of a tool result, control-escaped. */
+export function previewLines(preview: string, maxLines = 3): string[] {
+	const lines = resultLines(preview);
+	const out = lines.slice(0, maxLines);
+	if (lines.length > maxLines) out.push(`… ${lines.length - maxLines} more line${lines.length - maxLines === 1 ? "" : "s"} (ctrl+o to expand)`);
 	return out;
 }
 
