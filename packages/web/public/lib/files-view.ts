@@ -53,6 +53,33 @@ export function renderListing(listing: DirListing): SafeHtml {
 	})}</ul>`;
 }
 
+export type MediaKind = "video" | "audio" | "image";
+
+/** Extensions the files API serves under a media type (kept in step with `MEDIA_TYPES` in the server's api.ts). */
+const MEDIA_KINDS: Record<string, MediaKind> = {
+	mp4: "video", m4v: "video", webm: "video", mov: "video",
+	mp3: "audio", m4a: "audio", wav: "audio", ogg: "audio",
+	png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image",
+};
+
+export function mediaKind(path: string): MediaKind | null {
+	const dot = path.lastIndexOf(".");
+	if (dot < 0 || dot < path.lastIndexOf("/")) return null;
+	return MEDIA_KINDS[path.slice(dot + 1).toLowerCase()] ?? null;
+}
+
+/** A player or image for a media file, loaded straight from the files API, with a link to open it on its own. */
+export function renderMedia(path: string, kind: MediaKind, src: string): SafeHtml {
+	const player =
+		kind === "video" ? html`<video class="media" controls preload="metadata" src="${src}"></video>`
+		: kind === "audio" ? html`<audio class="media" controls preload="metadata" src="${src}"></audio>`
+		: html`<img class="media" alt="${path}" src="${src}">`;
+	return html`<div class="file-view">
+	<div class="file-head mono">${path} · <a href="${src}" target="_blank" rel="noopener noreferrer">open</a></div>
+	${player}
+</div>`;
+}
+
 /** File contents: unified diffs get line colouring, anything else is plain preformatted text. */
 export function renderFile(path: string, text: string, truncatedSize: number | null): SafeHtml {
 	return html`<div class="file-view">

@@ -54,6 +54,12 @@ describe("pages", () => {
 		expect(res.headers["content-security-policy"]).toContain("script-src 'self'");
 	});
 
+	it("let the run page play media from the files API and nothing else", async () => {
+		const csp = String((await raw(server.port, "/run.html")).headers["content-security-policy"]);
+		expect(csp).toContain("media-src 'self';");
+		expect(csp).toContain("default-src 'none'");
+	});
+
 	it("serve browser modules that parse as JavaScript", async () => {
 		const modules = await reachableModules();
 		expect([...modules.keys()].sort()).toEqual(

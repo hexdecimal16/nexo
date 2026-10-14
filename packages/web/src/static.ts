@@ -11,7 +11,7 @@ export const TOKEN_PLACEHOLDER = "{{NEXO_TOKEN}}";
 
 /** Pages may load only their own scripts, styles and API; no inline script, no framing. */
 export const PAGE_CSP =
-	"default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; " +
+	"default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'self'; " +
 	"base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 const TYPES: Record<string, string> = {
