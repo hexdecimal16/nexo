@@ -104,6 +104,24 @@ describe("slash commands", () => {
 		await h.done;
 	});
 
+	it("/clear wipes the screen and scrollback, keeping the session header", async () => {
+		const h = await startHarness();
+		h.faux.setResponses([fauxAssistantMessage("first-reply-text")]);
+		submit(h.terminal, "earlier question");
+		await until(() => expect(h.terminal.output()).toContain("first-reply-text"));
+		await until(() => expect(h.session().running).toBe(false));
+		submit(h.terminal, "/clear");
+		await until(() => expect(h.terminal.screen()).toContain("conversation cleared"));
+		const screen = h.terminal.screen();
+		expect(screen).not.toContain("first-reply-text");
+		// Only the header's session title still names the first message; its echoed block is gone.
+		expect(screen.split("earlier question")).toHaveLength(2);
+		expect(screen).toContain(`session ${h.session().id} · earlier question`);
+		expect(screen).toContain("files:");
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
 	it("reports an unknown command and refuses commands while a turn runs", async () => {
 		const h = await startHarness();
 		submit(h.terminal, "/bogus");

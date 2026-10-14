@@ -300,8 +300,8 @@ class InteractiveApp {
 		this.add(new Block(formatError(error), style.red, "  "));
 	}
 
-	private renderHeader(session: Session): void {
-		const resumed = session.turns > 0;
+	private renderHeader(session: Session, options: { transcript: boolean } = { transcript: true }): void {
+		const resumed = options.transcript && session.turns > 0;
 		this.add(
 			new Block(
 				`${style.bold("nexo")} ${style.gray(`session ${session.id}${session.title ? ` · ${escapeControl(oneLine(session.title, 60))}` : ""}`)}`,
@@ -655,7 +655,11 @@ class InteractiveApp {
 					break;
 				case "clear":
 					session.clear();
+					// A forced render after emptying the chat clears the screen and scrollback, then draws only what follows.
+					this.chat.clear();
+					this.renderHeader(session, { transcript: false });
 					this.say("── conversation cleared ── (same session; earlier turns stay in its history)");
+					this.tui.requestRender(true);
 					break;
 				case "sessions":
 					this.say(this.sessionsText(session));
