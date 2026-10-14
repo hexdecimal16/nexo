@@ -24,7 +24,7 @@ describe("scores and escalations in the chat", () => {
 
 	it("shows a failed S2 continuation in the chat", async () => {
 		const h = await startHarness({
-			overrides: { ...FAUX_ROLES, providers: { faux: { retryBaseDelayMs: 0, maxRetries: 0 } }, scoring: { scorers: [{ kind: "contains", name: "says-done", text: "DONE" }] } },
+			overrides: { ...FAUX_ROLES, providers: { faux: { retryBaseDelayMs: 0, rateLimitBaseDelayMs: 0, maxRetries: 0 } }, scoring: { scorers: [{ kind: "contains", name: "says-done", text: "DONE" }] } },
 		});
 		h.faux.setResponses([fauxAssistantMessage("not yet"), fauxAssistantMessage("", { stopReason: "error", errorMessage: "invalid request 400" })]);
 		submit(h.terminal, "finish it");

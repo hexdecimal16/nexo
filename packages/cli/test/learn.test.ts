@@ -25,7 +25,7 @@ afterEach(() => {
 
 const config = {
 	models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "fast" } },
-	providers: { faux: { retryBaseDelayMs: 0, maxRetries: 0 } },
+	providers: { faux: { retryBaseDelayMs: 0, rateLimitBaseDelayMs: 0, maxRetries: 0 } },
 };
 
 function home(extra: object = {}): { env: NodeJS.ProcessEnv; cwd: string } {

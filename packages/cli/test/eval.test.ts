@@ -33,7 +33,7 @@ function home(config?: unknown): { env: NodeJS.ProcessEnv; cwd: string } {
 }
 
 const ROLES = { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "fast" } };
-const withJudge = { models: { ...ROLES, judge: [{ provider: "google", id: "gemini-x" }] }, providers: { faux: { retryBaseDelayMs: 0 } } };
+const withJudge = { models: { ...ROLES, judge: [{ provider: "google", id: "gemini-x" }] }, providers: { faux: { retryBaseDelayMs: 0, rateLimitBaseDelayMs: 0 } } };
 
 /** Judged runs with human verdicts: (judge passed, human verdict) per run. */
 function seed(h: { env: NodeJS.ProcessEnv }, cases: [boolean, "done" | "not_done"][], model = "google/gemini-x", text?: { instruction: string; comment: string }): void {
@@ -196,7 +196,7 @@ describe("nexo ui and the judge", () => {
 
 describe("nexo run with scorers", () => {
 	it("prints each score and the escalation count after the run", async () => {
-		const h = home({ models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "strong" } }, providers: { faux: { retryBaseDelayMs: 0 } }, scoring: { scorers: [{ kind: "contains", name: "says-done", text: "DONE" }] } });
+		const h = home({ models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "strong" } }, providers: { faux: { retryBaseDelayMs: 0, rateLimitBaseDelayMs: 0 } }, scoring: { scorers: [{ kind: "contains", name: "says-done", text: "DONE" }] } });
 		const faux = fauxProvider({ models: [{ id: "fast", cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } }, { id: "strong", cost: { input: 5, output: 10, cacheRead: 0, cacheWrite: 0 } }] });
 		faux.setResponses([fauxAssistantMessage("not yet"), fauxAssistantMessage("DONE")]);
 		const models = createModels();
@@ -209,7 +209,7 @@ describe("nexo run with scorers", () => {
 	});
 
 	it("prints how a failed S2 continuation ended", async () => {
-		const h = home({ models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "strong" } }, providers: { faux: { retryBaseDelayMs: 0, maxRetries: 0 } }, scoring: { scorers: [{ kind: "contains", name: "says-done", text: "DONE" }] } });
+		const h = home({ models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "strong" } }, providers: { faux: { retryBaseDelayMs: 0, rateLimitBaseDelayMs: 0, maxRetries: 0 } }, scoring: { scorers: [{ kind: "contains", name: "says-done", text: "DONE" }] } });
 		const faux = fauxProvider({ models: [{ id: "fast" }, { id: "strong" }] });
 		faux.setResponses([fauxAssistantMessage("not yet"), fauxAssistantMessage("", { stopReason: "error", errorMessage: "invalid request 400" })]);
 		const models = createModels();

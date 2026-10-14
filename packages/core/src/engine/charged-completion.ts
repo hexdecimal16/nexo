@@ -4,7 +4,7 @@ import type { SpanKind } from "@nexo/store";
 import { NexoError, toErrorPayload } from "@nexo/telemetry";
 import type { RunBudget } from "../cost/budget.ts";
 import { estimateCallCostUsd, type PricedUsage } from "../cost/pricing.ts";
-import { classifyProviderError, retryDelayMs } from "./errors.ts";
+import { classifyProviderError, providerRetryDelayMs } from "./errors.ts";
 import { assistantText } from "./messages.ts";
 import type { Recorder } from "./recorder.ts";
 import type { EngineEnv } from "./run.ts";
@@ -56,7 +56,6 @@ export async function runChargedCompletion(
 	const { model, span } = request;
 	const providerCfg = config.providers[model.provider] ?? {};
 	const maxRetries = providerCfg.maxRetries ?? 3;
-	const baseDelay = providerCfg.retryBaseDelayMs ?? 1000;
 	// The reply is capped at the output tokens the estimate assumes, so a verbose reply cannot cost more than was reserved.
 	const outputTokens = request.outputTokens ?? config.budgets.estimateOutputTokens;
 	const maxTokens = model.maxTokens > 0 ? Math.min(outputTokens, model.maxTokens) : outputTokens;
@@ -108,6 +107,6 @@ export async function runChargedCompletion(
 		if (!failed) return { text, costUsd, costUnknown };
 		const error = classifyProviderError(msg.errorMessage ?? "Provider error");
 		if (!error.retryable || attempt > maxRetries) throw error;
-		await env.sleep(retryDelayMs(attempt, baseDelay, msg.errorMessage ?? ""), signal);
+		await env.sleep(providerRetryDelayMs(attempt, msg.errorMessage ?? "", providerCfg), signal);
 	}
 }

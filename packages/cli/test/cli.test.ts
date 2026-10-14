@@ -35,7 +35,7 @@ function home(config?: unknown): { env: NodeJS.ProcessEnv; cwd: string } {
 
 const config = {
 	models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "fast" } },
-	providers: { faux: { retryBaseDelayMs: 0 } },
+	providers: { faux: { retryBaseDelayMs: 0, rateLimitBaseDelayMs: 0 } },
 };
 
 function fauxModels(responses: ReturnType<typeof fauxAssistantMessage>[]) {
