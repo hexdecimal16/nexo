@@ -91,13 +91,13 @@ export const EDITABLE_SETTINGS: readonly SettingDefinition[] = [
 	{
 		key: "tools.nonInteractiveAsk",
 		label: "Ask without a terminal",
-		description: "What an `ask` policy does when nobody can answer (nexo run without a TTY)",
+		description: "What an `ask` policy does when nobody can answer (nexo run without a TTY); with auto mode on, the approver may still allow some `ask` tools first",
 		type: { kind: "enum", values: ["allow", "deny"] },
 	},
 	{
 		key: "tools.autoApprove",
 		label: "Auto mode",
-		description: "An approver model allows in-scope actions that would otherwise ask (on/off); /auto overrides it per session",
+		description: "An approver model allows in-scope actions that would otherwise ask (on/off); /auto overrides it per session. Also applies to `nexo run`, where it can allow `ask` tools without a human even when nonInteractiveAsk is deny",
 		type: { kind: "enum", values: ["off", "on"] },
 	},
 	{
