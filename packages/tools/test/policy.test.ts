@@ -129,6 +129,17 @@ describe("authorize with session rules and the approver", () => {
 		expect(p.asked).toHaveLength(0);
 	});
 
+	it("a config deny rule still applies to the whitespace-normalized command", async () => {
+		const policy = createPolicy({ policy: { bash: "ask" }, rules: [{ tool: "bash", match: "^git push --force", action: "deny" }], nonInteractiveAsk: "deny" });
+		const rules: SessionRule[] = [{ tool: "bash", kind: "prefix", value: "git push" }];
+		const classify = async () => ({ decision: "allow" as const, reason: "ok" });
+		expect(policy.decide("bash", { command: "git push  --force" }).action).toBe("ask");
+		for (const options of [{ sessionRules: () => rules }, { classify }]) {
+			expect(await policy.authorize(recordingPrompter("once"), "bash", { command: "git push  --force" }, undefined, undefined, options)).toMatchObject({ allowed: false, error: { code: "TOOL_DENIED" } });
+		}
+		expect(await policy.authorize(recordingPrompter("once"), "bash", { command: "git push origin" }, undefined, undefined, { sessionRules: () => rules })).toEqual({ allowed: true, by: "session_rule" });
+	});
+
 	it("shows the approver's reason in the box and adds the rule on Always allow", async () => {
 		const policy = createPolicy(approvalCfg);
 		const rules: SessionRule[] = [];

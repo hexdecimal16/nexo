@@ -30,8 +30,8 @@ const ALLOWED_SUBCOMMANDS = new Map<string, Set<string>>([
 /** Subcommands that never get a pattern at all: `gh api`, and container or pod runs, whose trailing words are an arbitrary command. */
 const BLOCKED_SUBCOMMANDS = new Map<string, Set<string>>([
 	["gh", new Set(["api"])],
-	["docker", new Set(["run", "exec"])],
-	["kubectl", new Set(["exec", "run"])],
+	["docker", new Set(["run", "exec", "compose", "container"])],
+	["kubectl", new Set(["exec", "run", "cp"])],
 ]);
 /** Programs that only read or print, so a bare name is a safe prefix (`cat`). Any other bare program gets no pattern. */
 const SAFE_SINGLE = new Set(["ls", "cat", "pwd", "grep", "head", "tail", "wc", "echo", "which", "file", "stat", "du", "df", "diff", "date", "whoami", "uname", "jq", "true"]);
