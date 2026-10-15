@@ -1,6 +1,5 @@
 import { parseArgs } from "node:util";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { createConfiguredMcpHub, createSession, createSettings, listSessions, resumeSession, type SessionDeps } from "@nexo/core";
+import { createConfiguredMcpHub, createSession, createSettings, listSessions, nexoModels, resumeSession, type SessionDeps } from "@nexo/core";
 import type { McpHub } from "@nexo/mcp";
 import { EFFORTS, type Effort } from "@nexo/router";
 import { BUNDLED_SKILLS_DIR, loadSkills } from "@nexo/skills";
@@ -88,7 +87,7 @@ export async function interactiveCommand(args: string[], io: CliIO, options: Cli
 	const cwd = options.cwd ?? process.cwd();
 	const paths = resolveNexoPaths(env);
 	ensureNexoDirs(paths);
-	const models = options.models ?? builtinModels();
+	const models = options.models ?? nexoModels();
 	const settings = createSettings({ paths, cwd, env, models });
 	const db = openDb(paths.db);
 
@@ -161,7 +160,7 @@ export async function settingsScreenCommand(io: CliIO, options: CliOptions, stdi
 	const env = options.env ?? process.env;
 	const paths = resolveNexoPaths(env);
 	ensureNexoDirs(paths);
-	const settings = createSettings({ paths, cwd: options.cwd ?? process.cwd(), env, models: options.models ?? builtinModels() });
+	const settings = createSettings({ paths, cwd: options.cwd ?? process.cwd(), env, models: options.models ?? nexoModels() });
 	openLogger(settings, paths, "settings");
 	const dispose = installCrashHandlers({ proc: options.proc ?? process, restore: restoreTerminal, redact: settings.redact, stderr: io.stderr, exit: options.exit ?? ((code) => process.exit(code)) });
 	try {
