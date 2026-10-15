@@ -98,6 +98,11 @@ function policyFor(policy: Record<string, PolicyAction>, toolName: string): Poli
 	return best === undefined ? undefined : policy[best];
 }
 
+function stringField(args: unknown, key: string): string | null {
+	const value = typeof args === "object" && args !== null ? (args as Record<string, unknown>)[key] : undefined;
+	return typeof value === "string" ? value : null;
+}
+
 export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
 	const rules = cfg.rules.map((rule, index) => {
 		try {
@@ -131,18 +136,22 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
 		decide,
 		async authorize(prompter, toolName, args, signal, label, options = {}) {
 			const decision = decide(toolName, args);
-			const ruleText = decision.rule === undefined ? "" : ` (rule #${decision.rule})`;
 			if (decision.action === "allow") return { allowed: true, by: "config" };
-			if (decision.action === "deny") {
-				return {
-					allowed: false,
-					error: new NexoError({
-						code: "TOOL_DENIED",
-						message: `Tool "${toolName}" denied by policy${ruleText}: ${decision.subject}`,
-						hint: "Change tools.policy or tools.rules in your nexo config",
-						context: { toolName, rule: decision.rule },
-					}),
-				};
+			const denied = (hit: PolicyDecision): Authorization => ({
+				allowed: false,
+				error: new NexoError({
+					code: "TOOL_DENIED",
+					message: `Tool "${toolName}" denied by policy${hit.rule === undefined ? "" : ` (rule #${hit.rule})`}: ${decision.subject}`,
+					hint: "Change tools.policy or tools.rules in your nexo config",
+					context: { toolName, rule: hit.rule },
+				}),
+			});
+			if (decision.action === "deny") return denied(decision);
+			// A deny rule written for single spaces must also stop the same command with extra whitespace, which a session rule or the approver would otherwise wave through.
+			const command = stringField(args, "command");
+			if (toolName === "bash" && command !== null) {
+				const collapsed = decide(toolName, { command: command.trim().split(/\s+/).join(" ") });
+				if (collapsed.action === "deny") return denied(collapsed);
 			}
 			const ruleMatches = () => (options.sessionRules?.() ?? []).some((rule) => matchesSessionRule(rule, toolName, args));
 			if (ruleMatches()) return { allowed: true, by: "session_rule" };
