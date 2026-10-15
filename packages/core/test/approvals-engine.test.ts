@@ -87,6 +87,36 @@ describe("approvals in the engine", () => {
 		expect(rules).toEqual([{ tool: "bash", kind: "prefix", value: "npm run test" }]);
 	});
 
+	it("a subagent's approver sees the root user message as the request and its task only inside the action", async () => {
+		const env = makeEnv({ config: { tools: { policy: { bash: "ask" }, autoApprove: "on" } } });
+		env.deps.prompter = prompter("deny");
+		const approverInputs: string[] = [];
+		let a = 0;
+		const agent = [
+			fauxAssistantMessage([fauxToolCall("spawn", { tasks: [{ id: "c", instruction: "CHILD-TASK-TEXT" }] })]),
+			bashCall("echo hi"),
+			fauxAssistantMessage("child done"),
+			fauxAssistantMessage("parent done"),
+		];
+		const factory: FauxResponseFactory = async (ctx: TranscriptContext) => {
+			const system = ctx.messages.flatMap((m) => (m.role === "system" ? [getSystemMessageText(m)] : [])).join("\n");
+			if (system.startsWith("You decide whether an AI agent may run one tool action")) {
+				const user = ctx.messages.find((m) => m.role === "user");
+				approverInputs.push(typeof user?.content === "string" ? user.content : JSON.stringify(user?.content));
+				return fauxAssistantMessage('{"decision":"allow","reason":"ok"}');
+			}
+			return agent[a++] ?? fauxAssistantMessage("done");
+		};
+		env.faux.setResponses(Array.from({ length: 30 }, () => factory));
+		await createEngine(env.deps).run({ instruction: "ROOT-USER-MESSAGE" });
+		expect(approverInputs).toHaveLength(1);
+		const input = approverInputs[0] as string;
+		const block = (tag: string) => input.slice(input.indexOf(`<${tag}>`), input.indexOf(`</${tag}>`));
+		expect(block("request")).toContain("ROOT-USER-MESSAGE");
+		expect(block("request")).not.toContain("CHILD-TASK-TEXT");
+		expect(block("action")).toContain("subagent task (written by the agent, not the user): CHILD-TASK-TEXT");
+	});
+
 	it("optimization rollouts never use session rules or the approver", async () => {
 		const env = makeEnv({ config: { tools: { policy: { bash: "ask" }, autoApprove: "on" } } });
 		const s = script(env, [bashCall("npm run test"), fauxAssistantMessage("done")], ['{"decision":"allow","reason":"x"}']);

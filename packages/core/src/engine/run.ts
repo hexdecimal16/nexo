@@ -277,6 +277,8 @@ export interface RunApprovals {
 	sessionRules: () => readonly SessionRule[];
 	addSessionRule?: (rule: SessionRule) => void;
 	auto: boolean;
+	/** The user's message that started the root run; the approver's <request> at every depth. */
+	userRequest: string;
 }
 
 /** Link from a child run to its parent; absent for root runs. */
@@ -464,6 +466,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 					sessionRules: request.sessionRules ?? (() => []),
 					...(request.addSessionRule ? { addSessionRule: request.addSessionRule } : {}),
 					auto: request.autoApprove ?? config.tools.autoApprove === "on",
+					userRequest: request.instruction,
 				};
 
 	// Resolve skill, model and workspace before creating anything on disk.
@@ -1063,7 +1066,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				charge: chargeCall,
 				parentSpanId: (toolCallId) => toolSpans.get(toolCallId) ?? turnSpan ?? rootSpan,
 				context: () => ({
-					request: request.instruction,
+					request: approvals.userRequest,
+					...(depth > 0 ? { task: request.instruction } : {}),
 					recent: runAgent.state.messages.filter((m) => m.role !== "system") as Message[],
 					workspace,
 					...(depth > 0 ? { label: `subagent ${runId.slice(-6)}` } : {}),
