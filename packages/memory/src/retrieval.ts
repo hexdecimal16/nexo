@@ -105,6 +105,11 @@ export interface RetrieveOptions extends RankOptions {
 	scopes: readonly string[];
 	maxTokens: number;
 	topK: number;
+	/**
+	 * Memories whose relevance is below this are left out however important or recent they are; 0 (the default) keeps
+	 * all. Cosine scales differ by embedding model, so the value is tuned for the configured one.
+	 */
+	minRelevance?: number;
 	/** The query's embedding and the model (`provider/id`) it came from; null for FTS relevance only. */
 	embedding: { model: string; vector: ArrayLike<number> } | null;
 	/** Memory ids already in context (skipped). */
@@ -119,7 +124,7 @@ export interface Retrieval {
 }
 
 /**
- * Ranks the live memories of `scopes` for `query`, keeps the best within the token cap and `topK`, and stamps their
+ * Ranks the live memories of `scopes` for `query`, drops those below `minRelevance`, keeps the best within the token cap and `topK`, and stamps their
  * `last_used_at`. Zero memories, an empty query or an empty scope list select nothing.
  */
 export function retrieveMemories(db: Db, options: RetrieveOptions): Retrieval {
@@ -130,7 +135,8 @@ export function retrieveMemories(db: Db, options: RetrieveOptions): Retrieval {
 	const query = options.embedding
 		? { vector: options.embedding.vector, vectors: getEmbeddings(db, memories.map((m) => m.id), options.embedding.model) }
 		: null;
-	const ranked = rankMemories(memories, relevanceScores(memories, bm25, query), options);
+	const minRelevance = options.minRelevance ?? 0;
+	const ranked = rankMemories(memories, relevanceScores(memories, bm25, query), options).filter((r) => r.relevance >= minRelevance);
 	const selected = selectWithinTokens(ranked, options.maxTokens, options.topK);
 	touchMemories(db, selected.map((r) => r.memory.id), options.now.toISOString());
 	return { selected, candidates: memories.length, mode };

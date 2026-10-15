@@ -22,7 +22,7 @@ function load(home: object, project?: object) {
 describe("memory and learning config", () => {
 	it("fills the spec §9 defaults and resolves the reflector to s1", () => {
 		const config = load({ models })();
-		expect(config.memory).toEqual({ enabled: true, maxTokens: 1500, weights: { relevance: 1, importance: 0.5, recency: 0.3 }, tauDays: 14, topK: 20 });
+		expect(config.memory).toEqual({ enabled: true, maxTokens: 1500, weights: { relevance: 1, importance: 0.5, recency: 0.3 }, tauDays: 14, topK: 20, minRelevance: 0 });
 		expect(config.learning).toEqual({ enabled: true, maxPlaybookItems: 50, perJobUsd: 0.15, staleMinutes: 10, drainAfterRunMs: 30_000 });
 		expect(DEFAULT_CONFIG.learning.maxPlaybookItems).toBe(50);
 		expect(reflectorModelSpec(config)).toEqual(models.s1);
@@ -34,6 +34,7 @@ describe("memory and learning config", () => {
 	it("rejects unknown keys and out-of-range values at their exact path", () => {
 		expect(() => load({ models, memory: { maxTokens: 10, extra: 1 } })()).toThrow(/\/memory\/extra is not a recognized setting/);
 		expect(() => load({ models, memory: { tauDays: 0 } })()).toThrow(/\/memory\/tauDays/);
+		expect(() => load({ models, memory: { minRelevance: 1.5 } })()).toThrow(/\/memory\/minRelevance/);
 		expect(() => load({ models, learning: { maxPlaybookItems: 0 } })()).toThrow(/\/learning\/maxPlaybookItems/);
 		expect(() => load({ models, learning: { enabled: "yes" } })()).toThrow(/\/learning\/enabled/);
 	});

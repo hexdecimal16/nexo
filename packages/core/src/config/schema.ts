@@ -180,6 +180,7 @@ export const ConfigSchema = Type.Object(
 				),
 				tauDays: Type.Number({ exclusiveMinimum: 0 }),
 				topK: Type.Integer({ minimum: 1, maximum: 200 }),
+				minRelevance: Type.Number({ minimum: 0, maximum: 1 }),
 			},
 			{ additionalProperties: false },
 		),
@@ -251,7 +252,7 @@ export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 	mcp: { servers: {} },
 	pricingOverrides: {},
 	redaction: { patterns: [] },
-	memory: { enabled: true, maxTokens: 1500, weights: { relevance: 1, importance: 0.5, recency: 0.3 }, tauDays: 14, topK: 20 },
+	memory: { enabled: true, maxTokens: 1500, weights: { relevance: 1, importance: 0.5, recency: 0.3 }, tauDays: 14, topK: 20, minRelevance: 0 },
 	learning: { enabled: true, maxPlaybookItems: 50, perJobUsd: 0.15, staleMinutes: 10, drainAfterRunMs: 30_000 },
 	optimize: { minCases: 10, patience: 5, minJudgeKappa: 0.6 },
 };

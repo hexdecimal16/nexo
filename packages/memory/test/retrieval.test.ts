@@ -146,4 +146,19 @@ describe("retrieveMemories", () => {
 		expect(r.mode).toBe("embedding");
 		expect(r.selected.map((s) => s.memory.id)).toEqual([b.id, a.id]);
 	});
+
+	it("leaves out memories below minRelevance however important or recent", () => {
+		const db = openDb(":memory:");
+		const at = NOW.toISOString();
+		const close = addMemory(db, { scope: "user", type: "fact", content: "close", importance: 0.1, source: "user" }, redact, at);
+		const far = addMemory(db, { scope: "user", type: "fact", content: "far", importance: 1, source: "user" }, redact, at);
+		putEmbedding(db, close.id, "openai/e", [1, 0.2], at);
+		putEmbedding(db, far.id, "openai/e", [1, 1], at);
+		const query = { model: "openai/e", vector: [1, 0] };
+		const all = retrieveMemories(db, { ...OPTS, query: "q", scopes: ["user"], embedding: query });
+		expect(all.selected.map((s) => s.memory.id)).toEqual([far.id, close.id]);
+		const floored = retrieveMemories(db, { ...OPTS, minRelevance: 0.9, query: "q", scopes: ["user"], embedding: query });
+		expect(floored.selected.map((s) => s.memory.id)).toEqual([close.id]);
+		expect(floored.candidates).toBe(2);
+	});
 });
