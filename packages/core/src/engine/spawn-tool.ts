@@ -81,7 +81,7 @@ async function runSpawn(
 					approvals: ctx.approvals,
 				},
 			});
-			ctx.addChildCost(result.costUsd, result.costUnknown);
+			ctx.addChildCost(result.costUsd, result.costUnknown, result.approvalCostUsd);
 			try {
 				recorder.finish(subSpan, {
 					status: result.status === "succeeded" ? "ok" : "error",

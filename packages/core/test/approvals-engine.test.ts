@@ -1,6 +1,6 @@
 import { fauxAssistantMessage, type FauxResponseFactory, fauxToolCall, getSystemMessageText, type TranscriptContext } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import { listSpans } from "@nexo/store";
+import { getSpent, listSpans } from "@nexo/store";
 import type { ApprovalRequest, Prompter, SessionRule } from "@nexo/tools";
 import { join } from "node:path";
 import { ensureManualArtifact, insertCandidateArtifact } from "@nexo/store";
@@ -34,7 +34,7 @@ describe("approvals in the engine", () => {
 		env.deps.prompter = p;
 		const events: EngineEvent[] = [];
 		env.deps.onEvent = (e) => events.push(e);
-		const s = script(env, [bashCall("echo hi"), fauxAssistantMessage("done")], ['{"decision":"allow","reason":"prints text"}']);
+		const s = script(env, [bashCall("touch hi"), fauxAssistantMessage("done")], ['{"decision":"allow","reason":"prints text"}']);
 		const result = await createEngine(env.deps).run({ instruction: "say hi" });
 		expect(result.status).toBe("succeeded");
 		expect(p.asked).toHaveLength(0);
@@ -44,6 +44,34 @@ describe("approvals in the engine", () => {
 		const tool = spans.find((x) => x.kind === "tool_call" && x.name === "bash");
 		expect(tool?.attrs).toMatchObject({ approvedBy: "auto" });
 		expect(spans.find((x) => x.kind === "approval")?.parentSpanId).toBe(tool?.id);
+	});
+
+	it("auto mode allows read-only bash without an approver call", async () => {
+		const env = makeEnv({ config: { tools: { policy: { bash: "ask" }, autoApprove: "on" } } });
+		env.deps.prompter = prompter("deny");
+		const events: EngineEvent[] = [];
+		env.deps.onEvent = (e) => events.push(e);
+		const s = script(env, [bashCall("git status || pwd"), fauxAssistantMessage("done")], ['{"decision":"ask","reason":"never asked"}']);
+		const result = await createEngine(env.deps).run({ instruction: "where am I" });
+		expect(result.status).toBe("succeeded");
+		expect(s.approverCalls()).toBe(0);
+		expect(events.find((e) => e.type === "approval")).toMatchObject({ toolName: "bash", reason: "read-only command" });
+		expect(result.approvalCostUsd).toBe(0);
+	});
+
+	it("approver spend is reported apart and never counts against the run budget or ledgers", async () => {
+		const env = makeEnv({ config: { tools: { policy: { bash: "ask" }, autoApprove: "on" }, models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "slow" }, approver: { provider: "faux", id: "pricey" } } } });
+		env.deps.prompter = prompter("deny");
+		const allow = '{"decision":"allow","reason":"writes inside the workspace, which serves the request"}';
+		script(env, [bashCall("touch a"), bashCall("touch b"), bashCall("touch c"), fauxAssistantMessage("done")], [allow, allow, allow]);
+		const result = await createEngine(env.deps).run({ instruction: "make files", budgetUsd: 0.05 });
+		const spans = listSpans(env.deps.db, result.trajectoryId as string);
+		const sum = (kind: string) => spans.filter((x) => x.kind === kind).reduce((t, x) => t + x.costUsd, 0);
+		expect(sum("approval_call")).toBeGreaterThan(0.05); // more than the whole run budget
+		expect(result.status).toBe("succeeded");
+		expect(result.approvalCostUsd).toBeCloseTo(sum("approval_call"), 9);
+		expect(result.costUsd).toBeCloseTo(sum("llm_call"), 9);
+		expect(getSpent(env.deps.db, `run:${result.trajectoryId}`)).toBeCloseTo(result.costUsd, 9);
 	});
 
 	it("auto mode ask shows the box with the reason; off never calls the approver", async () => {
@@ -56,11 +84,11 @@ describe("approvals in the engine", () => {
 
 		const off = makeEnv({ config: { tools: { policy: { bash: "ask" } } } });
 		off.deps.prompter = prompter("once");
-		const s = script(off, [bashCall("echo x"), fauxAssistantMessage("done")], []);
+		const s = script(off, [bashCall("touch x"), fauxAssistantMessage("done")], []);
 		await createEngine(off.deps).run({ instruction: "x" });
 		expect(s.approverCalls()).toBe(0);
 		// RunRequest.autoApprove overrides the config.
-		const s2 = script(off, [bashCall("echo y"), fauxAssistantMessage("done")], ['{"decision":"allow","reason":"ok"}']);
+		const s2 = script(off, [bashCall("touch y"), fauxAssistantMessage("done")], ['{"decision":"allow","reason":"ok"}']);
 		await createEngine(off.deps).run({ instruction: "y", autoApprove: true });
 		expect(s2.approverCalls()).toBe(1);
 	});
@@ -94,7 +122,7 @@ describe("approvals in the engine", () => {
 		let a = 0;
 		const agent = [
 			fauxAssistantMessage([fauxToolCall("spawn", { tasks: [{ id: "c", instruction: "CHILD-TASK-TEXT" }] })]),
-			bashCall("echo hi"),
+			bashCall("touch hi"),
 			fauxAssistantMessage("child done"),
 			fauxAssistantMessage("parent done"),
 		];

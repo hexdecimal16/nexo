@@ -153,6 +153,8 @@ class InteractiveApp {
 	private runningShell = false;
 	private turnCost = 0;
 	private lastTurnCost = 0;
+	/** The last turn's approver spend: shown by /cost, never counted against a budget. */
+	private lastTurnApprovalCost = 0;
 	/** Footer text for the latest turn's scores, e.g. `score 0.82 ✓`; null when nothing scored it. */
 	private lastScore: string | null = null;
 	private currentText: { component: SafeMarkdown; text: string } | null = null;
@@ -476,6 +478,7 @@ class InteractiveApp {
 		}
 		if (result) {
 			this.lastTurnCost = result.costUsd;
+			this.lastTurnApprovalCost = result.approvalCostUsd ?? 0;
 			this.lastScore = scoreSummary(result);
 			if (result.status === "aborted") this.say("interrupted");
 			else if (result.error) this.sayError(result.error);
@@ -642,7 +645,7 @@ class InteractiveApp {
 					break;
 				case "cost":
 					this.say(
-						`session ${usd(session.costUsd)} of ${usd(session.budgetUsd)} (${usd(session.remainingUsd)} left) · last turn ${usd(this.lastTurnCost)} · ${session.turns} turn${session.turns === 1 ? "" : "s"}`,
+						`session ${usd(session.costUsd)} of ${usd(session.budgetUsd)} (${usd(session.remainingUsd)} left) · last turn ${usd(this.lastTurnCost)}${this.lastTurnApprovalCost > 0 ? ` (+ ${usd(this.lastTurnApprovalCost)} approvals, not budgeted)` : ""} · ${session.turns} turn${session.turns === 1 ? "" : "s"}`,
 					);
 					break;
 				case "budget": {
