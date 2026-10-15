@@ -17,20 +17,24 @@ const RUNNERS = new Map<string, Set<string>>([
 	["yarn", new Set(["run", "exec", "dlx", "x"])],
 	["uv", new Set(["run", "tool"])],
 	["go", new Set(["run"])],
-	["docker", new Set(["run", "exec"])],
-	["kubectl", new Set(["exec", "run"])],
 	["modal", new Set(["run", "deploy", "serve"])],
 ]);
-/** Subcommands that never get a pattern at all. */
-const BLOCKED_SUBCOMMANDS = new Map<string, Set<string>>([["gh", new Set(["api"])]]);
-/** Programs that only read or print, so a bare name is a safe prefix (`cat`). Any other bare program gets no pattern. */
-const SAFE_SINGLE = new Set([
-	"ls", "cat", "pwd", "grep", "rg", "head", "tail", "wc", "echo", "which", "file", "stat", "du", "df", "tree", "diff", "sort", "uniq", "date", "whoami", "uname", "jq", "fd", "true",
+/** Subcommands that never get a pattern at all: `gh api`, and container or pod runs, whose trailing words are an arbitrary command. */
+const BLOCKED_SUBCOMMANDS = new Map<string, Set<string>>([
+	["gh", new Set(["api"])],
+	["docker", new Set(["run", "exec"])],
+	["kubectl", new Set(["exec", "run"])],
 ]);
+/** Programs that only read or print, so a bare name is a safe prefix (`cat`). Any other bare program gets no pattern. */
+const SAFE_SINGLE = new Set(["ls", "cat", "pwd", "grep", "head", "tail", "wc", "echo", "which", "file", "stat", "du", "df", "diff", "date", "whoami", "uname", "jq", "true"]);
 /** Interpreters: the prefix is the interpreter plus the script path. */
 const INTERPRETERS = new Set(["python", "python3", "node", "ruby", "perl", "deno", "bun", "sh", "bash", "zsh"]);
+/** Shells: a runner or `npx` may not name one as its target, since it would run arbitrary code. */
+const SHELLS = new Set(["sh", "bash", "zsh", "fish"]);
 /** Commands that change directory or run another command; they never get a pattern. */
 const WRAPPERS = new Set(["cd", "sudo", "env", "xargs", "eval", "exec", "nohup", "time", "timeout"]);
+/** A runner or `npx` target that is an interpreter, shell or wrapper runs arbitrary code, so it gets no pattern. */
+const BLOCKED_TARGETS = new Set([...INTERPRETERS, ...SHELLS, ...WRAPPERS]);
 /** Chaining, redirection, substitution and newlines: such a command neither gets nor matches a pattern. */
 const UNSAFE = /[;&|`<>\n\r]|\$\(/;
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -62,8 +66,10 @@ function urlHost(args: unknown): string | null {
 
 /**
  * The prefix "Always allow" offers for a bash command, or null when the command must be approved one by one.
- * Interpreters give the interpreter plus the script; subcommand programs give two words, or three for a runner
- * (`npm run test`, `uv run pytest`) whose target must be present and not a flag; a bare word only for SAFE_SINGLE programs.
+ * Interpreters give the interpreter plus the script. Subcommand programs give two words, except:
+ * a RUNNERS subcommand gives three words (`npm run test`, `pnpm exec vitest`, `uv run pytest`), whose target must be
+ * present, not a flag, and not a BLOCKED_TARGETS name; BLOCKED_SUBCOMMANDS get no pattern; `npx <pkg>` gives two words
+ * unless the package is a BLOCKED_TARGETS name. A bare word gets a pattern only for SAFE_SINGLE programs.
  */
 export function bashPrefix(command: string): string | null {
 	if (UNSAFE.test(command)) return null;
@@ -73,7 +79,10 @@ export function bashPrefix(command: string): string | null {
 	if (INTERPRETERS.has(first)) return second !== undefined && !second.startsWith("-") ? `${first} ${second}` : null;
 	if (SUBCOMMAND_PROGRAMS.has(first)) {
 		if (second === undefined || second.startsWith("-") || BLOCKED_SUBCOMMANDS.get(first)?.has(second)) return null;
-		if (RUNNERS.get(first)?.has(second)) return third !== undefined && !third.startsWith("-") ? `${first} ${second} ${third}` : null;
+		if (RUNNERS.get(first)?.has(second)) {
+			return third !== undefined && !third.startsWith("-") && !BLOCKED_TARGETS.has(third) ? `${first} ${second} ${third}` : null;
+		}
+		if (first === "npx" && BLOCKED_TARGETS.has(second)) return null;
 		return `${first} ${second}`;
 	}
 	return SAFE_SINGLE.has(first) ? first : null;
