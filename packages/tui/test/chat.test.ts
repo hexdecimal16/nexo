@@ -172,6 +172,7 @@ describe("chat screen", () => {
 		submit(h.terminal, "run things");
 		await until(() => expect(h.terminal.output()).toContain("Allow bash: echo approved-run?"));
 		expect(h.terminal.output()).toContain("Allow once");
+		expect(h.terminal.output()).toContain("Always allow");
 		// The tool line spins while the approval is pending.
 		expect(h.terminal.output()).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] bash\(echo approved-run\)/);
 		expect(h.terminal.output()).toContain("Deny");
@@ -181,7 +182,8 @@ describe("chat screen", () => {
 		expect(h.terminal.output()).not.toMatch(/✓ bash\(echo approved-run\)/);
 		expect(h.terminal.output()).not.toMatch(/✗ bash\(echo approved-run\)/);
 		await new Promise((r) => setTimeout(r, 400));
-		h.terminal.send(KEY.up);
+		h.terminal.send(KEY.up); // Always allow
+		h.terminal.send(KEY.up); // Allow once
 		h.terminal.send(KEY.enter);
 		await until(() => expect(h.terminal.output()).toMatch(/✓ bash\(echo approved-run\)/));
 		await until(() => expect(h.terminal.output()).toContain("Allow bash: echo denied-run?"));
