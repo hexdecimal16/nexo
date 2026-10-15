@@ -10,8 +10,23 @@ export interface SessionRule {
 
 /** Programs whose second word is a subcommand (`git status`), so the prefix includes it. */
 const SUBCOMMAND_PROGRAMS = new Set(["git", "npm", "pnpm", "yarn", "npx", "docker", "kubectl", "cargo", "go", "pip", "uv", "gh", "make", "modal"]);
-/** Package managers whose `run` takes a script name, which the prefix includes too (`npm run test`). */
-const RUN_SCRIPT = new Set(["npm", "pnpm", "yarn"]);
+/** Subcommands that run an arbitrary target, so the prefix includes the target too (`pnpm exec vitest`). */
+const RUNNERS = new Map<string, Set<string>>([
+	["npm", new Set(["run", "exec", "dlx", "x"])],
+	["pnpm", new Set(["run", "exec", "dlx", "x"])],
+	["yarn", new Set(["run", "exec", "dlx", "x"])],
+	["uv", new Set(["run", "tool"])],
+	["go", new Set(["run"])],
+	["docker", new Set(["run", "exec"])],
+	["kubectl", new Set(["exec", "run"])],
+	["modal", new Set(["run", "deploy", "serve"])],
+]);
+/** Subcommands that never get a pattern at all. */
+const BLOCKED_SUBCOMMANDS = new Map<string, Set<string>>([["gh", new Set(["api"])]]);
+/** Programs that only read or print, so a bare name is a safe prefix (`cat`). Any other bare program gets no pattern. */
+const SAFE_SINGLE = new Set([
+	"ls", "cat", "pwd", "grep", "rg", "head", "tail", "wc", "echo", "which", "file", "stat", "du", "df", "tree", "diff", "sort", "uniq", "date", "whoami", "uname", "jq", "fd", "true",
+]);
 /** Interpreters: the prefix is the interpreter plus the script path. */
 const INTERPRETERS = new Set(["python", "python3", "node", "ruby", "perl", "deno", "bun", "sh", "bash", "zsh"]);
 /** Commands that change directory or run another command; they never get a pattern. */
@@ -45,7 +60,11 @@ function urlHost(args: unknown): string | null {
 	}
 }
 
-/** The prefix "Always allow" offers for a bash command, or null when the command must be approved one by one. */
+/**
+ * The prefix "Always allow" offers for a bash command, or null when the command must be approved one by one.
+ * Interpreters give the interpreter plus the script; subcommand programs give two words, or three for a runner
+ * (`npm run test`, `uv run pytest`) whose target must be present and not a flag; a bare word only for SAFE_SINGLE programs.
+ */
 export function bashPrefix(command: string): string | null {
 	if (UNSAFE.test(command)) return null;
 	const w = words(command);
@@ -53,11 +72,11 @@ export function bashPrefix(command: string): string | null {
 	if (first === undefined || WRAPPERS.has(first) || ASSIGNMENT.test(first)) return null;
 	if (INTERPRETERS.has(first)) return second !== undefined && !second.startsWith("-") ? `${first} ${second}` : null;
 	if (SUBCOMMAND_PROGRAMS.has(first)) {
-		if (second === undefined || second.startsWith("-")) return null;
-		if (RUN_SCRIPT.has(first) && second === "run") return third !== undefined && !third.startsWith("-") ? `${first} run ${third}` : null;
+		if (second === undefined || second.startsWith("-") || BLOCKED_SUBCOMMANDS.get(first)?.has(second)) return null;
+		if (RUNNERS.get(first)?.has(second)) return third !== undefined && !third.startsWith("-") ? `${first} ${second} ${third}` : null;
 		return `${first} ${second}`;
 	}
-	return first;
+	return SAFE_SINGLE.has(first) ? first : null;
 }
 
 /** The rule "Always allow" would add for this call, or null when the box offers only Allow once and Deny. */
