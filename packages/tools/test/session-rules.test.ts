@@ -17,6 +17,9 @@ describe("bashPrefix", () => {
 		["uv run pytest -q", "uv run pytest"],
 		["go run ./cmd/app", "go run ./cmd/app"],
 		["cat README.md", "cat"],
+		["yarn add lodash", "yarn add"],
+		["uv sync --all", "uv sync"],
+		["pnpm test --watch", "pnpm test"],
 	])("%s → %s", (command, prefix) => {
 		expect(bashPrefix(command)).toBe(prefix);
 	});
@@ -61,6 +64,12 @@ describe("bashPrefix", () => {
 		"docker run alpine echo",
 		"docker exec web ls",
 		"kubectl exec pod -- ls",
+		"yarn node -e x",
+		"pnpm node -e x",
+		"pnpm vitest",
+		"uv tool run ruff",
+		"pnpm exec /bin/sh -c x",
+		"npx ./sh",
 	])("no pattern for %j", (command) => {
 		expect(bashPrefix(command)).toBeNull();
 	});

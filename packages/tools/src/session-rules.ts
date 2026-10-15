@@ -15,9 +15,17 @@ const RUNNERS = new Map<string, Set<string>>([
 	["npm", new Set(["run", "exec", "dlx", "x"])],
 	["pnpm", new Set(["run", "exec", "dlx", "x"])],
 	["yarn", new Set(["run", "exec", "dlx", "x"])],
-	["uv", new Set(["run", "tool"])],
+	["uv", new Set(["run"])],
 	["go", new Set(["run"])],
 	["modal", new Set(["run", "deploy", "serve"])],
+]);
+/** Subcommands that get a two-word rule. Any other subcommand of these programs gets none, since `yarn node` runs a bin directly. */
+const PACKAGE_MANAGER_SUBCOMMANDS = new Set(["install", "ci", "add", "remove", "test", "build", "ls", "list", "outdated", "audit", "version", "view", "info", "why"]);
+const ALLOWED_SUBCOMMANDS = new Map<string, Set<string>>([
+	["npm", PACKAGE_MANAGER_SUBCOMMANDS],
+	["pnpm", PACKAGE_MANAGER_SUBCOMMANDS],
+	["yarn", PACKAGE_MANAGER_SUBCOMMANDS],
+	["uv", new Set(["sync", "add", "remove", "lock", "venv", "pip"])],
 ]);
 /** Subcommands that never get a pattern at all: `gh api`, and container or pod runs, whose trailing words are an arbitrary command. */
 const BLOCKED_SUBCOMMANDS = new Map<string, Set<string>>([
@@ -35,6 +43,10 @@ const SHELLS = new Set(["sh", "bash", "zsh", "fish"]);
 const WRAPPERS = new Set(["cd", "sudo", "env", "xargs", "eval", "exec", "nohup", "time", "timeout"]);
 /** A runner or `npx` target that is an interpreter, shell or wrapper runs arbitrary code, so it gets no pattern. */
 const BLOCKED_TARGETS = new Set([...INTERPRETERS, ...SHELLS, ...WRAPPERS]);
+/** The last path segment of a target, so `/bin/sh` and `./sh` count as `sh`. */
+function basename(target: string): string {
+	return target.slice(target.lastIndexOf("/") + 1);
+}
 /** Chaining, redirection, substitution and newlines: such a command neither gets nor matches a pattern. */
 const UNSAFE = /[;&|`<>\n\r]|\$\(/;
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -68,8 +80,10 @@ function urlHost(args: unknown): string | null {
  * The prefix "Always allow" offers for a bash command, or null when the command must be approved one by one.
  * Interpreters give the interpreter plus the script. Subcommand programs give two words, except:
  * a RUNNERS subcommand gives three words (`npm run test`, `pnpm exec vitest`, `uv run pytest`), whose target must be
- * present, not a flag, and not a BLOCKED_TARGETS name; BLOCKED_SUBCOMMANDS get no pattern; `npx <pkg>` gives two words
- * unless the package is a BLOCKED_TARGETS name. A bare word gets a pattern only for SAFE_SINGLE programs.
+ * present, not a flag, and whose basename is not a BLOCKED_TARGETS name; BLOCKED_SUBCOMMANDS get no pattern; a program
+ * in ALLOWED_SUBCOMMANDS gives two words only for a listed subcommand (`yarn add`, `uv sync`); `npx <pkg>` gives two
+ * words unless the package's basename is a BLOCKED_TARGETS name. Other subcommand programs give two words.
+ * A bare word gets a pattern only for SAFE_SINGLE programs.
  */
 export function bashPrefix(command: string): string | null {
 	if (UNSAFE.test(command)) return null;
@@ -80,9 +94,11 @@ export function bashPrefix(command: string): string | null {
 	if (SUBCOMMAND_PROGRAMS.has(first)) {
 		if (second === undefined || second.startsWith("-") || BLOCKED_SUBCOMMANDS.get(first)?.has(second)) return null;
 		if (RUNNERS.get(first)?.has(second)) {
-			return third !== undefined && !third.startsWith("-") && !BLOCKED_TARGETS.has(third) ? `${first} ${second} ${third}` : null;
+			return third !== undefined && !third.startsWith("-") && !BLOCKED_TARGETS.has(basename(third)) ? `${first} ${second} ${third}` : null;
 		}
-		if (first === "npx" && BLOCKED_TARGETS.has(second)) return null;
+		const allowed = ALLOWED_SUBCOMMANDS.get(first);
+		if (allowed !== undefined && !allowed.has(second)) return null;
+		if (first === "npx" && BLOCKED_TARGETS.has(basename(second))) return null;
 		return `${first} ${second}`;
 	}
 	return SAFE_SINGLE.has(first) ? first : null;
