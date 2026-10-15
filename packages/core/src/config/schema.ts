@@ -30,6 +30,11 @@ const EmbeddingModelSchema = Type.Object(
 	{ additionalProperties: false },
 );
 const ModelRefSchema = Type.Object({ ref: Type.Union([Type.Literal("s1"), Type.Literal("s2")]) }, { additionalProperties: false });
+/** `models.approver` by role, optionally with its own effort (default low). */
+const ApproverRefSchema = Type.Object(
+	{ ref: Type.Union([Type.Literal("s1"), Type.Literal("s2")]), effort: Type.Optional(EffortSchema) },
+	{ additionalProperties: false },
+);
 const PolicyActionSchema = Type.Union([Type.Literal("allow"), Type.Literal("ask"), Type.Literal("deny")]);
 const ToolRuleSchema = Type.Object(
 	{ tool: Type.String({ minLength: 1 }), match: Type.Optional(Type.String()), action: PolicyActionSchema },
@@ -49,6 +54,7 @@ export const ConfigSchema = Type.Object(
 				s2: ModelSpecSchema,
 				judge: Type.Optional(Type.Array(ModelSpecSchema)),
 				reflector: Type.Optional(Type.Union([ModelSpecSchema, ModelRefSchema])),
+				approver: Type.Optional(Type.Union([ModelSpecSchema, ApproverRefSchema])),
 				embedding: Type.Optional(EmbeddingModelSchema),
 			},
 			{ additionalProperties: false },
@@ -135,6 +141,7 @@ export const ConfigSchema = Type.Object(
 				policy: Type.Record(Type.String(), PolicyActionSchema),
 				rules: Type.Array(ToolRuleSchema),
 				nonInteractiveAsk: NonInteractiveAskSchema,
+				autoApprove: Type.Union([Type.Literal("off"), Type.Literal("on")]),
 				bashTimeoutMs: Type.Integer({ minimum: 1000 }),
 			},
 			{ additionalProperties: false },
@@ -246,6 +253,7 @@ export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 		policy: { read: "allow", write: "allow", edit: "allow", bash: "ask", web_fetch: "ask", load_skill: "allow", spawn: "allow" },
 		rules: [],
 		nonInteractiveAsk: "deny",
+		autoApprove: "off",
 		bashTimeoutMs: 120_000,
 	},
 	mcp: { servers: {} },
