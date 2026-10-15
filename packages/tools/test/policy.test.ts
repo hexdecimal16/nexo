@@ -172,4 +172,20 @@ describe("authorize with session rules and the approver", () => {
 		expect(auth).toMatchObject({ allowed: false, error: { code: "TOOL_DENIED" } });
 		expect(p.asked).toHaveLength(0);
 	});
+
+	it("denies an answer outside the prompter contract", async () => {
+		const odd: Prompter = { interactive: true, approve: async () => "yes" as never };
+		const auth = await createPolicy(approvalCfg).authorize(odd, "bash", { command: "pwd" });
+		expect(auth).toMatchObject({ allowed: false, error: { code: "TOOL_DENIED", message: expect.stringContaining("User declined") } });
+	});
+
+	it("reports a request settled by a concurrent Always allow as a session rule", async () => {
+		const rules: SessionRule[] = [];
+		const settledLater: Prompter = {
+			interactive: true,
+			approve: async () => (rules.push({ tool: "bash", kind: "prefix", value: "pwd" }), "once"),
+		};
+		const auth = await createPolicy(approvalCfg).authorize(settledLater, "bash", { command: "pwd" }, undefined, undefined, { sessionRules: () => rules });
+		expect(auth).toEqual({ allowed: true, by: "session_rule" });
+	});
 });
