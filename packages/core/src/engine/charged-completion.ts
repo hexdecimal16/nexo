@@ -35,6 +35,8 @@ export interface ChargedCompletionRequest {
 	effort: Effort;
 	/** Output tokens the reply is capped at and the estimate assumes; defaults to `budgets.estimateOutputTokens`. */
 	outputTokens?: number;
+	/** Retries of retryable provider errors; defaults to providers.<name>.maxRetries. */
+	maxRetries?: number;
 	/** The span each attempt is recorded as. */
 	span: { kind: SpanKind; name: string; parentSpanId: string; tier: string; attrs: Record<string, unknown> };
 }
@@ -55,7 +57,7 @@ export async function runChargedCompletion(
 	const { config, redact } = env.deps;
 	const { model, span } = request;
 	const providerCfg = config.providers[model.provider] ?? {};
-	const maxRetries = providerCfg.maxRetries ?? 3;
+	const maxRetries = request.maxRetries ?? providerCfg.maxRetries ?? 3;
 	// The reply is capped at the output tokens the estimate assumes, so a verbose reply cannot cost more than was reserved.
 	const outputTokens = request.outputTokens ?? config.budgets.estimateOutputTokens;
 	const maxTokens = model.maxTokens > 0 ? Math.min(outputTokens, model.maxTokens) : outputTokens;
