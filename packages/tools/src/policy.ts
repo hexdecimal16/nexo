@@ -181,7 +181,8 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
 				signal,
 			);
 			if (answer === "always" && always) options.addSessionRule?.(always);
-			if (answer !== "deny") return { allowed: true, by: "user" };
+			if (answer === "always") return { allowed: true, by: "user" };
+			if (answer === "once") return { allowed: true, by: ruleMatches() ? "session_rule" : "user" };
 			return {
 				allowed: false,
 				error: new NexoError({ code: "TOOL_DENIED", message: `User declined ${toolName}: ${decision.subject}`, context: { toolName } }),
