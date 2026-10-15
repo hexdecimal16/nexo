@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { NexoError } from "@nexo/telemetry";
-import { type ApprovalRequest, createPolicy, nonInteractivePrompter, type Prompter, type SessionRule, type ToolPolicyConfig } from "../src/index.ts";
+import { type ApprovalRequest, createPolicy, READ_ONLY_REASON, nonInteractivePrompter, type Prompter, type SessionRule, type ToolPolicyConfig } from "../src/index.ts";
 
 const cfg: ToolPolicyConfig = {
 	policy: { read: "allow", bash: "ask", web_fetch: "deny" },
@@ -125,8 +125,23 @@ describe("authorize with session rules and the approver", () => {
 		expect(await policy.authorize(p, "bash", { command: "ls -la" }, undefined, undefined, { sessionRules: () => [{ tool: "bash", kind: "prefix", value: "ls" }], classify })).toEqual({ allowed: true, by: "session_rule" });
 		expect(classified).toEqual([]);
 		// The approver allows.
-		expect(await policy.authorize(p, "bash", { command: "pwd" }, undefined, undefined, { classify })).toEqual({ allowed: true, by: "auto", reason: "in scope" });
+		expect(await policy.authorize(p, "bash", { command: "make build" }, undefined, undefined, { classify })).toEqual({ allowed: true, by: "auto", reason: "in scope" });
 		expect(p.asked).toHaveLength(0);
+	});
+
+	it("auto mode allows a read-only bash command without calling the approver; without auto mode it still asks", async () => {
+		const policy = createPolicy(approvalCfg);
+		let calls = 0;
+		const classify = async () => (calls++, { decision: "ask" as const, reason: "x" });
+		const p = recordingPrompter("deny");
+		expect(await policy.authorize(p, "bash", { command: "cd /repo && git show HEAD | sed -n '1,20p'" }, undefined, undefined, { classify })).toEqual({ allowed: true, by: "auto", reason: READ_ONLY_REASON });
+		expect(calls).toBe(0);
+		// Not read-only: the approver decides.
+		await policy.authorize(p, "bash", { command: "git fetch origin" }, undefined, undefined, { classify });
+		expect(calls).toBe(1);
+		// Auto mode off: the box, as before.
+		expect(await policy.authorize(p, "bash", { command: "git status" })).toMatchObject({ allowed: false });
+		expect(p.asked).toHaveLength(2);
 	});
 
 	it("a config deny rule still applies to the whitespace-normalized command", async () => {
@@ -177,7 +192,7 @@ describe("authorize with session rules and the approver", () => {
 	it("denies when the signal is aborted while the approver runs", async () => {
 		const ac = new AbortController();
 		const p = recordingPrompter("once");
-		const auth = await createPolicy(approvalCfg).authorize(p, "bash", { command: "pwd" }, ac.signal, undefined, {
+		const auth = await createPolicy(approvalCfg).authorize(p, "bash", { command: "make build" }, ac.signal, undefined, {
 			classify: async () => (ac.abort(), { decision: "allow", reason: "x" }),
 		});
 		expect(auth).toMatchObject({ allowed: false, error: { code: "TOOL_DENIED" } });

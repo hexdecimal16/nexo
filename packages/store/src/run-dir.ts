@@ -33,6 +33,8 @@ export interface RunJson {
 	endedAt: string | null;
 	costUsd: number;
 	costUnknown: boolean;
+	/** Approver spend of the run and its subagents, for audit only: not in `costUsd` and not charged to any budget. */
+	approvalCostUsd?: number;
 	tokensIn: number;
 	tokensOut: number;
 	output: string;

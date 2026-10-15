@@ -1,4 +1,5 @@
 import { NexoError } from "@nexo/telemetry";
+import { isReadOnlyCommand } from "./read-only.ts";
 import { describeSessionRule, matchesSessionRule, type SessionRule, sessionRuleFor } from "./session-rules.ts";
 
 export type PolicyAction = "allow" | "ask" | "deny";
@@ -64,6 +65,9 @@ export interface ToolPolicy {
 	/** `label` names the asking run (for example a subagent) in the prompt; `options` adds session rules and the approver (spec §2). */
 	authorize(prompter: Prompter, toolName: string, args: unknown, signal?: AbortSignal, label?: string, options?: AuthorizeOptions): Promise<Authorization>;
 }
+
+/** The auto-allow reason for a bash command `isReadOnlyCommand` accepts; the approver is not called. */
+export const READ_ONLY_REASON = "read-only command";
 
 /** Shell metacharacters that chain or redirect commands; an allow rule never vouches for a command containing them. */
 const SHELL_CHAINING = /[;&|`<>\n]|\$\(/;
@@ -161,6 +165,10 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
 				error: new NexoError({ code: "TOOL_DENIED", message: `Approval of ${toolName} was interrupted: ${decision.subject}`, context: { toolName } }),
 			});
 			let note: string | undefined;
+			// A command that provably only reads needs no approver call (and costs nothing).
+			if (options.classify && toolName === "bash" && command !== null && isReadOnlyCommand(command)) {
+				return { allowed: true, by: "auto", reason: READ_ONLY_REASON };
+			}
 			if (options.classify) {
 				const verdict = await options.classify(toolName, args, signal);
 				if (signal?.aborted) return aborted();

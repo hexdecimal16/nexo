@@ -155,7 +155,7 @@ describe("scores and escalations in the chat", () => {
 	it("shows an auto-allowed line under the tool call", async () => {
 		const h = await startHarness({ overrides: { ...FAUX_ROLES, tools: { policy: { bash: "ask" }, autoApprove: "on" } } });
 		h.faux.setResponses([
-			fauxAssistantMessage([fauxToolCall("bash", { command: "echo hi" })]),
+			fauxAssistantMessage([fauxToolCall("bash", { command: "touch hi" })]),
 			fauxAssistantMessage('{"decision":"allow","reason":"prints text in the workspace"}'),
 			fauxAssistantMessage("done"),
 		]);
@@ -170,7 +170,7 @@ describe("scores and escalations in the chat", () => {
 		const h = await startHarness({ overrides: { ...FAUX_ROLES, tools: { policy: { bash: "ask" }, autoApprove: "on" } } });
 		h.faux.setResponses([
 			fauxAssistantMessage([fauxToolCall("spawn", { tasks: [{ id: "c", instruction: "run echo" }] })]),
-			fauxAssistantMessage([fauxToolCall("bash", { command: "echo hi" })]),
+			fauxAssistantMessage([fauxToolCall("bash", { command: "touch hi" })]),
 			fauxAssistantMessage('{"decision":"allow","reason":"prints text"}'),
 			fauxAssistantMessage("child done"),
 			fauxAssistantMessage("done"),

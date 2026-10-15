@@ -243,6 +243,8 @@ export interface RunResult {
 	output: string;
 	costUsd: number;
 	costUnknown: boolean;
+	/** Approver spend of this run and its subagents: recorded for audit, never part of `costUsd` or any budget. */
+	approvalCostUsd?: number;
 	error?: ErrorPayload;
 	/** The run's new messages in order: the instruction, assistant messages and tool results. Empty when no run started. */
 	messages: Message[];
@@ -343,7 +345,8 @@ export interface RunToolContext {
 	recorder: Recorder;
 	toolSpanId: (toolCallId: string) => string | null;
 	recordTaskGraph: (record: TaskGraphRecord) => void;
-	addChildCost: (usd: number, unknown: boolean) => void;
+	/** `approvalUsd` is the child's approver spend, reported apart from its budgeted cost. */
+	addChildCost: (usd: number, unknown: boolean, approvalUsd?: number) => void;
 	sessionId: string | null;
 	optimRunId: string | null;
 	rolloutCandidate: ArtifactRow | null;
@@ -527,6 +530,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	const taskGraphs: TaskGraphRecord[] = [];
 	let ownCost = 0;
 	let childCost = 0;
+	/** Approver spend (own and subagents'), kept out of every budget and ledger; the `approval_call` spans hold the detail. */
+	let approvalCost = 0;
 	let costUnknown = false;
 	let tokensIn = 0;
 	let tokensOut = 0;
@@ -593,6 +598,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		endedAt: status === "running" ? null : now().toISOString(),
 		costUsd: ownCost + childCost,
 		costUnknown,
+		approvalCostUsd: approvalCost,
 		tokensIn,
 		tokensOut,
 		output,
@@ -864,8 +870,9 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			recorder,
 			toolSpanId: (id) => toolSpans.get(id) ?? null,
 			recordTaskGraph: (record) => taskGraphs.push(record),
-			addChildCost: (usd, unknown) => {
+			addChildCost: (usd, unknown, approvalUsd = 0) => {
 				childCost += usd;
+				approvalCost += approvalUsd;
 				costUnknown ||= unknown;
 			},
 			sessionId,
@@ -1062,8 +1069,14 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			classify = createApprovalClassifier({
 				env,
 				recorder,
-				budget,
-				charge: chargeCall,
+				// Approver calls are audited, not budgeted: they reserve from an unlimited budget and never touch the run's
+				// budget, cost or spend ledgers (so a turn cannot run out of budget because of its approvals).
+				budget: new RunBudget(Number.MAX_SAFE_INTEGER),
+				charge: (callModel, msg) => {
+					const priced = priceUsage(callModel, msg.usage, overrides);
+					approvalCost += priced.costUsd;
+					return priced;
+				},
 				parentSpanId: (toolCallId) => toolSpans.get(toolCallId) ?? turnSpan ?? rootSpan,
 				context: () => ({
 					request: approvals.userRequest,
@@ -1359,7 +1372,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		attempt("enqueueing the learn job", () => enqueueLearnJob(db, { runId, trigger: "run_end" }, now().toISOString()));
 	}
 	attempt("run_end event", () => deps.onEvent?.({ type: "run_end", runId, depth, status, costUsd: totalCost }));
-	logger.info("run finished", { status, cost_usd: totalCost });
+	logger.info("run finished", { status, cost_usd: totalCost, approval_cost_usd: approvalCost });
 	const messages = agent ? newMessages(agent.state.messages, seededCount) : [];
 	return {
 		trajectoryId: runId,
@@ -1368,6 +1381,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		output,
 		costUsd: totalCost,
 		costUnknown,
+		approvalCostUsd: approvalCost,
 		...(safeError ? { error: safeError } : {}),
 		messages,
 		model: modelInfo(active.model, active.resolved),

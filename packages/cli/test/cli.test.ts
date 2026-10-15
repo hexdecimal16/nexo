@@ -60,7 +60,7 @@ describe("nexo run", () => {
 		const h = home({ ...config, tools: { policy: { bash: "ask" }, autoApprove: "on" } });
 		const t = io();
 		const responses = [
-			fauxAssistantMessage([fauxToolCall("bash", { command: "echo hi" })]),
+			fauxAssistantMessage([fauxToolCall("bash", { command: "touch hi" })]),
 			fauxAssistantMessage('{"decision":"allow","reason":"prints text"}'),
 			fauxAssistantMessage("done"),
 		];
