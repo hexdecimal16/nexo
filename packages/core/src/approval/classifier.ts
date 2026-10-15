@@ -35,6 +35,7 @@ const REQUEST_CHARS = 4000;
 const RECENT_CHARS = 6000;
 const RECENT_MESSAGES = 6;
 const ACTION_CHARS = 4000;
+const TASK_CHARS = 2000;
 const REASON_CHARS = 200;
 const OUTPUT_TOKENS = 300;
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -49,8 +50,10 @@ export function approverModel(config: NexoConfig): { provider: string; id: strin
 }
 
 export interface ApprovalContext {
-	/** The asking run's instruction: the turn's message, or a subagent's task. */
+	/** The user's message that started the turn, at every depth. */
 	request: string;
+	/** A subagent's task text: written by the parent agent, never by the user. */
+	task?: string;
 	/** The run's latest messages. */
 	recent: Message[];
 	workspace: string;
@@ -75,7 +78,7 @@ export function approverInput(ctx: ApprovalContext, toolName: string, args: unkn
 		`<request>\n${escapeBlock(cap(ctx.request, REQUEST_CHARS))}\n</request>`,
 		`<recent>\n${escapeBlock(recent)}\n</recent>`,
 		`<workspace>\n${escapeBlock(ctx.workspace)}\n</workspace>`,
-		`<action>\n${escapeBlock(action)}${ctx.label ? `\nasked by: ${escapeBlock(ctx.label)}` : ""}\n</action>`,
+		`<action>\n${escapeBlock(action)}${ctx.label ? `\nasked by: ${escapeBlock(ctx.label)}` : ""}${ctx.task === undefined ? "" : `\nsubagent task (written by the agent, not the user): ${escapeBlock(cap(ctx.task, TASK_CHARS))}`}\n</action>`,
 	].join("\n");
 }
 
