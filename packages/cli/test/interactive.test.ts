@@ -148,6 +148,7 @@ describe("routing", () => {
 		expect(await runCli(["--help"], t, { ...home(roles), models: fauxModels() })).toBe(0);
 		expect(t.out()).toContain("without --workspace each turn works in its own run folder");
 		expect(t.out()).toContain("--workspace . works in the current folder");
+		for (const key of ["tools.autoApprove", "tools.nonInteractiveAsk", "models.approver"]) expect(t.out()).toContain(key);
 	});
 
 	it("starts a session in each turn's run folder, or in the current folder with --workspace .", async () => {

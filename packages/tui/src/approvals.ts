@@ -74,7 +74,7 @@ export function createApprovalPrompter(host: ApprovalHost, options: ApprovalProm
 			if (request.settled?.()) return resolve("once");
 			const options = [
 				{ value: "once", label: "Allow once" },
-				...(request.alwaysLabel ? [{ value: "always", label: request.alwaysLabel }] : []),
+				...(request.alwaysLabel ? [{ value: "always", label: escapeControl(redact(request.alwaysLabel)) }] : []),
 				{ value: "deny", label: "Deny" },
 			];
 			const list = new SelectList(options, options.length, selectListTheme);

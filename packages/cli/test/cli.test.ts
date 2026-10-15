@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { chmodSync, existsSync, mkdirSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { costReport, insertRun, insertSpan, listFeedback, openDb, queryRuns, resolveNexoPaths } from "@nexo/store";
 import { runRow, spanRow } from "../../store/test/fixtures.ts";
@@ -54,6 +54,19 @@ describe("nexo run", () => {
 		expect(code).toBe(0);
 		expect(t.out()).toContain("hello there");
 		expect(t.err()).toMatch(/succeeded · \$\d+\.\d{4} · trajectory \w+/);
+	});
+
+	it("prints an auto-allowed line on stderr when the approver allows a tool", async () => {
+		const h = home({ ...config, tools: { policy: { bash: "ask" }, autoApprove: "on" } });
+		const t = io();
+		const responses = [
+			fauxAssistantMessage([fauxToolCall("bash", { command: "echo hi" })]),
+			fauxAssistantMessage('{"decision":"allow","reason":"prints text"}'),
+			fauxAssistantMessage("done"),
+		];
+		const code = await runCli(["run", "say", "hi"], t, { ...h, models: fauxModels(responses) });
+		expect(code).toBe(0);
+		expect(t.err()).toContain("auto-allowed: prints text");
 	});
 
 	it("exits 2 with the error and hint when config is missing", async () => {

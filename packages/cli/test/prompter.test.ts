@@ -83,6 +83,22 @@ describe("createTtyPrompter", () => {
 		expect(onInterrupt).not.toHaveBeenCalled();
 	});
 
+	it("keeps asking after one request's settled() throws", async () => {
+		const { input, output } = fakeTty(false);
+		const prompter = createTtyPrompter(input as unknown as NodeJS.ReadStream, output as unknown as NodeJS.WriteStream);
+		const broken = prompter.approve({
+			question: "Allow bash: ls?",
+			settled: () => {
+				throw new Error("boom");
+			},
+		});
+		const later = prompter.approve({ question: "Allow bash: pwd?" });
+		await expect(broken).rejects.toThrow("boom");
+		await tick();
+		input.write("y\n");
+		expect(await later).toBe("once");
+	});
+
 	it("offers a for Always allow, shows the note, and answers settled requests without asking", async () => {
 		let shown = "";
 		const first = fakeTty(false);
