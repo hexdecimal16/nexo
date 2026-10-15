@@ -569,7 +569,7 @@ class InteractiveApp {
 				break;
 			}
 			case "approval": {
-				this.chat.addChild(new Block(`auto-allowed: ${escapeControl(oneLine(event.reason, 160))}`, style.gray, "    "));
+				this.chat.addChild(new Block(`${event.depth > 0 ? `[subagent ${event.runId.slice(-6)}] ` : ""}auto-allowed: ${escapeControl(oneLine(event.reason, 160))}`, style.gray, "    "));
 				break;
 			}
 			case "escalation_failed": {

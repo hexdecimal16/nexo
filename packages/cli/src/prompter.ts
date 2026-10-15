@@ -41,7 +41,7 @@ export function createTtyPrompter(input: NodeJS.ReadStream, output: NodeJS.Write
 		interactive: Boolean(input.isTTY),
 		approve(request, signal) {
 			const turn = queue.then(() => ask(request, signal));
-			queue = turn;
+			queue = turn.catch(() => undefined);
 			return turn;
 		},
 	};

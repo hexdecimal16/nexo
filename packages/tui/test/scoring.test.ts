@@ -165,4 +165,20 @@ describe("scores and escalations in the chat", () => {
 		h.terminal.send(KEY.ctrlD);
 		await h.done;
 	});
+
+	it("prefixes a subagent's auto-allowed line with its run label", async () => {
+		const h = await startHarness({ overrides: { ...FAUX_ROLES, tools: { policy: { bash: "ask" }, autoApprove: "on" } } });
+		h.faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("spawn", { tasks: [{ id: "c", instruction: "run echo" }] })]),
+			fauxAssistantMessage([fauxToolCall("bash", { command: "echo hi" })]),
+			fauxAssistantMessage('{"decision":"allow","reason":"prints text"}'),
+			fauxAssistantMessage("child done"),
+			fauxAssistantMessage("done"),
+		]);
+		submit(h.terminal, "delegate");
+		await until(() => expect(h.terminal.output()).toMatch(/\[subagent \w{6}\] auto-allowed: prints text/));
+		await until(() => !h.session().running);
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
 });

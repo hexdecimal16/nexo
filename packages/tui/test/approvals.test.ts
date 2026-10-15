@@ -28,6 +28,16 @@ describe("approval box", () => {
 		expect(h.shown).toHaveLength(0);
 	});
 
+	it("redacts the always label like the question and the note", async () => {
+		const h = host();
+		const prompter = createApprovalPrompter(h, { redact: (t) => t.replace(/SECRET-\d+/g, "[redacted]") });
+		void prompter.approve({ question: "Allow bash: SECRET-1?", note: "auto: SECRET-2", alwaysLabel: "Always allow `echo SECRET-3 …` this session" });
+		await Promise.resolve();
+		const text = render(h.shown[0] as Component);
+		expect(text).not.toContain("SECRET");
+		expect(text).toContain("Always allow `echo [redacted] …` this session");
+	});
+
 	it("has two options without alwaysLabel, and settled requests skip the question", async () => {
 		const h = host();
 		const prompter = createApprovalPrompter(h, { now: () => 1000, guardMs: 0 });
