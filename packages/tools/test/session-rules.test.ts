@@ -15,7 +15,6 @@ describe("bashPrefix", () => {
 		["modal deploy app.py", "modal deploy app.py"],
 		["pnpm exec vitest run", "pnpm exec vitest"],
 		["uv run pytest -q", "uv run pytest"],
-		["docker run alpine echo", "docker run alpine"],
 		["go run ./cmd/app", "go run ./cmd/app"],
 		["cat README.md", "cat"],
 	])("%s → %s", (command, prefix) => {
@@ -53,6 +52,15 @@ describe("bashPrefix", () => {
 		"php -r 'x'",
 		"sed -i s/a/b/ f",
 		"ssh host ls",
+		"rg --pre ./x foo",
+		"fd -x rm",
+		"sort -o out in",
+		"pnpm exec node -e x",
+		"npx sh -c x",
+		"uv run python -c x",
+		"docker run alpine echo",
+		"docker exec web ls",
+		"kubectl exec pod -- ls",
 	])("no pattern for %j", (command) => {
 		expect(bashPrefix(command)).toBeNull();
 	});
