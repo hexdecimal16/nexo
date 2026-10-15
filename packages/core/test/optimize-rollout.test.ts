@@ -147,7 +147,7 @@ describe("rollouts", () => {
 	it("confines a rollout's writes to its own workspace and refuses ask tools without prompting", async () => {
 		const env = makeEnv({ config: { tools: { nonInteractiveAsk: "deny" } } });
 		let prompted = false;
-		env.deps.prompter = { interactive: false, confirm: async () => ((prompted = true), true) };
+		env.deps.prompter = { interactive: false, approve: async () => ((prompted = true), "once") };
 		const engineEnv = createEngineEnv(env.deps);
 		record(env, [
 			fauxAssistantMessage([

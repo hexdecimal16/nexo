@@ -77,9 +77,9 @@ describe("session turns", () => {
 		const asked: string[] = [];
 		const prompter: Prompter = {
 			interactive: true,
-			confirm: async (question) => {
-				asked.push(question);
-				return true;
+			approve: async (request) => {
+				asked.push(request.question);
+				return "once";
 			},
 		};
 		const { env, deps, cwd } = sessionEnv({ prompter });
@@ -798,7 +798,7 @@ describe("session state", () => {
 });
 
 /** A prompter that allows every `ask` tool (bash). */
-const allowAll: Prompter = { interactive: true, confirm: async () => true };
+const allowAll: Prompter = { interactive: true, approve: async () => "once" };
 
 function workspaceOf(result: { runDir: string | null }): string {
 	return join(result.runDir as string, "workspace");

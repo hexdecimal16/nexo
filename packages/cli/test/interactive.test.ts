@@ -583,7 +583,7 @@ describe("empty sessions", () => {
 describe("runtime logger", () => {
 	it("redacts a key set through settings in the same process", () => {
 		const h = home(roles);
-		const runtime = createRuntime({ env: h.env, cwd: h.cwd, models: fauxModels(), prompter: { interactive: false, confirm: async () => false } });
+		const runtime = createRuntime({ env: h.env, cwd: h.cwd, models: fauxModels(), prompter: { interactive: false, approve: async () => "deny" } });
 		const secret = "sk-live-9876543210zyxwvu";
 		runtime.settings.setKey("faux", secret);
 		runtime.logger.info("leak", { value: secret });
