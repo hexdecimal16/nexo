@@ -40,6 +40,10 @@ export interface SessionJson {
 	pendingShell?: ShellNote[];
 	/** The latest turn stopped on S2 without finishing, so the next turn starts on S2; absent in older files. */
 	continueOnS2?: boolean;
+	/** "Always allow … this session" rules (spec: approvals §3); absent in older files. */
+	sessionRules?: { tool: string; kind: "prefix" | "tool" | "host"; value?: string }[];
+	/** The `/auto` override; null or absent follows `tools.autoApprove`. */
+	autoApprove?: boolean | null;
 }
 
 /** A `!` shell command the user ran, as the model will read it; `output` is redacted and capped. */

@@ -78,6 +78,23 @@ describe("loadConfig", () => {
 		expect(err.message).toContain("/budgets/perSessionUsd");
 	});
 
+	it("accepts models.approver as a role or a model with an effort, and tools.autoApprove on/off", () => {
+		const base = setup({ models });
+		const { config: defaults } = loadConfig({ paths: base.paths, cwd: base.cwd });
+		expect(defaults.tools.autoApprove).toBe("off");
+		expect(defaults.models.approver).toBeUndefined();
+		const role = setup({ models: { ...models, approver: { ref: "s2", effort: "minimal" } }, tools: { autoApprove: "on" } });
+		const { config: roleConfig } = loadConfig({ paths: role.paths, cwd: role.cwd });
+		expect(roleConfig.models.approver).toEqual({ ref: "s2", effort: "minimal" });
+		expect(roleConfig.tools.autoApprove).toBe("on");
+		const spec = setup({ models: { ...models, approver: { provider: "faux", id: "fast" } } });
+		expect(loadConfig({ paths: spec.paths, cwd: spec.cwd }).config.models.approver).toEqual({ provider: "faux", id: "fast" });
+		const badRef = setup({ models: { ...models, approver: { ref: "s3" } } });
+		expectConfigError(() => loadConfig({ paths: badRef.paths, cwd: badRef.cwd }));
+		const badMode = setup({ models, tools: { autoApprove: "maybe" } });
+		expect(expectConfigError(() => loadConfig({ paths: badMode.paths, cwd: badMode.cwd })).message).toContain("/tools/autoApprove");
+	});
+
 	it("EffortSchema accepts exactly the router's efforts", () => {
 		for (const effort of EFFORTS) expect(Value.Check(EffortSchema, effort)).toBe(true);
 		expect(Value.Check(EffortSchema, "extreme")).toBe(false);

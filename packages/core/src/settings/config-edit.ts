@@ -91,8 +91,14 @@ export const EDITABLE_SETTINGS: readonly SettingDefinition[] = [
 	{
 		key: "tools.nonInteractiveAsk",
 		label: "Ask without a terminal",
-		description: "What an `ask` policy does when nobody can answer (nexo run without a TTY)",
+		description: "What an `ask` policy does when nobody can answer (nexo run without a TTY); with auto mode on, the approver may still allow some `ask` tools first",
 		type: { kind: "enum", values: ["allow", "deny"] },
+	},
+	{
+		key: "tools.autoApprove",
+		label: "Auto mode",
+		description: "An approver model allows in-scope actions that would otherwise ask (on/off); /auto overrides it per session. Also applies to `nexo run`, where it can allow `ask` tools without a human even when nonInteractiveAsk is deny",
+		type: { kind: "enum", values: ["off", "on"] },
 	},
 	{
 		key: "session.compactAt",
@@ -128,6 +134,12 @@ export const EDITABLE_SETTINGS: readonly SettingDefinition[] = [
 		key: "models.reflector",
 		label: "Model reflector",
 		description: "Model that writes lessons after a run: s1, s2 or provider/model-id",
+		type: { kind: "modelOrRef" },
+	},
+	{
+		key: "models.approver",
+		label: "Model approver",
+		description: "Model that decides approvals in auto mode: s1, s2 or provider/model-id (effort defaults to low)",
 		type: { kind: "modelOrRef" },
 	},
 	{ key: "learning.enabled", label: "Learning", description: "Learn lessons from judged runs (on/off)", type: { kind: "boolean" } },
@@ -308,7 +320,7 @@ function overrideNotice(def: SettingDefinition, layers: ConfigLayers): string {
 }
 
 /** Settings whose absent value still means something: the effective value and its source are `default`. */
-const IMPLICIT_DEFAULTS: Record<string, string> = { "models.reflector": "s1" };
+const IMPLICIT_DEFAULTS: Record<string, string> = { "models.reflector": "s1", "models.approver": "s1" };
 
 export function settingView(def: SettingDefinition, layers: ConfigLayers): SettingView {
 	// Project scorers replace the user's list, so any `scoring.scorers` in the project config overrides the toggle.

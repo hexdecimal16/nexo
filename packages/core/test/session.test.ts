@@ -77,9 +77,9 @@ describe("session turns", () => {
 		const asked: string[] = [];
 		const prompter: Prompter = {
 			interactive: true,
-			confirm: async (question) => {
-				asked.push(question);
-				return true;
+			approve: async (request) => {
+				asked.push(request.question);
+				return "once";
 			},
 		};
 		const { env, deps, cwd } = sessionEnv({ prompter });
@@ -798,7 +798,7 @@ describe("session state", () => {
 });
 
 /** A prompter that allows every `ask` tool (bash). */
-const allowAll: Prompter = { interactive: true, confirm: async () => true };
+const allowAll: Prompter = { interactive: true, approve: async () => "once" };
 
 function workspaceOf(result: { runDir: string | null }): string {
 	return join(result.runDir as string, "workspace");
@@ -995,5 +995,60 @@ describe("turn workspaces", () => {
 		for (let i = 0; i < 5; i++) expect(session.shellDir).toBe(workspaceOf(r1));
 		expect(prepare).not.toHaveBeenCalled();
 		prepare.mockRestore();
+	});
+});
+
+describe("approvals in sessions", () => {
+	it("adds rules from Always allow during a turn, keeps them across /clear and --resume, and removes them", async () => {
+		const { env, deps, cwd } = sessionEnv({ config: { tools: { policy: { bash: "ask" } } } });
+		const asked: string[] = [];
+		deps.prompter = { interactive: true, approve: async (r) => (asked.push(r.question), "always") };
+		env.faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("bash", { command: "echo one" })]),
+			fauxAssistantMessage([fauxToolCall("bash", { command: "echo two" })]),
+			fauxAssistantMessage("done"),
+		]);
+		const session = createSession(deps, { cwd });
+		await session.turn("echo twice");
+		expect(asked).toHaveLength(1);
+		expect(session.sessionRules).toEqual([{ tool: "bash", kind: "prefix", value: "echo" }]);
+		session.addSessionRule({ tool: "bash", kind: "prefix", value: "echo" });
+		expect(session.sessionRules).toHaveLength(1);
+		session.clear();
+		expect(session.sessionRules).toHaveLength(1);
+		session.close();
+		const resumed = resumeSession(deps, session.id);
+		expect(resumed.sessionRules).toEqual([{ tool: "bash", kind: "prefix", value: "echo" }]);
+		expect(() => resumed.removeSessionRule(2)).toThrow(/INVALID_REQUEST|no rule/i);
+		expect(resumed.removeSessionRule(1)).toEqual({ tool: "bash", kind: "prefix", value: "echo" });
+		resumed.addSessionRule({ tool: "write", kind: "tool" });
+		expect(resumed.clearSessionRules()).toBe(1);
+		resumed.close();
+	});
+
+	it("/auto overrides the config per session and survives resume; older session files follow the config", async () => {
+		const { deps, cwd, env } = sessionEnv({ config: { tools: { autoApprove: "on" } } });
+		env.faux.setResponses([fauxAssistantMessage("ok")]);
+		const session = createSession(deps, { cwd });
+		expect(session.autoApprove).toBe(true);
+		expect(session.autoApproveOverride).toBeNull();
+		session.setAutoApprove(false);
+		await session.turn("hi");
+		session.close();
+		const resumed = resumeSession(deps, session.id);
+		expect(resumed.autoApprove).toBe(false);
+		resumed.setAutoApprove(null);
+		expect(resumed.autoApprove).toBe(true);
+		resumed.close();
+		// An older session.json without the new fields.
+		const file = join(deps.paths.sessions, session.id, "session.json");
+		const json = JSON.parse(readFileSync(file, "utf8"));
+		delete json.sessionRules;
+		delete json.autoApprove;
+		writeFileSync(file, JSON.stringify(json));
+		const old = resumeSession(deps, session.id);
+		expect(old.sessionRules).toEqual([]);
+		expect(old.autoApprove).toBe(true);
+		old.close();
 	});
 });

@@ -23,7 +23,7 @@ import {
 	upsertSessionRow,
 	type Verdict,
 } from "@nexo/store";
-import { type BashOutcome, runBash } from "@nexo/tools";
+import { type BashOutcome, runBash, type SessionRule, sameSessionRule } from "@nexo/tools";
 import { createRedactor, type ErrorPayload, NexoError, type Redactor, toErrorPayload } from "@nexo/telemetry";
 import type { NexoConfig } from "../config/schema.ts";
 import { checkAdmission, runBudgetLimit, sessionScope } from "../cost/admission.ts";
@@ -224,6 +224,42 @@ export class Session {
 	get budgetOverrideUsd(): number | null {
 		return this.state.budgetOverrideUsd ?? null;
 	}
+	/** "Always allow … this session" rules, applied to every turn and its subagents. */
+	get sessionRules(): readonly SessionRule[] {
+		return this.state.sessionRules ?? [];
+	}
+	addSessionRule(rule: SessionRule): void {
+		const rules = this.state.sessionRules ?? [];
+		if (rules.some((r) => sameSessionRule(r, rule))) return;
+		this.state.sessionRules = [...rules, rule];
+		this.save();
+	}
+	/** Removes rule `index` (1-based, as /permissions lists them). */
+	removeSessionRule(index: number): SessionRule {
+		const rules = this.state.sessionRules ?? [];
+		const rule = Number.isInteger(index) ? rules[index - 1] : undefined;
+		if (!rule) throw invalid(`There is no rule ${index}`, `Use a number from /permissions (1 to ${rules.length})`);
+		this.state.sessionRules = rules.filter((_, i) => i !== index - 1);
+		this.save();
+		return rule;
+	}
+	clearSessionRules(): number {
+		const count = this.state.sessionRules?.length ?? 0;
+		this.state.sessionRules = [];
+		this.save();
+		return count;
+	}
+	/** Auto mode for the next turns: the /auto override, else tools.autoApprove. */
+	get autoApprove(): boolean {
+		return this.state.autoApprove ?? this.env.deps.config.tools.autoApprove === "on";
+	}
+	get autoApproveOverride(): boolean | null {
+		return this.state.autoApprove ?? null;
+	}
+	setAutoApprove(on: boolean | null): void {
+		this.state.autoApprove = on;
+		this.save();
+	}
 	get remainingUsd(): number {
 		return Math.max(0, this.budgetUsd - this.state.costUsd);
 	}
@@ -326,6 +362,9 @@ export class Session {
 					...(this.state.model ? { model: this.state.model } : {}),
 					...(this.continuesOnS2 ? { startOnS2: true } : {}),
 					...(this.effort ? { effort: this.effort } : {}),
+					sessionRules: () => this.state.sessionRules ?? [],
+					addSessionRule: (rule) => this.addSessionRule(rule),
+					autoApprove: this.autoApprove,
 				},
 				budget: new RunBudget(limit.usd),
 				budgetLimit: limit.by,

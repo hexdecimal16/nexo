@@ -117,6 +117,7 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 			if (event.type === "text_delta" && event.depth === 0) io.stdout.write(event.delta);
 			if (event.type === "run_start" && event.depth > 0) io.stderr.write(`  ↳ subagent ${event.runId.slice(-6)}: ${event.instruction.split("\n")[0]?.slice(0, 80)}\n`);
 			if (event.type === "tool_start") io.stderr.write(`${"  ".repeat(event.depth)}  · ${event.toolName}\n`);
+			if (event.type === "approval") io.stderr.write(`\x1b[2m${"  ".repeat(event.depth)}    auto-allowed: ${escapeControl(event.reason)}\x1b[22m\n`);
 			if (event.type === "escalation" && event.applied) io.stderr.write(escalationLine(event.depth, event.model, event.trigger, event.reason));
 		},
 		onLearnEvent: (event) => {

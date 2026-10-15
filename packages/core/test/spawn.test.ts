@@ -307,9 +307,9 @@ describe("spawn", () => {
 		const env = makeEnv({
 			prompter: {
 				interactive: true,
-				confirm: async (q) => {
-					asked.push(q);
-					return false;
+				approve: async (request) => {
+					asked.push(request.question);
+					return "deny";
 				},
 			},
 		});

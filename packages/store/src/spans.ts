@@ -18,6 +18,8 @@ export type SpanKind =
 	| "compaction"
 	| "learn"
 	| "learn_call"
+	| "approval"
+	| "approval_call"
 	| "embedding_call"
 	| "optimize"
 	| "gepa_call";
