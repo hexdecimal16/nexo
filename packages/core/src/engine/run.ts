@@ -63,11 +63,13 @@ import {
 	createPolicy,
 	FileLeases,
 	type Prompter,
+	type SessionRule,
 	TOOL_OUTPUT_PREFIX,
 	type ToolPolicy,
 } from "@nexo/tools";
 import { realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { createApprovalClassifier } from "../approval/classifier.ts";
 import type { NexoConfig } from "../config/schema.ts";
 import { type BudgetLimit, budgetExhaustedError, checkAdmission, recordSpend, runBudgetLimit } from "../cost/admission.ts";
 import { budgetLine, RunBudget } from "../cost/budget.ts";
@@ -172,6 +174,7 @@ export type EngineEvent =
 			passed: boolean | null;
 			costUsd: number;
 	  }
+	| { type: "approval"; runId: string; depth: number; toolCallId: string; toolName: string; reason: string }
 	| { type: "run_end"; runId: string; depth: number; status: RunStatus; costUsd: number };
 
 /** What a `prepareHistory` hook can use to shrink the history before the run's first request. */
@@ -194,6 +197,12 @@ export type HistoryPreparer = (ctx: HistoryContext) => Promise<Message[]>;
 
 export interface RunRequest {
 	instruction: string;
+	/** Session rules in force; read on every approval, so rules added during the turn apply to its next calls. */
+	sessionRules?: () => readonly SessionRule[];
+	/** Called when the user picks "Always allow" (chat sessions only). */
+	addSessionRule?: (rule: SessionRule) => void;
+	/** Auto mode for this run (a session's /auto); defaults to tools.autoApprove === "on". */
+	autoApprove?: boolean;
 	skill?: string;
 	model?: string;
 	effort?: Effort;
@@ -263,6 +272,15 @@ export interface EngineEnv {
 	streamFn: ReturnType<typeof createGatedStreamFn>;
 }
 
+/** Session rules and auto mode in force for a run tree; subagents inherit their parent's. */
+export interface RunApprovals {
+	sessionRules: () => readonly SessionRule[];
+	addSessionRule?: (rule: SessionRule) => void;
+	auto: boolean;
+	/** The user's message that started the root run; the approver's <request> at every depth. */
+	userRequest: string;
+}
+
 /** Link from a child run to its parent; absent for root runs. */
 export interface ParentLink {
 	runId: string;
@@ -278,6 +296,7 @@ export interface ParentLink {
 	optimRunId: string | null;
 	/** The rollout's candidate, so subagents use it too. */
 	rolloutCandidate: ArtifactRow | null;
+	approvals: RunApprovals | null;
 }
 
 /** Makes a root run an optimization rollout (spec §8.2): isolated, charged to the optimization, never learned from. */
@@ -328,6 +347,7 @@ export interface RunToolContext {
 	sessionId: string | null;
 	optimRunId: string | null;
 	rolloutCandidate: ArtifactRow | null;
+	approvals: RunApprovals | null;
 }
 
 export type ExtraToolsFactory = (ctx: RunToolContext) => AgentTool<any>[];
@@ -437,6 +457,17 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	const rollout = parent ? undefined : input.rollout;
 	const rolloutCandidate = parent ? parent.rolloutCandidate : (rollout?.candidate ?? null);
 	const optimRunId = parent ? parent.optimRunId : (rollout?.optimRunId ?? null);
+	/** Session rules and auto mode: from the request for a root run, inherited by subagents, none for rollouts. */
+	const approvals: RunApprovals | null = rollout
+		? null
+		: parent
+			? parent.approvals
+			: {
+					sessionRules: request.sessionRules ?? (() => []),
+					...(request.addSessionRule ? { addSessionRule: request.addSessionRule } : {}),
+					auto: request.autoApprove ?? config.tools.autoApprove === "on",
+					userRequest: request.instruction,
+				};
 
 	// Resolve skill, model and workspace before creating anything on disk.
 	const skill = request.skill ? deps.skills.skills.get(request.skill) : undefined;
@@ -840,6 +871,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			sessionId,
 			optimRunId,
 			rolloutCandidate,
+			approvals,
 		};
 		for (const factory of extraToolFactories) baseTools.push(...factory(toolCtx));
 		if (deps.mcp) baseTools.push(...(await deps.mcp.tools()));
@@ -972,6 +1004,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			);
 		}
 
+		const approvedBy = new Map<string, string>();
+		let classify: ReturnType<typeof createApprovalClassifier> | null = null;
 		const runAgent: Agent = new Agent({
 			streamFn: env.streamFn,
 			initialState: { systemPrompt, model, thinkingLevel: resolved.effort, tools, messages: history },
@@ -993,8 +1027,24 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 					budgetExceeded = true;
 					return { block: true, reason: "BUDGET_EXCEEDED: the run budget is exhausted", terminate: true };
 				}
-				const auth = await env.policy.authorize(deps.prompter, toolCall.name, args, signal, depth > 0 ? `subagent ${runId.slice(-6)}` : undefined);
+				const classifier = classify;
+				const auth = await env.policy.authorize(
+					deps.prompter,
+					toolCall.name,
+					args,
+					signal,
+					depth > 0 ? `subagent ${runId.slice(-6)}` : undefined,
+					approvals
+						? {
+								sessionRules: approvals.sessionRules,
+								...(approvals.addSessionRule ? { addSessionRule: approvals.addSessionRule } : {}),
+								...(classifier ? { classify: (name: string, a: unknown, s?: AbortSignal) => classifier(name, a, toolCall.id, s) } : {}),
+							}
+						: undefined,
+				);
 				if (!auth.allowed) return { block: true, reason: toolErrorText(auth.error) };
+				approvedBy.set(toolCall.id, auth.by);
+				if (auth.by === "auto") deps.onEvent?.({ type: "approval", runId, depth, toolCallId: toolCall.id, toolName: toolCall.name, reason: deps.redact(auth.reason ?? "") });
 				return undefined;
 			},
 			afterToolCall: async ({ toolCall, result }) => {
@@ -1008,6 +1058,22 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				return { content: [{ type: "text", text: toolOutputExcerpt(text, pointer) }, ...nonText] };
 			},
 		});
+		if (approvals?.auto) {
+			classify = createApprovalClassifier({
+				env,
+				recorder,
+				budget,
+				charge: chargeCall,
+				parentSpanId: (toolCallId) => toolSpans.get(toolCallId) ?? turnSpan ?? rootSpan,
+				context: () => ({
+					request: approvals.userRequest,
+					...(depth > 0 ? { task: request.instruction } : {}),
+					recent: runAgent.state.messages.filter((m) => m.role !== "system") as Message[],
+					workspace,
+					...(depth > 0 ? { label: `subagent ${runId.slice(-6)}` } : {}),
+				}),
+			});
+		}
 		s2RequestUsd = () => estimateCallCostUsd(escalationTarget, overrides, requestChars(runAgent.state.messages, tools), config.budgets.estimateOutputTokens);
 		agent = runAgent;
 		seededCount = runAgent.state.messages.length;
@@ -1091,7 +1157,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 						recorder.finish(spanId, {
 							status: event.isError ? "error" : "ok",
 							payloadRef,
-							attrs: { durationMs: event.durationMs, result: payloadRef ? undefined : output },
+							attrs: { durationMs: event.durationMs, result: payloadRef ? undefined : output, approvedBy: approvedBy.get(event.toolCallId) },
 						});
 					}
 					const failures = monitor.toolResult(event.isError);

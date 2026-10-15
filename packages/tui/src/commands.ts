@@ -28,6 +28,8 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
 	{ name: "budget", description: "Set this session's budget cap", argumentHint: "<usd>" },
 	{ name: "model", description: "Set this session's model (default clears it)", argumentHint: "<s1|s2|provider/id|default>", getArgumentCompletions: items(["s1", "s2", "default"]) },
 	{ name: "effort", description: "Set this session's effort (default clears it)", argumentHint: "<level|default>", getArgumentCompletions: items([...EFFORTS, "default"]) },
+	{ name: "auto", description: "Auto mode for this session: an approver model allows in-scope actions", argumentHint: "[on|off|default]", getArgumentCompletions: items(["on", "off", "default"]) },
+	{ name: "permissions", description: "List this session's Always-allow rules", argumentHint: "[remove <n>|clear]", getArgumentCompletions: items(["remove", "clear"]) },
 	{ name: "compact", description: "Summarize older turns at the start of the next turn" },
 	{ name: "clear", description: "Start a new conversation in this session" },
 	{ name: "sessions", description: "List recent sessions" },

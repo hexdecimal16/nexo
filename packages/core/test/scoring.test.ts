@@ -357,7 +357,7 @@ describe("command scorer trust", () => {
 	it("asks the interactive prompter about a project command scorer and follows the answer", async () => {
 		for (const answer of [true, false]) {
 			const questions: string[] = [];
-			const prompter = { interactive: true, confirm: async (q: string) => (questions.push(q), answer) };
+			const prompter = { interactive: true, approve: async (r: { question: string }) => (questions.push(r.question), answer ? "once" as const : "deny" as const) };
 			const env = judgeEnv({ cwd: project({ tools: { policy: { bash: "allow" } }, scoring: { scorers: touch } }), prompter });
 			route(env, [fauxAssistantMessage("Done.")]);
 			const result = await createEngine(env.deps).run({ instruction: "Do it" });

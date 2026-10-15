@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline/promises";
-import type { Prompter } from "@nexo/tools";
+import type { ApprovalAnswer, ApprovalRequest, Prompter } from "@nexo/tools";
 
 export interface TtyPrompterOptions {
 	/** Called when the user presses Ctrl-C at a prompt; readline swallows the keystroke, so no SIGINT reaches the process. */
@@ -17,15 +17,21 @@ function isAbortError(error: unknown): boolean {
 export function createTtyPrompter(input: NodeJS.ReadStream, output: NodeJS.WriteStream, options: TtyPrompterOptions = {}): Prompter {
 	let queue: Promise<unknown> = Promise.resolve();
 
-	const ask = async (question: string, signal: AbortSignal | undefined): Promise<boolean> => {
-		if (signal?.aborted) return false;
+	const ask = async (request: ApprovalRequest, signal: AbortSignal | undefined): Promise<ApprovalAnswer> => {
+		if (signal?.aborted) return "deny";
+		if (request.settled?.()) return "once";
 		const rl = createInterface({ input, output });
 		try {
-			const answer = await rl.question(`${question} [y/N] `, { signal });
-			return /^y(es)?$/i.test(answer.trim());
+			const lines = [request.question];
+			if (request.note) lines.push(`  ${request.note}`);
+			if (request.alwaysLabel) lines.push(`  a = ${request.alwaysLabel}`);
+			const answer = (await rl.question(`${lines.join("\n")} ${request.alwaysLabel ? "[y/a/N]" : "[y/N]"} `, { signal })).trim();
+			if (/^y(es)?$/i.test(answer)) return "once";
+			if (request.alwaysLabel && /^a(lways)?$/i.test(answer)) return "always";
+			return "deny";
 		} catch (error) {
 			if (isAbortError(error) && !signal?.aborted) options.onInterrupt?.();
-			return false;
+			return "deny";
 		} finally {
 			rl.close();
 		}
@@ -33,9 +39,9 @@ export function createTtyPrompter(input: NodeJS.ReadStream, output: NodeJS.Write
 
 	return {
 		interactive: Boolean(input.isTTY),
-		confirm(question, signal) {
-			const turn = queue.then(() => ask(question, signal));
-			queue = turn;
+		approve(request, signal) {
+			const turn = queue.then(() => ask(request, signal));
+			queue = turn.catch(() => undefined);
 			return turn;
 		},
 	};

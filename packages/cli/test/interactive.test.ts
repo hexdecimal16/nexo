@@ -148,6 +148,7 @@ describe("routing", () => {
 		expect(await runCli(["--help"], t, { ...home(roles), models: fauxModels() })).toBe(0);
 		expect(t.out()).toContain("without --workspace each turn works in its own run folder");
 		expect(t.out()).toContain("--workspace . works in the current folder");
+		for (const key of ["tools.autoApprove", "tools.nonInteractiveAsk", "models.approver"]) expect(t.out()).toContain(key);
 	});
 
 	it("starts a session in each turn's run folder, or in the current folder with --workspace .", async () => {
@@ -583,7 +584,7 @@ describe("empty sessions", () => {
 describe("runtime logger", () => {
 	it("redacts a key set through settings in the same process", () => {
 		const h = home(roles);
-		const runtime = createRuntime({ env: h.env, cwd: h.cwd, models: fauxModels(), prompter: { interactive: false, confirm: async () => false } });
+		const runtime = createRuntime({ env: h.env, cwd: h.cwd, models: fauxModels(), prompter: { interactive: false, approve: async () => "deny" } });
 		const secret = "sk-live-9876543210zyxwvu";
 		runtime.settings.setKey("faux", secret);
 		runtime.logger.info("leak", { value: secret });

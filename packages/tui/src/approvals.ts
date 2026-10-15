@@ -1,18 +1,20 @@
 import { type Component, Container, SelectList, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { Prompter } from "@nexo/tools";
+import type { ApprovalAnswer, ApprovalRequest, Prompter } from "@nexo/tools";
 import { fitLines } from "./components.ts";
 import { escapeControl } from "./text.ts";
 import { selectListTheme, style } from "./theme.ts";
 
-/** The question, the Allow once / Deny list and a key hint, in a bordered box. */
+/** The question, the optional note, the Allow once / Always allow / Deny list and a key hint, in a bordered box. */
 class ApprovalBox extends Container {
 	private readonly question: string;
+	private readonly note: string | undefined;
 	readonly list: SelectList;
 	private readonly acceptInputAt: number;
 	private readonly now: () => number;
-	constructor(question: string, list: SelectList, guardMs: number, now: () => number) {
+	constructor(question: string, note: string | undefined, list: SelectList, guardMs: number, now: () => number) {
 		super();
 		this.question = question;
+		this.note = note;
 		this.list = list;
 		this.now = now;
 		this.acceptInputAt = now() + guardMs;
@@ -32,6 +34,7 @@ class ApprovalBox extends Container {
 		const lines = [border(`╭${"─".repeat(inner + 2)}╮`)];
 		lines.push(row(style.bold(style.yellow("Approval needed"))));
 		for (const line of wrapTextWithAnsi(this.question, inner)) lines.push(row(line));
+		if (this.note) for (const line of wrapTextWithAnsi(this.note, inner)) lines.push(row(style.gray(line)));
 		lines.push(row(""));
 		for (const line of this.list.render(inner)) lines.push(row(line));
 		for (const line of wrapTextWithAnsi("↑↓ choose · enter select · esc deny · ctrl-c deny and stop the turn", inner)) lines.push(row(style.gray(line)));
@@ -55,7 +58,7 @@ export interface ApprovalPrompterOptions {
 }
 
 /**
- * A policy Prompter that asks in a bordered SelectList box the host draws in place of the editor. Questions are
+ * A policy Prompter that asks in a bordered box with Allow once, Always allow (when the request offers it) and Deny, drawn by the host in place of the editor. Questions are
  * queued, so concurrent subagents get one box each in turn. An aborted signal (Ctrl-C, turn end) closes the box and
  * denies. Deny is preselected and input is ignored for `guardMs`, so a keystroke typed ahead cannot approve a tool.
  */
@@ -65,38 +68,38 @@ export function createApprovalPrompter(host: ApprovalHost, options: ApprovalProm
 	const redact = options.redact ?? ((text: string) => text);
 	let queue: Promise<unknown> = Promise.resolve();
 
-	const ask = (question: string, signal: AbortSignal | undefined): Promise<boolean> =>
-		new Promise<boolean>((resolve) => {
-			if (signal?.aborted) return resolve(false);
-			const list = new SelectList(
-				[
-					{ value: "allow", label: "Allow once" },
-					{ value: "deny", label: "Deny" },
-				],
-				2,
-				selectListTheme,
-			);
-			list.setSelectedIndex(1);
-			const box: Component = new ApprovalBox(escapeControl(redact(question)), list, guardMs, now);
+	const ask = (request: ApprovalRequest, signal: AbortSignal | undefined): Promise<ApprovalAnswer> =>
+		new Promise<ApprovalAnswer>((resolve) => {
+			if (signal?.aborted) return resolve("deny");
+			if (request.settled?.()) return resolve("once");
+			const options = [
+				{ value: "once", label: "Allow once" },
+				...(request.alwaysLabel ? [{ value: "always", label: escapeControl(redact(request.alwaysLabel)) }] : []),
+				{ value: "deny", label: "Deny" },
+			];
+			const list = new SelectList(options, options.length, selectListTheme);
+			list.setSelectedIndex(options.length - 1);
+			const note = request.note ? escapeControl(redact(request.note)) : undefined;
+			const box: Component = new ApprovalBox(escapeControl(redact(request.question)), note, list, guardMs, now);
 			const hide = host.show(box);
 			let settled = false;
-			const finish = (allowed: boolean) => {
+			const finish = (answer: ApprovalAnswer) => {
 				if (settled) return;
 				settled = true;
 				signal?.removeEventListener("abort", onAbort);
 				hide();
-				resolve(allowed);
+				resolve(answer);
 			};
-			const onAbort = () => finish(false);
+			const onAbort = () => finish("deny");
 			signal?.addEventListener("abort", onAbort, { once: true });
-			list.onSelect = (item) => finish(item.value === "allow");
-			list.onCancel = () => finish(false);
+			list.onSelect = (item) => finish(item.value as ApprovalAnswer);
+			list.onCancel = () => finish("deny");
 		});
 
 	return {
 		interactive: true,
-		confirm(question, signal) {
-			const next = queue.then(() => ask(question, signal));
+		approve(request, signal) {
+			const next = queue.then(() => ask(request, signal));
 			queue = next.catch(() => undefined);
 			return next;
 		},

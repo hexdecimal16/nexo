@@ -1,3 +1,4 @@
+export * from "./approval/classifier.ts";
 export * from "./config/load.ts";
 export * from "./config/schema.ts";
 export * from "./cost/admission.ts";

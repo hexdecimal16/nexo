@@ -111,7 +111,7 @@ export interface Settings {
 	keyStatus(provider: string): KeyStatus;
 	/** Throws INVALID_REQUEST unless `setKey` would accept the provider id (checked before asking for a key). */
 	validateKeyProvider(provider: string): void;
-	/** Providers of the configured models (s1, s2, judge, reflector, embedding) in that order, then the others in the credentials file. */
+	/** Providers of the configured models (s1, s2, judge, reflector, approver, embedding) in that order, then the others in the credentials file. */
 	keyProviders(): KeyStatus[];
 	/**
 	 * Stores a key (trimmed; at least MIN_SECRET_LENGTH characters, no whitespace) and redacts it from now on. The
@@ -154,7 +154,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function modelProviders(merged: Record<string, unknown>): string[] {
 	const models = merged.models;
 	if (!isPlainObject(models)) return [];
-	const specs: unknown[] = [models.s1, models.s2, ...(Array.isArray(models.judge) ? models.judge : []), models.reflector, models.embedding];
+	const specs: unknown[] = [models.s1, models.s2, ...(Array.isArray(models.judge) ? models.judge : []), models.reflector, models.approver, models.embedding];
 	const out: string[] = [];
 	for (const spec of specs) {
 		if (isPlainObject(spec) && typeof spec.provider === "string" && spec.provider && !out.includes(spec.provider)) out.push(spec.provider);

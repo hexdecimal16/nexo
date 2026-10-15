@@ -150,4 +150,37 @@ describe("slash commands", () => {
 		expect(h.terminal.stopped).toBe(true);
 		expect(h.session().status).toBe("closed");
 	});
+
+	it("/auto turns auto mode on and off for the session and the footer shows it", async () => {
+		const h = await startHarness();
+		submit(h.terminal, "/auto");
+		await until(() => expect(h.terminal.output()).toContain("auto mode: off (tools.autoApprove)"));
+		submit(h.terminal, "/auto on");
+		await until(() => expect(h.session().autoApprove).toBe(true));
+		await until(() => expect(h.terminal.output()).toMatch(/faux\/fast · [^\n]* · auto · turn/));
+		submit(h.terminal, "/auto maybe");
+		await until(() => expect(h.terminal.output()).toMatch(/error \[INVALID_REQUEST\] [^\n]*on, off or default/));
+		submit(h.terminal, "/auto default");
+		await until(() => expect(h.session().autoApproveOverride).toBeNull());
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
+	it("/permissions lists, removes and clears the session's rules", async () => {
+		const h = await startHarness();
+		h.session().addSessionRule({ tool: "bash", kind: "prefix", value: "npm run test" });
+		h.session().addSessionRule({ tool: "web_fetch", kind: "host", value: "docs.python.org" });
+		submit(h.terminal, "/permissions");
+		await until(() => expect(h.terminal.output()).toMatch(/1\. bash `npm run test …`[\s\S]*2\. web_fetch from docs\.python\.org/));
+		submit(h.terminal, "/permissions remove 3");
+		await until(() => expect(h.terminal.output()).toContain("error [INVALID_REQUEST] There is no rule 3"));
+		submit(h.terminal, "/permissions remove 1");
+		await until(() => expect(h.session().sessionRules).toHaveLength(1));
+		submit(h.terminal, "/permissions clear");
+		await until(() => expect(h.session().sessionRules).toHaveLength(0));
+		submit(h.terminal, "/permissions");
+		await until(() => expect(h.terminal.output()).toContain("no session rules"));
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
 });

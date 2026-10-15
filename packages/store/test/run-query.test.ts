@@ -178,6 +178,17 @@ describe("costReport", () => {
 		for (const model of ["m-c", "m-a", "m-b"]) insertSpan(db, spanRow(run.id, { model, costUsd: 0.5, startedAt: "2026-10-10T00:00:01.000Z" }));
 		expect(costReport(db, { by: "model", since: "2026-10-01" }).rows.map((r) => r.key)).toEqual(["faux/m-a", "faux/m-b", "faux/m-c"]);
 	});
+
+	it("counts approver calls (approval_call spans) in the totals, by model", () => {
+		const db = openDb(":memory:");
+		const run = runRow({ status: "succeeded" });
+		insertRun(db, run);
+		insertSpan(db, spanRow(run.id, { kind: "llm_call", model: "m-agent", costUsd: 0.25, startedAt: "2026-10-10T00:00:01.000Z" }));
+		insertSpan(db, spanRow(run.id, { kind: "approval_call", model: "m-approver", costUsd: 0.125, startedAt: "2026-10-10T00:00:02.000Z" }));
+		const report = costReport(db, { by: "model", since: "2026-10-01" });
+		expect(report.rows.map((r) => [r.key, r.costUsd, r.calls])).toEqual([["faux/m-agent", 0.25, 1], ["faux/m-approver", 0.125, 1]]);
+		expect(report.totalUsd).toBe(0.375);
+	});
 });
 
 describe("queryRuns oneShot", () => {
