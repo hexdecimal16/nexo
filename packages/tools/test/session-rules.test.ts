@@ -12,7 +12,12 @@ describe("bashPrefix", () => {
 		["npm install lodash", "npm install"],
 		["python3 ltx_batch.py shots.json", "python3 ltx_batch.py"],
 		["  docker   compose up", "docker compose"],
-		["modal deploy app.py", "modal deploy"],
+		["modal deploy app.py", "modal deploy app.py"],
+		["pnpm exec vitest run", "pnpm exec vitest"],
+		["uv run pytest -q", "uv run pytest"],
+		["docker run alpine echo", "docker run alpine"],
+		["go run ./cmd/app", "go run ./cmd/app"],
+		["cat README.md", "cat"],
 	])("%s → %s", (command, prefix) => {
 		expect(bashPrefix(command)).toBe(prefix);
 	});
@@ -38,6 +43,16 @@ describe("bashPrefix", () => {
 		"make",
 		"ls\nrm -rf /",
 		"",
+		"pnpm exec",
+		"uv run --with x y",
+		"docker run -it alpine",
+		"gh api repos/x/y",
+		"find . -delete",
+		"curl -o x https://e",
+		"nice make test",
+		"php -r 'x'",
+		"sed -i s/a/b/ f",
+		"ssh host ls",
 	])("no pattern for %j", (command) => {
 		expect(bashPrefix(command)).toBeNull();
 	});
@@ -54,6 +69,12 @@ describe("sessionRuleFor and matchesSessionRule", () => {
 		}
 		expect(matchesSessionRule(r, "write", { path: "a" })).toBe(false);
 		expect(matchesSessionRule(r, "bash", { nope: 1 })).toBe(false);
+	});
+
+	it("does not let a runner rule reach an arbitrary target", () => {
+		const r = sessionRuleFor("bash", bash("pnpm exec vitest run")) as NonNullable<ReturnType<typeof sessionRuleFor>>;
+		expect(matchesSessionRule(r, "bash", bash("pnpm exec vitest"))).toBe(true);
+		expect(matchesSessionRule(r, "bash", bash("pnpm exec rm -rf ~"))).toBe(false);
 	});
 
 	it("covers write and edit by tool, web_fetch by host, and other tools by name", () => {
