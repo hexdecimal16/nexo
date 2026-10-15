@@ -18,7 +18,7 @@ import { type EngineEvent, listSessions, type RunResult, type Session, type Sett
 import type { Effort } from "@nexo/router";
 import type { Db, ScoreStatus, TranscriptLine } from "@nexo/store";
 import { type ErrorPayload, toErrorPayload } from "@nexo/telemetry";
-import type { Prompter } from "@nexo/tools";
+import { describeSessionRule, type Prompter } from "@nexo/tools";
 import { createApprovalPrompter } from "./approvals.ts";
 import { helpText, parseSlashCommand, SLASH_COMMANDS } from "./commands.ts";
 import { Block, DynamicLine, SafeContainer, SafeMarkdown, SubagentLine, Ticker, ToolLine, ViewMode } from "./components.ts";
@@ -364,7 +364,7 @@ class InteractiveApp {
 		const fraction = session.contextFraction;
 		const ctx = fraction === null ? "ctx –" : `ctx ${Math.round(fraction * 100)}%`;
 		const score = !this.running && this.lastScore ? [this.lastScore] : [];
-		const parts = [escapeControl(model), escapeControl(effort), `turn ${usd(turn)}`, ...score, `session ${usd(spent)}/${usd(session.budgetUsd)}`, ctx];
+		const parts = [escapeControl(model), escapeControl(effort), ...(session.autoApprove ? ["auto"] : []), `turn ${usd(turn)}`, ...score, `session ${usd(spent)}/${usd(session.budgetUsd)}`, ctx];
 		return style.gray(parts.join(" · ")) + (this.running ? style.cyan(" · running…") : "");
 	}
 
@@ -568,6 +568,10 @@ class InteractiveApp {
 				);
 				break;
 			}
+			case "approval": {
+				this.chat.addChild(new Block(`auto-allowed: ${escapeControl(oneLine(event.reason, 160))}`, style.gray, "    "));
+				break;
+			}
 			case "escalation_failed": {
 				if (event.depth !== 0) return;
 				this.currentText = null;
@@ -661,6 +665,41 @@ class InteractiveApp {
 						this.say(session.effort ? `effort set to ${session.effort} for this session` : "effort override cleared");
 					}
 					break;
+				case "auto": {
+					if (!args) {
+						const source = session.autoApproveOverride === null ? "tools.autoApprove" : "/auto for this session";
+						this.say(`auto mode: ${session.autoApprove ? "on" : "off"} (${source})`);
+					} else if (args === "on" || args === "off" || args === "default") {
+						session.setAutoApprove(args === "default" ? null : args === "on");
+						this.say(`auto mode ${session.autoApprove ? "on" : "off"}${args === "default" ? " (following tools.autoApprove)" : " for this session"}`);
+					} else {
+						this.sayError({ code: "INVALID_REQUEST", message: `Unknown /auto argument "${escapeControl(oneLine(args, 40))}"`, hint: "Use on, off or default" });
+					}
+					break;
+				}
+				case "permissions": {
+					if (!args) {
+						const rules = session.sessionRules;
+						this.say(
+							rules.length === 0
+								? "no session rules (pick “Always allow” in an approval box to add one)"
+								: rules.map((r, i) => `${i + 1}. ${r.kind === "prefix" ? `${escapeControl(r.tool)} ` : ""}${describeSessionRule(r)}`).join("\n"),
+						);
+					} else if (args === "clear") {
+						this.say(`removed ${session.clearSessionRules()} session rule(s)`);
+					} else {
+						const match = /^remove\s+(\d+)$/.exec(args);
+						if (!match) this.sayError({ code: "INVALID_REQUEST", message: `Unknown /permissions argument "${escapeControl(oneLine(args, 40))}"`, hint: "Use /permissions, /permissions remove <n> or /permissions clear" });
+						else {
+							try {
+								this.say(`removed ${describeSessionRule(session.removeSessionRule(Number(match[1])))}`);
+							} catch (error) {
+								this.sayError(toErrorPayload(error));
+							}
+						}
+					}
+					break;
+				}
 				case "compact":
 					session.compact();
 					this.say("older turns will be summarized at the start of the next turn");
