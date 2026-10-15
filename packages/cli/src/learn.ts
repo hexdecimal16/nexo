@@ -1,6 +1,5 @@
 import { parseArgs } from "node:util";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { createSettings, type LearnEvent, type NexoConfig } from "@nexo/core";
+import { createSettings, type LearnEvent, type NexoConfig, nexoModels } from "@nexo/core";
 import {
 	addMemory,
 	addPlaybookItem,
@@ -96,7 +95,7 @@ export function openStore(options: CliOptions): Store {
 	const env = options.env ?? process.env;
 	const paths = resolveNexoPaths(env);
 	ensureNexoDirs(paths);
-	const settings = createSettings({ paths, cwd: options.cwd ?? process.cwd(), env, models: options.models ?? builtinModels() });
+	const settings = createSettings({ paths, cwd: options.cwd ?? process.cwd(), env, models: options.models ?? nexoModels() });
 	const { config } = settings.loadConfig();
 	const db = openDb(paths.db);
 	return { db, redact: settings.redact, config, close: () => db.close() };

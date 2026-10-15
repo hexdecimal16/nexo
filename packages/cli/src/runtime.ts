@@ -1,6 +1,5 @@
 import type { Models } from "@earendil-works/pi-ai";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { createConfiguredMcpHub, createEngine, createSettings, type DeepPartial, type Engine, type EngineEvent, type LearnEvent, LearnWorker, type NexoConfig, type Settings } from "@nexo/core";
+import { createConfiguredMcpHub, createEngine, createSettings, type DeepPartial, type Engine, type EngineEvent, type LearnEvent, LearnWorker, type NexoConfig, nexoModels, type Settings } from "@nexo/core";
 import type { McpHub } from "@nexo/mcp";
 import { BUNDLED_SKILLS_DIR, loadSkills, type SkillCatalog } from "@nexo/skills";
 import { type Db, ensureNexoDirs, type NexoPaths, openDb, resolveNexoPaths } from "@nexo/store";
@@ -43,7 +42,7 @@ export interface RuntimeOptions {
 export function createRuntime(options: RuntimeOptions): Runtime {
 	const paths = resolveNexoPaths(options.env);
 	ensureNexoDirs(paths);
-	const models = options.models ?? builtinModels();
+	const models = options.models ?? nexoModels();
 	const settings = createSettings({ paths, cwd: options.cwd, env: options.env, models, overrides: options.overrides });
 	const { config, hash } = settings.loadConfig();
 	const redact = settings.redact;

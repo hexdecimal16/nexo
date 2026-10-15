@@ -29,6 +29,7 @@ import {
 	settingView,
 	writeSetting,
 } from "./config-edit.ts";
+import { CLAUDE_P_PROVIDER } from "../providers/claude-p.ts";
 import { type CredentialsData, readCredentials, writeCredentials } from "./credentials.ts";
 
 /**
@@ -252,6 +253,8 @@ export function createSettings(options: SettingsOptions): Settings {
 	const keyStatus = (provider: string): KeyStatus => {
 		const stored = credentials[provider];
 		const inFile = stored !== undefined;
+		// claude-p runs the Claude Code CLI, which brings its own login: ambient credentials, like AWS or Google ADC.
+		if (provider === CLAUDE_P_PROVIDER) return { provider, state: "env", envVar: null, last4: null, inFile };
 		if (envKey(provider) !== undefined) return { provider, state: "env", envVar: findEnvKeys(provider, env)?.[0] ?? null, last4: null, inFile };
 		if (stored?.apiKey) return { provider, state: "file", envVar: null, last4: stored.apiKey.slice(-4), inFile };
 		return { provider, state: "unset", envVar: null, last4: null, inFile };

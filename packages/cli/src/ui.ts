@@ -1,6 +1,5 @@
 import type { Models } from "@earendil-works/pi-ai";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { createEngineEnv, createSettings, judgeFamilyWarnings, judgeKey, LearnWorker, loadConfig, type NexoConfig } from "@nexo/core";
+import { createEngineEnv, createSettings, judgeFamilyWarnings, judgeKey, LearnWorker, loadConfig, type NexoConfig, nexoModels } from "@nexo/core";
 import { BUNDLED_SKILLS_DIR, loadSkills } from "@nexo/skills";
 import { type Db, ensureNexoDirs, isPidAlive, type NexoPaths, openDb, recoverCrashedOptimRuns, recoverCrashedRuns, resolveNexoPaths } from "@nexo/store";
 import { createRedactor, NexoError } from "@nexo/telemetry";
@@ -13,7 +12,7 @@ export const UI_LEARN_POLL_MS = 5000;
 
 /** A learn worker for the UI process: same models, keys and redaction as `nexo run`; null when learning is off. */
 function uiLearner(options: { env: NodeJS.ProcessEnv; cwd: string; models?: Models }, paths: NexoPaths, db: Db): LearnWorker | null {
-	const models = options.models ?? builtinModels();
+	const models = options.models ?? nexoModels();
 	const settings = createSettings({ paths, cwd: options.cwd, env: options.env, models });
 	const { config, hash } = settings.loadConfig();
 	if (!config.learning.enabled) return null;

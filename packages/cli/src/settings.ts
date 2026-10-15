@@ -1,5 +1,4 @@
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { createSettings, keyStatusLabel, type Settings, type SettingView } from "@nexo/core";
+import { createSettings, keyStatusLabel, nexoModels, type Settings, type SettingView } from "@nexo/core";
 import { ensureNexoDirs, resolveNexoPaths } from "@nexo/store";
 import { NexoError, toErrorPayload } from "@nexo/telemetry";
 import { type CliIO, type CliOptions, type CliStdio, EXIT_SIGINT, exitCodeFor, printError, usageError } from "./common.ts";
@@ -93,7 +92,7 @@ export async function settingsCommand(args: string[], io: CliIO, options: CliOpt
 	const paths = resolveNexoPaths(env);
 	ensureNexoDirs(paths);
 	const build = (): Settings => {
-		const settings = createSettings({ paths, cwd: options.cwd ?? process.cwd(), env, models: options.models ?? builtinModels() });
+		const settings = createSettings({ paths, cwd: options.cwd ?? process.cwd(), env, models: options.models ?? nexoModels() });
 		openLogger(settings, paths, "settings");
 		return settings;
 	};
