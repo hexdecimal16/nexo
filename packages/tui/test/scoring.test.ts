@@ -151,4 +151,18 @@ describe("scores and escalations in the chat", () => {
 		expect(scoreSummary({ scores: [scoreRow("r", { value: 0.5, passed: false }), failed, failed] })).toBe("score 0.50 ✗ · 2 failed");
 		expect(scoreSummary({ scores: [failed, failed] })).toBe("score failed");
 	});
+
+	it("shows an auto-allowed line under the tool call", async () => {
+		const h = await startHarness({ overrides: { ...FAUX_ROLES, tools: { policy: { bash: "ask" }, autoApprove: "on" } } });
+		h.faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("bash", { command: "echo hi" })]),
+			fauxAssistantMessage('{"decision":"allow","reason":"prints text in the workspace"}'),
+			fauxAssistantMessage("done"),
+		]);
+		submit(h.terminal, "say hi");
+		await until(() => expect(h.terminal.output()).toContain("auto-allowed: prints text in the workspace"));
+		await until(() => !h.session().running);
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
 });
