@@ -19,8 +19,8 @@ export function emptyMemoryContext(): RunMemoryContext {
 	return { block: "", ids: new Set(), query: "", embedding: null };
 }
 
-function rankOptions(config: NexoConfig, now: Date): Pick<RetrieveOptions, "weights" | "tauDays" | "now" | "topK"> {
-	return { weights: config.memory.weights, tauDays: config.memory.tauDays, now, topK: config.memory.topK };
+function rankOptions(config: NexoConfig, now: Date): Pick<RetrieveOptions, "weights" | "tauDays" | "now" | "topK" | "minRelevance"> {
+	return { weights: config.memory.weights, tauDays: config.memory.tauDays, now, topK: config.memory.topK, minRelevance: config.memory.minRelevance };
 }
 
 /**
