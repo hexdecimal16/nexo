@@ -62,15 +62,20 @@ function cap(text: string, max: number): string {
 	return text.length > max ? `${text.slice(0, max)} […${text.length - max} characters cut]` : text;
 }
 
+/** Neutralizes angle brackets so untrusted text cannot close or open a data block. */
+function escapeBlock(text: string): string {
+	return text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 /** The approver's user message: data blocks in a fixed order (spec: approvals §4.3). Not redacted; the caller redacts it. */
 export function approverInput(ctx: ApprovalContext, toolName: string, args: unknown): string {
 	const recent = renderForSummary("", ctx.recent.slice(-RECENT_MESSAGES), RECENT_CHARS);
 	const action = cap(`tool: ${toolName}\narguments: ${JSON.stringify(args ?? null)}`, ACTION_CHARS);
 	return [
-		`<request>\n${cap(ctx.request, REQUEST_CHARS)}\n</request>`,
-		`<recent>\n${recent}\n</recent>`,
-		`<workspace>\n${ctx.workspace}\n</workspace>`,
-		`<action>\n${action}${ctx.label ? `\nasked by: ${ctx.label}` : ""}\n</action>`,
+		`<request>\n${escapeBlock(cap(ctx.request, REQUEST_CHARS))}\n</request>`,
+		`<recent>\n${escapeBlock(recent)}\n</recent>`,
+		`<workspace>\n${escapeBlock(ctx.workspace)}\n</workspace>`,
+		`<action>\n${escapeBlock(action)}${ctx.label ? `\nasked by: ${escapeBlock(ctx.label)}` : ""}\n</action>`,
 	].join("\n");
 }
 
