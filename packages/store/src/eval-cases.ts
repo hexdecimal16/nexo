@@ -163,10 +163,13 @@ export function addEvalCase(db: Db, input: NewEvalCase, redact: Redactor, nowIso
 		createdAt: nowIso,
 		skill,
 		origin: "manual",
+		status: "active",
+		goldenSource: input.expected?.trim() ? "manual" : null,
+		minedFrom: null,
 	};
 	db.prepare(
-		"INSERT INTO eval_cases (id, target, source_run_id, input, expected, reference_feedback, scorer_spec_json, split, created_at, skill, origin) VALUES (?, ?, NULL, ?, ?, ?, NULL, ?, ?, ?, 'manual')",
-	).run(row.id, row.target, row.input, row.expected, row.referenceFeedback, row.split, nowIso, skill);
+		"INSERT INTO eval_cases (id, target, source_run_id, input, expected, reference_feedback, scorer_spec_json, split, created_at, skill, origin, golden_source) VALUES (?, ?, NULL, ?, ?, ?, NULL, ?, ?, ?, 'manual', ?)",
+	).run(row.id, row.target, row.input, row.expected, row.referenceFeedback, row.split, nowIso, skill, row.goldenSource);
 	return row;
 }
 
