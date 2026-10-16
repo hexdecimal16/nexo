@@ -75,8 +75,8 @@ describe("optimizations and mined cases", () => {
 describe("ledgerEmbedder and the embedding budget", () => {
 	afterEach(() => vi.unstubAllGlobals());
 	const models = { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "slow" }, embedding: { provider: "openai", id: "emb", baseUrl: "https://emb.test/v1" } };
-	const embedEnv = (budgets: { dailyUsd?: number } = {}) => {
-		const env = optimEnv({ models, pricingOverrides: { "openai/emb": { input: 1, output: 0 } }, budgets });
+	const embedEnv = (budgets: { dailyUsd?: number } = {}, priced = true) => {
+		const env = optimEnv({ models, pricingOverrides: priced ? { "openai/emb": { input: 1, output: 0 } } : {}, budgets });
 		return createEngineEnv({ ...env.deps, resolveApiKey: () => "key" });
 	};
 	const stubFetch = () => {
@@ -95,6 +95,28 @@ describe("ledgerEmbedder and the embedding budget", () => {
 
 	it("falls back to Jaccard and spends nothing when the day budget is exhausted", async () => {
 		const env = embedEnv({ dailyUsd: 1 });
+		runs(env, ["fix ci lint", "fix ci lint", "fix ci lint"]);
+		addSpend(env.deps.db, [dayScope(env.now())], 1, env.now().toISOString());
+		const fetchMock = stubFetch();
+		const result = await mineEvalCases(env, target);
+		expect(result.measure).toBe("jaccard");
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(getSpent(env.deps.db, dayScope(env.now()))).toBe(1);
+	});
+
+	it("falls back to Jaccard when the estimate is more than the little left of the day budget", async () => {
+		const env = embedEnv({ dailyUsd: 1 });
+		runs(env, ["fix ci lint", "fix ci lint", "fix ci lint"]);
+		addSpend(env.deps.db, [dayScope(env.now())], 0.999999, env.now().toISOString());
+		const fetchMock = stubFetch();
+		const result = await mineEvalCases(env, target);
+		expect(result.measure).toBe("jaccard");
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(getSpent(env.deps.db, dayScope(env.now()))).toBe(0.999999);
+	});
+
+	it("refuses an exhausted day ledger even when the embedding model has no price", async () => {
+		const env = embedEnv({ dailyUsd: 1 }, false);
 		runs(env, ["fix ci lint", "fix ci lint", "fix ci lint"]);
 		addSpend(env.deps.db, [dayScope(env.now())], 1, env.now().toISOString());
 		const fetchMock = stubFetch();
