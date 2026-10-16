@@ -1,13 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
-import { addEvalCase, insertRun, listEvalCases, parseOptimTarget } from "@nexo/store";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { addEvalCase, addSpend, dayScope, getSpent, insertRun, listEvalCases, monthScope, parseOptimTarget } from "@nexo/store";
 import { runRow } from "../../store/test/fixtures.ts";
-import { createEngineEnv, mineEvalCases, startOptimization } from "../src/index.ts";
+import { createEngineEnv, type EngineEnv, ledgerEmbedder, mineEvalCases, startOptimization } from "../src/index.ts";
 import { optimEnv } from "./optimize-helpers.ts";
 
 const target = parseOptimTarget("skill:ci-fix");
 const recent = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
 
-function runs(env: ReturnType<typeof optimEnv>, instructions: string[]): void {
+function runs(env: Pick<EngineEnv, "deps">, instructions: string[]): void {
 	instructions.forEach((instruction, i) => insertRun(env.deps.db, runRow({ status: "succeeded", skill: "ci-fix", instruction, startedAt: recent(100 - i), endedAt: recent(100 - i) })));
 }
 
@@ -69,5 +69,54 @@ describe("optimizations and mined cases", () => {
 			context: expect.objectContaining({ proposedCases: [expect.any(String)] }),
 		});
 		expect(listEvalCases(env.deps.db, "skill:ci-fix").map((c) => c.status)).toEqual(["proposed"]);
+	});
+});
+
+describe("ledgerEmbedder and the embedding budget", () => {
+	afterEach(() => vi.unstubAllGlobals());
+	const models = { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "slow" }, embedding: { provider: "openai", id: "emb", baseUrl: "https://emb.test/v1" } };
+	const embedEnv = (budgets: { dailyUsd?: number } = {}) => {
+		const env = optimEnv({ models, pricingOverrides: { "openai/emb": { input: 1, output: 0 } }, budgets });
+		return createEngineEnv({ ...env.deps, resolveApiKey: () => "key" });
+	};
+	const stubFetch = () => {
+		const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+			const input = JSON.parse(String(init.body)).input as string[];
+			const data = input.map((t, index) => ({ index, embedding: t.startsWith("alpha") ? [1, 0] : [0, 1] }));
+			return new Response(JSON.stringify({ data, usage: { prompt_tokens: 1000 } }), { status: 200 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		return fetchMock;
+	};
+
+	it("is null without models.embedding", () => {
+		expect(ledgerEmbedder(createEngineEnv(optimEnv().deps), [])).toBeNull();
+	});
+
+	it("falls back to Jaccard and spends nothing when the day budget is exhausted", async () => {
+		const env = embedEnv({ dailyUsd: 1 });
+		runs(env, ["fix ci lint", "fix ci lint", "fix ci lint"]);
+		addSpend(env.deps.db, [dayScope(env.now())], 1, env.now().toISOString());
+		const fetchMock = stubFetch();
+		const result = await mineEvalCases(env, target);
+		expect(result.measure).toBe("jaccard");
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(getSpent(env.deps.db, dayScope(env.now()))).toBe(1);
+	});
+
+	it("clusters by cosine and charges the day, month and mine scopes", async () => {
+		const env = embedEnv();
+		runs(env, ["alpha one", "alpha two", "alpha three"]);
+		stubFetch();
+		const result = await mineEvalCases(env, target);
+		expect(result.measure).toBe("cosine");
+		for (const scope of [dayScope(env.now()), monthScope(env.now()), "mine:skill:ci-fix"]) expect(getSpent(env.deps.db, scope), scope).toBeCloseTo(0.001, 6);
+	});
+
+	it("falls back to Jaccard when the embedder returns the wrong number of vectors", async () => {
+		const env = optimEnv();
+		runs(env, ["fix ci lint", "fix ci lint", "fix ci lint"]);
+		const result = await mineEvalCases(createEngineEnv(env.deps), target, { embed: async () => [[1, 0]] });
+		expect(result.measure).toBe("jaccard");
 	});
 });

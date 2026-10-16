@@ -15,6 +15,7 @@ import {
 } from "@nexo/store";
 import { NexoError } from "@nexo/telemetry";
 import type { EngineEnv } from "../engine/run.ts";
+import { checkAdmission } from "../cost/admission.ts";
 import { embeddingCost, embeddingEndpoint, embedTexts, estimateEmbeddingUsd } from "../learn/embedder.ts";
 
 export type Embed = (texts: readonly string[]) => Promise<number[][]>;
@@ -30,8 +31,9 @@ export interface MineResult {
 }
 
 /**
- * Embeds through `models.embedding`, charging the day and month ledgers and `scopes`. Throws BUDGET_EXCEEDED when the
- * estimate is more than what is left of the daily or monthly budget. Null without an embedding model.
+ * Embeds through `models.embedding`, charging the day and month ledgers and `scopes`. Refuses an exhausted ledger
+ * (checkAdmission) and throws BUDGET_EXCEEDED when the estimate is more than what is left of the daily or monthly
+ * budget. Null without an embedding model.
  */
 export function ledgerEmbedder(env: EngineEnv, scopes: readonly string[]): Embed | null {
 	const { config, db } = env.deps;
@@ -39,6 +41,7 @@ export function ledgerEmbedder(env: EngineEnv, scopes: readonly string[]): Embed
 	if (!endpoint) return null;
 	return async (texts) => {
 		const now = env.now();
+		checkAdmission(db, config.budgets, now);
 		const estimate = estimateEmbeddingUsd(config, endpoint, texts.reduce((n, t) => n + t.length, 0));
 		const left = Math.min(config.budgets.dailyUsd - getSpent(db, dayScope(now)), config.budgets.monthlyUsd - getSpent(db, monthScope(now)));
 		if (estimate > left) {
@@ -77,7 +80,9 @@ export async function mineEvalCases(env: EngineEnv, target: OptimTarget, options
 	const embed = options.embed === undefined ? ledgerEmbedder(env, [`mine:${target.key}`]) : options.embed;
 	if (embed) {
 		try {
-			const vectors = await embed([...items.map((i) => text(i.instruction)), ...existing.map((c) => text(c.input))]);
+			const texts = [...items.map((i) => text(i.instruction)), ...existing.map((c) => text(c.input))];
+			const vectors = await embed(texts);
+			if (vectors.length !== texts.length) throw new Error(`embedder returned ${vectors.length} vectors for ${texts.length} texts`);
 			const byRun = new Map(items.map((i, k) => [i.runId, vectors[k] as number[]]));
 			const caseVectors = existing.map((_, k) => vectors[items.length + k] as number[]);
 			similar = (a, b) => cosine(byRun.get(a.runId) as number[], byRun.get(b.runId) as number[]) >= settings.cosine;
