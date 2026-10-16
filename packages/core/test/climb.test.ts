@@ -80,7 +80,7 @@ describe("startClimb", () => {
 		const { run, report } = await startClimb(createEngineEnv(env.deps), { target: "skill:ci-fix", budgetUsd: 2 });
 		expect(run).toMatchObject({ status: "succeeded", climbOutcome: "golden_raised", bestArtifactId: run.baseArtifactId });
 		expect(getEvalCase(env.deps.db, c.id)).toMatchObject({ expected: "Linted.", goldenSource: "climb" });
-		expect(listGoldens(env.deps.db, c.id).at(-1)).toMatchObject({ source: "climb", optimRunId: run.id });
+		expect(listGoldens(env.deps.db, c.id).at(-1)).toMatchObject({ source: "climb", optimRunId: run.id, sourceRunId: expect.any(String) });
 		expect(report?.climb?.comparisons.map((p) => p.label)).toEqual(["golden"]);
 	});
 
@@ -190,5 +190,48 @@ describe("startClimb", () => {
 		resolveSourcedArtifact(env.deps.db, "skill", "ci-fix", `${SKILL}Edited by hand.\n`, new Date().toISOString());
 		expect(() => approveOptimRun(env.deps.db, run.id, { minJudgeKappa: -1, nowIso: new Date().toISOString() })).toThrow(expect.objectContaining({ code: "CONFLICT" }));
 		expect(getActiveArtifact(env.deps.db, "skill", "ci-fix")?.content).toContain("Edited by hand.");
+	});
+
+	it("fails with budget_usd when the budget admits the baseline but not the first comparison", async () => {
+		const env = optimEnv({ ...NO_ESCALATION, budgets: { perRunUsd: 0.5 }, pricingOverrides: { "faux/gemini-judge": { input: 20_000, output: 20_000 } } });
+		goldenCase(env);
+		script(env);
+		const { run, report } = await startClimb(createEngineEnv(env.deps), { target: "skill:ci-fix", budgetUsd: 0.5 });
+		expect(report).toBeNull();
+		expect(run).toMatchObject({ status: "failed", stopReason: "budget_usd", climbOutcome: null });
+	});
+
+	it("skips a guard whose base rollout fails and still improves", async () => {
+		const env = optimEnv(NO_ESCALATION);
+		const c = goldenCase(env, "Fix CI build 1");
+		const g = goldenCase(env, "Deploy guard", "GOLDEN guard");
+		const steps: string[] = [];
+		route(env, {
+			agent: (ctx) => {
+				if (ctx.user.includes("Deploy guard")) throw new Error("guard rollout failed");
+				return ctx.system.includes("then run the tests") ? "Linted and tested." : "Linted.";
+			},
+			judge: (ctx) =>
+				ctx.system.includes("comparing two answers")
+					? prefer(ctx, ["GOLDEN", "Linted and tested.", "Linted."])
+					: ctx.system.includes("critiques")
+						? JSON.stringify({ consistent: true, critique: "Run the tests." })
+						: verdict(0.5),
+			reflect: () => JSON.stringify({ text: BETTER, rationale: "x" }),
+		});
+		const { run, report } = await startClimb(createEngineEnv(env.deps), {
+			target: "skill:ci-fix",
+			caseId: c.id,
+			guards: 1,
+			budgetUsd: 3,
+			onEvent: (e) => {
+				if (e.type === "step" && e.step === "guard") steps.push(e.detail);
+			},
+		});
+		expect(run.climbOutcome).toBe("improved");
+		expect(steps).toEqual([expect.stringContaining(`${g.id}: skipped (base rollout`)]);
+		expect(report?.climb?.guardIds).toEqual([g.id]);
+		expect(report?.climb?.comparisons.map((p) => p.label)).toEqual(["golden", "verify"]);
+		expect(report?.holdout.cases).toHaveLength(1);
 	});
 });
