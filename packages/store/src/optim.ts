@@ -9,7 +9,10 @@ import { insertRow, updateById } from "./sql.ts";
 export type OptimStatus = "running" | "succeeded" | "failed" | "aborted";
 
 /** Why an optimization stopped: a budget, patience, an abort, its process exiting, or an error. */
-export type OptimStopReason = "budget_usd" | "budget_rollouts" | "patience" | "aborted" | "process_exited" | "error";
+export type OptimStopReason = "budget_usd" | "budget_rollouts" | "patience" | "aborted" | "process_exited" | "error" | "completed";
+
+/** How a climb ended when it reached an outcome (design §4.3). */
+export type ClimbOutcome = "improved" | "golden_raised" | "no_signal" | "not_improved" | "guard_regressed";
 
 /** One candidate's result on one eval case: quality 0..1 and the rollout's cost. */
 export interface CaseScore {
@@ -51,6 +54,12 @@ export interface OptimRunRow {
 	error: ErrorPayload | null;
 	createdAt: string;
 	endedAt: string | null;
+	/** `gepa` for `nexo optimize`, `climb` for `nexo optimize climb`. */
+	mode: "gepa" | "climb";
+	/** The climbed eval case; null for GEPA. */
+	caseId: string | null;
+	/** The climb's outcome; null for GEPA and for climbs that failed, aborted or ran out of budget. */
+	climbOutcome: ClimbOutcome | null;
 }
 
 /** A candidate's minibatch comparison with its parent, case by case. */
@@ -104,6 +113,9 @@ const RUN_COLUMNS: Record<keyof OptimRunRow, string> = {
 	error: "error_json",
 	createdAt: "created_at",
 	endedAt: "ended_at",
+	mode: "mode",
+	caseId: "case_id",
+	climbOutcome: "climb_outcome",
 };
 
 const CANDIDATE_COLUMNS: Record<keyof OptimCandidateRow, string> = {
@@ -160,6 +172,9 @@ function decodeRun(row: Record<string, unknown>): OptimRunRow {
 		error: row.error_json ? (JSON.parse(String(row.error_json)) as ErrorPayload) : null,
 		createdAt: String(row.created_at),
 		endedAt: str(row.ended_at),
+		mode: row.mode === "climb" ? "climb" : "gepa",
+		caseId: str(row.case_id),
+		climbOutcome: (row.climb_outcome as ClimbOutcome | null) ?? null,
 	};
 }
 

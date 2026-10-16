@@ -72,6 +72,9 @@ function optimization(name: string, overrides: Partial<OptimRunRow> = {}): Optim
 		error: null,
 		createdAt: NOW,
 		endedAt: NOW,
+		mode: "gepa",
+		caseId: null,
+		climbOutcome: null,
 		...overrides,
 	};
 	insertOptimRun(db, run);

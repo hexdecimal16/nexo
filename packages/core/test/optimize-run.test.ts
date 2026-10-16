@@ -162,7 +162,7 @@ describe("startOptimization", () => {
 		const env = optimEnv(NO_ESCALATION);
 		addCases(env, 3);
 		const base = ensureManualArtifact(env.deps.db, "skill", "ci-fix", SKILL, new Date().toISOString());
-		insertOptimRun(env.deps.db, { id: "01STALE", target: "skill:ci-fix", status: "running", stopReason: null, budgetUsd: 1, budgetRollouts: null, spentUsd: 0, rollouts: 0, merge: false, seed: 1, baseArtifactId: base.id, bestArtifactId: null, dirPath: "/tmp/x", reportRef: null, judgeKey: null, judgeOnly: null, holdoutBefore: null, holdoutAfter: null, promotion: null, replacedArtifactId: null, promotedAt: null, pid: 999_999, error: null, createdAt: new Date().toISOString(), endedAt: null });
+		insertOptimRun(env.deps.db, { id: "01STALE", target: "skill:ci-fix", status: "running", stopReason: null, budgetUsd: 1, budgetRollouts: null, spentUsd: 0, rollouts: 0, merge: false, seed: 1, baseArtifactId: base.id, bestArtifactId: null, dirPath: "/tmp/x", reportRef: null, judgeKey: null, judgeOnly: null, holdoutBefore: null, holdoutAfter: null, promotion: null, replacedArtifactId: null, promotedAt: null, pid: 999_999, error: null, createdAt: new Date().toISOString(), endedAt: null, mode: "gepa", caseId: null, climbOutcome: null });
 		await startOptimization(createEngineEnv(env.deps), { target: "skill:ci-fix" }).catch(() => undefined);
 		expect(getOptimRun(env.deps.db, "01STALE")).toMatchObject({ status: "aborted", stopReason: "process_exited" });
 	});

@@ -246,6 +246,9 @@ export async function startOptimization(baseEnv: EngineEnv, options: OptimizeOpt
 		error: null,
 		createdAt: nowIso(),
 		endedAt: null,
+		mode: "gepa",
+		caseId: null,
+		climbOutcome: null,
 	});
 	const seedRef: CandidateRef = { id: newId(), artifactId: base.id, texts: baseTexts };
 	insertOptimCandidate(db, { id: seedRef.id, optimRunId, artifactId: base.id, parentIds: [], iteration: 0, origin: "seed", component: null, minibatch: null, perCase: {}, meanScore: null, meanCostUsd: null, accepted: true, createdAt: nowIso() });

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { NexoError } from "@nexo/telemetry";
 import type { Db } from "./db.ts";
 import type { Verdict } from "./feedback.ts";
 import { newId } from "./ids.ts";
@@ -8,6 +9,10 @@ import { getRun } from "./runs.ts";
 export const JUDGE_CASE_TARGET = "judge_rubric";
 
 export type EvalSplit = "feedback" | "pareto" | "holdout";
+
+export type EvalCaseStatus = "proposed" | "active" | "dismissed";
+export type GoldenSource = "run" | "manual" | "climb";
+export type EvalCaseOrigin = "run" | "manual" | "mined";
 
 export interface EvalCaseRow {
 	id: string;
@@ -21,8 +26,14 @@ export interface EvalCaseRow {
 	createdAt: string;
 	/** The skill rollouts of this case run with; null for none. */
 	skill: string | null;
-	/** `run`: made from a reviewed run; `manual`: added with `nexo eval add`. */
-	origin: "run" | "manual";
+	/** `run`: made from a reviewed run; `manual`: added with `nexo eval add`; `mined`: proposed from unreviewed runs. */
+	origin: EvalCaseOrigin;
+	/** Only `active` cases enter optimizations; mined cases start `proposed`. */
+	status: EvalCaseStatus;
+	/** Where `expected` came from; null when there is no golden or the target is judge_rubric. */
+	goldenSource: GoldenSource | null;
+	/** A mined case's cluster run ids, newest first; null otherwise. */
+	minedFrom: string[] | null;
 }
 
 /** Judge pass/fail against human done/not-done; "positive" is a pass / done. */
@@ -87,6 +98,11 @@ export function judgeDisagrees(db: Db, runId: string): boolean {
 	return judge !== null && human !== undefined && judge.passed !== (human.verdict === "done");
 }
 
+function oneOf<T extends string>(value: unknown, allowed: readonly T[], column: string): T {
+	if (typeof value === "string" && (allowed as readonly string[]).includes(value)) return value as T;
+	throw new NexoError({ code: "INTERNAL", message: `eval_cases.${column} holds an unknown value`, context: { column, value } });
+}
+
 function decodeCase(row: Record<string, unknown>): EvalCaseRow {
 	return {
 		id: String(row.id),
@@ -96,15 +112,28 @@ function decodeCase(row: Record<string, unknown>): EvalCaseRow {
 		expected: (row.expected as string | null) ?? null,
 		referenceFeedback: (row.reference_feedback as string | null) ?? null,
 		scorerSpec: row.scorer_spec_json ? JSON.parse(String(row.scorer_spec_json)) : null,
-		split: row.split as EvalSplit,
+		split: oneOf<EvalSplit>(row.split, ["feedback", "pareto", "holdout"], "split"),
 		createdAt: String(row.created_at),
 		skill: (row.skill as string | null) ?? null,
-		origin: row.origin === "manual" ? "manual" : "run",
+		origin: oneOf<EvalCaseOrigin>(row.origin, ["run", "manual", "mined"], "origin"),
+		status: oneOf<EvalCaseStatus>(row.status, ["proposed", "active", "dismissed"], "status"),
+		goldenSource: row.golden_source === null || row.golden_source === undefined ? null : oneOf<GoldenSource>(row.golden_source, ["run", "manual", "climb"], "golden_source"),
+		minedFrom: row.mined_from_json ? (JSON.parse(String(row.mined_from_json)) as string[]) : null,
 	};
 }
 
 export function listEvalCases(db: Db, target: string): EvalCaseRow[] {
 	return db.prepare("SELECT * FROM eval_cases WHERE target = ? ORDER BY created_at, id").all(target).map(decodeCase);
+}
+
+export function getEvalCase(db: Db, id: string): EvalCaseRow | undefined {
+	const row = db.prepare("SELECT * FROM eval_cases WHERE id = ?").get(id);
+	return row ? decodeCase(row) : undefined;
+}
+
+/** The cases an optimization or climb uses: `active` only. */
+export function listActiveEvalCases(db: Db, target: string): EvalCaseRow[] {
+	return db.prepare("SELECT * FROM eval_cases WHERE target = ? AND status = 'active' ORDER BY created_at, id").all(target).map(decodeCase);
 }
 
 /**
