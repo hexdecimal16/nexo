@@ -11,13 +11,14 @@ export const TOKEN_PLACEHOLDER = "{{NEXO_TOKEN}}";
 
 /** Pages may load only their own scripts, styles and API; no inline script, no framing. */
 export const PAGE_CSP =
-	"default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'self'; " +
+	"default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'self'; " +
 	"base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 const TYPES: Record<string, string> = {
 	".html": "text/html; charset=utf-8",
 	".css": "text/css; charset=utf-8",
 	".ts": "text/javascript; charset=utf-8",
+	".woff2": "font/woff2",
 };
 
 export interface StaticServer {
@@ -35,7 +36,8 @@ function notFound(urlPath: string): NexoError {
 export function createStaticServer(publicDir: string, token: string): StaticServer {
 	const stripped = new Map<string, { mtimeMs: number; code: string }>();
 
-	const load = (file: string, ext: string, urlPath: string): string => {
+	const load = (file: string, ext: string, urlPath: string): string | Buffer => {
+		if (ext === ".woff2") return readFileSync(file);
 		const source = readFileSync(file, "utf8");
 		if (ext === ".html") return source.replaceAll(TOKEN_PLACEHOLDER, token);
 		if (ext !== ".ts") return source;
@@ -64,7 +66,7 @@ export function createStaticServer(publicDir: string, token: string): StaticServ
 			} catch {
 				throw notFound(urlPath);
 			}
-			let body: string;
+			let body: string | Buffer;
 			try {
 				if (!statSync(file).isFile()) throw notFound(urlPath);
 				body = load(file, ext, urlPath);

@@ -1,5 +1,5 @@
 import type { RunStatus, RunSummary } from "./api-types.ts";
-import { runLink, sessionLink, statusBadge, verdictBadge } from "./common-view.ts";
+import { runLink, sessionLink, stateClass, statusBadge, verdictBadge } from "./common-view.ts";
 import { durationMs, formatDuration, formatTime, formatUsd, truncate } from "./format.ts";
 import { html, type SafeHtml } from "./html.ts";
 import { renderScoreCell } from "./score-view.ts";
@@ -39,7 +39,7 @@ export function runsQuery(filters: RunFilters, cursor: string | null, limit: num
 
 export function renderRunRows(runs: RunSummary[], nowMs: number): SafeHtml {
 	return html`${runs.map(
-		(run) => html`<tr>
+		(run) => html`<tr class="${stateClass(run.status)}">
 		<td class="mono">${formatTime(run.startedAt)}</td>
 		<td><a href="${runLink(run.id)}">${truncate(run.instruction.split("\n")[0] ?? "", 120)}</a>${run.childCount ? html` <span class="muted">· ${run.childCount} subagent${run.childCount === 1 ? "" : "s"}</span>` : ""}</td>
 		<td>${run.skill ?? html`<span class="muted">–</span>`}</td>

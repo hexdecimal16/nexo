@@ -25,3 +25,11 @@ export function verdictBadge(verdict: Verdict | null): SafeHtml {
 export function renderError(error: ApiErrorBody): SafeHtml {
 	return html`<div class="error" role="alert"><strong>${error.code}</strong> ${error.message}${error.hint ? html`<div class="hint">${error.hint}</div>` : ""}</div>`;
 }
+
+/** Spine state of a run row or card; style.css colours the left rail from it. */
+export function stateClass(status: string): string {
+	if (status === "succeeded" || status === "ok") return "state-ok";
+	if (status === "running") return "state-running";
+	if (["failed", "error", "aborted", "budget_exceeded"].includes(status)) return "state-bad";
+	return "state-none";
+}
