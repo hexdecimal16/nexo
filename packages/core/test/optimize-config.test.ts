@@ -19,13 +19,21 @@ function load(home: object, project?: object) {
 	return () => loadConfig({ paths, cwd: root }).config;
 }
 
+const MINE = { days: 30, maxRuns: 500, minCluster: 3, maxNew: 3, cosine: 0.8, jaccard: 0.5 };
+
 describe("optimize config", () => {
 	it("fills the spec §9 defaults and keeps budgets.optimDefaultUsd", () => {
 		const config = load({ models })();
-		expect(config.optimize).toEqual({ minCases: 10, patience: 5, minJudgeKappa: 0.6 });
+		expect(config.optimize).toEqual({ minCases: 10, patience: 5, minJudgeKappa: 0.6, mine: MINE, climb: { guards: 2 } });
 		expect(DEFAULT_CONFIG.optimize.minCases).toBe(10);
 		expect(config.budgets.optimDefaultUsd).toBe(5);
-		expect(load({ models, optimize: { patience: 8 } })().optimize).toEqual({ minCases: 10, patience: 8, minJudgeKappa: 0.6 });
+		expect(load({ models, optimize: { patience: 8 } })().optimize).toEqual({ minCases: 10, patience: 8, minJudgeKappa: 0.6, mine: MINE, climb: { guards: 2 } });
+	});
+
+	it("refuses out-of-range mining and climb settings", () => {
+		for (const optimize of [{ mine: { minCluster: 1 } }, { mine: { cosine: 0 } }, { mine: { maxRuns: 9 } }, { climb: { guards: 11 } }]) {
+			expect(() => load({ models, optimize })(), JSON.stringify(optimize)).toThrow(/optimize/);
+		}
 	});
 
 	it("refuses optimize.minJudgeKappa from a project config but accepts it from the home config", () => {

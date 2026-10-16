@@ -14,6 +14,7 @@ export * from "./learn/embedder.ts";
 export * from "./learn/job.ts";
 export * from "./learn/worker.ts";
 export * from "./optimize/adapter.ts";
+export * from "./optimize/mine.ts";
 export * from "./optimize/optimize.ts";
 export * from "./optimize/optimizer-run.ts";
 export * from "./optimize/reflect.ts";
