@@ -339,7 +339,7 @@ describe("cost view", () => {
 describe("common view", () => {
 	it("escapes error fields and unknown statuses", () => {
 		expectInert(renderError({ code: "X", message: XSS, retryable: false, hint: null }).value);
-		expect(statusBadge(`"><script>`).value).toBe(`<span class="badge status-other">&quot;&gt;&lt;script&gt;</span>`);
+		expect(statusBadge(`"><script>`).value).toBe(`<span class="badge status-other"><span class="glyph" aria-hidden="true">·</span> &quot;&gt;&lt;script&gt;</span>`);
 	});
 });
 
