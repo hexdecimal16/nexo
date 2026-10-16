@@ -19,6 +19,7 @@ import {
 	parseOptimTarget,
 	raiseGolden,
 	recordFeedback,
+	reviewProposedCase,
 	RunDir,
 	type RunRow,
 	runsNeedingReview,
@@ -213,6 +214,35 @@ describe("the sync guard", () => {
 		verdict(db, run.id, "done");
 		syncRunEvalCases(db, parseOptimTarget("skill:ci-fix"), NOW);
 		expect(getEvalCase(db, "M1")).toMatchObject({ origin: "mined", status: "active", expected: "leader output", goldenSource: "run" });
+	});
+});
+
+describe("the sync guard for reviewed mined cases", () => {
+	const mined = (db: Db, runId: string) =>
+		db.prepare("INSERT INTO eval_cases (id, target, source_run_id, input, split, created_at, skill, origin, status, mined_from_json) VALUES ('M1', 'skill:ci-fix', ?, 'Fix CI', 'pareto', ?, 'ci-fix', 'mined', 'proposed', '[]')").run(runId, NOW);
+
+	it("keeps a dismissed mined case dismissed when its leader run has a verdict", () => {
+		const db = openDb(":memory:");
+		const run = finishedRun(db, { skill: "ci-fix", instruction: "Fix CI" }, "leader output");
+		mined(db, run.id);
+		reviewProposedCase(db, "M1", "dismiss", { redact, nowIso: NOW });
+		verdict(db, run.id, "done");
+		syncRunEvalCases(db, parseOptimTarget("skill:ci-fix"), NOW);
+		syncRunEvalCases(db, parseOptimTarget("skill:ci-fix"), NOW);
+		expect(getEvalCase(db, "M1")?.status).toBe("dismissed");
+	});
+
+	it("keeps a golden a human accepted when the leader run later gets other verdicts", () => {
+		const db = openDb(":memory:");
+		const run = finishedRun(db, { skill: "ci-fix", instruction: "Fix CI" }, "leader output");
+		mined(db, run.id);
+		reviewProposedCase(db, "M1", "accept", { expected: "hand golden", redact, nowIso: NOW });
+		verdict(db, run.id, "not_done");
+		syncRunEvalCases(db, parseOptimTarget("skill:ci-fix"), NOW);
+		expect(getEvalCase(db, "M1")).toMatchObject({ expected: "hand golden", goldenSource: "manual" });
+		verdict(db, run.id, "done");
+		syncRunEvalCases(db, parseOptimTarget("skill:ci-fix"), NOW);
+		expect(getEvalCase(db, "M1")).toMatchObject({ expected: "hand golden", goldenSource: "manual", status: "active" });
 	});
 });
 
