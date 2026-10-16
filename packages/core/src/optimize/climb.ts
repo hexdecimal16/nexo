@@ -212,7 +212,14 @@ export async function startClimb(baseEnv: EngineEnv, options: ClimbOptions): Pro
 	const comparisons: PairwiseRecord[] = [];
 	const pair = async (label: string, c: EvalCaseRow, outputA: string, outputB: string): Promise<PairwiseResult> => {
 		const refused = { hit: false };
-		const result = await comparePairwise(optimJudgeCaller(ctx, refused), models, { instruction: c.input, outputA, outputB, rubric, ...(c.referenceFeedback ? { reference: c.referenceFeedback } : {}) }, signal);
+		let result: PairwiseResult;
+		try {
+			result = await comparePairwise(optimJudgeCaller(ctx, refused), models, { instruction: c.input, outputA, outputB, rubric, ...(c.referenceFeedback ? { reference: c.referenceFeedback } : {}) }, signal);
+		} catch (error) {
+			if (signal.aborted) throw error;
+			if (refused.hit) throw new BudgetStop("budget_usd", "The optimization budget cannot cover another judge call");
+			throw error;
+		}
 		if (refused.hit) throw new BudgetStop("budget_usd", "The optimization budget cannot cover another judge call");
 		comparisons.push(record(label, result));
 		return result;
@@ -252,7 +259,10 @@ export async function startClimb(baseEnv: EngineEnv, options: ClimbOptions): Pro
 
 			// 3. Consistency of the rationales where the golden won.
 			const rationales = golden.votes.flatMap((v) => [v.aFirst === "B" ? v.aFirstRationale : null, v.bFirst === "B" ? v.bFirstRationale : null]).filter((r): r is string => r !== null);
-			if (rationales.length < 2) throw new Outcome("no_signal");
+			if (rationales.length < 2) {
+				step("consistency", "too few rationales");
+				throw new Outcome("no_signal");
+			}
 			const refused = { hit: false };
 			let consistent: { consistent: boolean; critique: string } | null = null;
 			try {
@@ -297,6 +307,10 @@ export async function startClimb(baseEnv: EngineEnv, options: ClimbOptions): Pro
 			// 6. Guards: the child must not lose any.
 			for (const g of guards) {
 				const b = await rollout(g, seedRef);
+				if (b.status !== "succeeded") {
+					step("guard", `${g.id}: skipped (base rollout ${b.status})`);
+					continue;
+				}
 				const c = await rollout(g, childRef);
 				before[g.id] = b.score;
 				after[g.id] = c.score;
