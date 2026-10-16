@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { type NexoConfig, type OptimizeEvent, startOptimization } from "@nexo/core";
+import { type ClimbEvent, type NexoConfig, type OptimizeEvent, startClimb, startOptimization } from "@nexo/core";
 import type { OptimReport } from "@nexo/optimize";
 import {
 	addEvalCase,
@@ -38,7 +38,9 @@ function versionOf(db: Db, id: string | null): string {
 export function optimRunLine(run: OptimRunRow): string {
 	const holdout = run.holdoutBefore === null ? "" : ` · holdout ${q(run.holdoutBefore)} → ${q(run.holdoutAfter)}`;
 	const promotion = run.promotion ? ` · ${run.promotion.replace("_", " ")}` : "";
-	return `${run.id}  ${escapeControl(run.target).padEnd(22)} ${run.status.padEnd(9)} ${(run.stopReason ?? "").padEnd(15)} ${usd(run.spentUsd)} of $${run.budgetUsd.toFixed(2)} · ${run.rollouts} rollouts${holdout}${promotion}`;
+	const climb = run.mode === "climb" ? ` · ${run.climbOutcome ?? "no outcome"}` : "";
+	const target = `${run.mode === "climb" ? "climb " : ""}${escapeControl(run.target)}`;
+	return `${run.id}  ${target.padEnd(22)} ${run.status.padEnd(9)} ${(run.stopReason ?? "").padEnd(15)} ${usd(run.spentUsd)} of $${run.budgetUsd.toFixed(2)} · ${run.rollouts} rollouts${holdout}${climb}${promotion}`;
 }
 
 /** The report summary printed by `nexo optimize` and `nexo optimize show`. */
@@ -46,10 +48,16 @@ export function reportLines(db: Db, run: OptimRunRow, report: OptimReport | null
 	const lines = [optimRunLine(run), `  base ${versionOf(db, run.baseArtifactId)} · best ${versionOf(db, run.bestArtifactId)}`];
 	if (run.error) lines.push(`  error [${run.error.code}] ${escapeControl(run.error.message)}`);
 	if (!report) return lines;
+	if (report.climb) {
+		const c = report.climb;
+		lines.push(`  climb on case ${c.caseId} (${c.guardIds.length} guard${c.guardIds.length === 1 ? "" : "s"}) · ${c.outcome}`);
+		if (c.critique) lines.push(`  critique: ${escapeControl(c.critique)}`);
+		for (const p of c.comparisons) lines.push(`    ${escapeControl(p.label).padEnd(20)} ${p.winner === "tie" ? "tie" : `${p.winner} preferred`}`);
+	}
 	const h = report.holdout;
 	lines.push(`  holdout (${h.cases.length} cases): quality ${q(h.before.quality)} → ${q(h.after.quality)}, cost ${usd(h.before.costUsd)} → ${usd(h.after.costUsd)} per case; ${h.wins} wins, ${h.losses} losses, ${h.ties} ties`);
 	for (const c of h.cases) lines.push(`    ${c.outcome.padEnd(4)} ${q(c.before.quality)} → ${q(c.after.quality)}  ${escapeControl(c.input.replace(/\s+/g, " ").slice(0, 80))}`);
-	lines.push(`  ${report.iterations} iterations, ${report.lineage.length - 1} candidates, ${report.merges} merges${report.mergeNote ? ` (${escapeControl(report.mergeNote)})` : ""}`);
+	if (!report.climb) lines.push(`  ${report.iterations} iterations, ${report.lineage.length - 1} candidates, ${report.merges} merges${report.mergeNote ? ` (${escapeControl(report.mergeNote)})` : ""}`);
 	const e = report.evidence;
 	lines.push(
 		e.humanScored
@@ -154,10 +162,51 @@ async function runOptimize(args: string[], io: CliIO, options: CliOptions): Prom
 	}
 }
 
-/** `nexo optimize …`: run one, or `list`, `show <id> [--diff]`, `approve <id>`, `rollback <id>`. */
+/** A progress line for a climb event, or null. */
+export function climbEventLine(event: ClimbEvent): string | null {
+	if (event.type === "start") return `climbing ${escapeControl(event.target)} (${event.optimRunId}) on case ${event.caseId} with ${event.guardIds.length} guard${event.guardIds.length === 1 ? "" : "s"} · $${event.budgetUsd.toFixed(2)}`;
+	if (event.type === "step") return `  ${event.step}: ${escapeControl(event.detail)}`;
+	return event.type === "reflection" ? optimizeEventLine(event) : null;
+}
+
+/** `nexo optimize climb --target … [--case] [--guards] [--budget-usd] [--seed]`: one climb in the foreground. */
+async function runClimb(args: string[], io: CliIO, options: CliOptions): Promise<number> {
+	const { values } = parseArgs({ args, options: { target: { type: "string" }, case: { type: "string" }, guards: { type: "string" }, "budget-usd": { type: "string" }, seed: { type: "string" } } });
+	if (!values.target) throw usageError("nexo optimize climb needs --target skill:<name>|system_prompt|planner_prompt");
+	const guards = values.guards === undefined ? undefined : Number(values.guards);
+	if (guards !== undefined && !(Number.isInteger(guards) && guards >= 0 && guards <= 10)) throw usageError("--guards must be an integer from 0 to 10");
+	const seed = values.seed === undefined ? undefined : Number(values.seed);
+	if (seed !== undefined && !(Number.isInteger(seed) && seed >= 0)) throw usageError("--seed must be a non-negative integer");
+	const budgetUsd = positiveNumber("--budget-usd", values["budget-usd"], false);
+	const runtime = createRuntime({ env: options.env ?? process.env, cwd: options.cwd ?? process.cwd(), prompter: nonInteractivePrompter, models: options.models });
+	try {
+		const notice = rolloutNotice(runtime.config);
+		if (notice) io.stderr.write(`${notice}\n`);
+		const { run, report } = await startClimb(runtime.engine.env, {
+			target: values.target,
+			...(values.case ? { caseId: values.case } : {}),
+			...(guards !== undefined ? { guards } : {}),
+			...(budgetUsd !== undefined ? { budgetUsd } : {}),
+			...(seed !== undefined ? { seed } : {}),
+			signal: options.signal,
+			onEvent: (event) => {
+				const line = climbEventLine(event);
+				if (line) io.stderr.write(`${line}\n`);
+			},
+		});
+		for (const line of reportLines(runtime.db, run, report, runtime.config.optimize.minJudgeKappa)) io.stdout.write(`${line}\n`);
+		return run.status === "aborted" ? EXIT_SIGINT : 0;
+	} finally {
+		await runtime.mcp?.close();
+		runtime.db.close();
+	}
+}
+
+/** `nexo optimize …`: run one, or `climb …`, or `list`, `show <id> [--diff]`, `approve <id>`, `rollback <id>`. */
 export async function optimizeCommand(args: string[], io: CliIO, options: CliOptions): Promise<number> {
 	const [sub, ...rest] = args;
 	if (sub === undefined || sub.startsWith("-")) return runOptimize(args, io, options);
+	if (sub === "climb") return runClimb(rest, io, options);
 	const store = openStore(options);
 	try {
 		recoverCrashedOptimRuns(store.db, isPidAlive, new Date().toISOString());

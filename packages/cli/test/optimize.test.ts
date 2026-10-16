@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider, type FauxResponseFactory, getSystemMessageText } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { getActiveArtifact, listEvalCases, listOptimRuns, openDb, resolveNexoPaths } from "@nexo/store";
+import type { OptimReport } from "@nexo/optimize";
+import type { OptimRunRow } from "@nexo/store";
+import { climbEventLine, optimRunLine, reportLines } from "../src/optimize.ts";
 import { type CliIO, runCli } from "../src/main.ts";
 
 function io(): CliIO & { out: () => string; err: () => string } {
@@ -142,5 +145,54 @@ describe("nexo optimize", () => {
 		const router = io();
 		expect(await runCli(["optimize", "--target", "router_policy"], router, h)).toBe(1);
 		expect(router.err()).toContain("router_policy is not an optimization target yet");
+	});
+});
+
+function climbRunFixture(): OptimRunRow {
+	return {
+		id: "01OPTIM", target: "skill:ci-fix", status: "succeeded", stopReason: "completed", budgetUsd: 2, budgetRollouts: null, spentUsd: 0.5, rollouts: 4, merge: false, seed: 1,
+		baseArtifactId: "01BASE", bestArtifactId: null, dirPath: "/nowhere", reportRef: null, judgeKey: null, judgeOnly: null, holdoutBefore: null, holdoutAfter: null,
+		promotion: null, replacedArtifactId: null, promotedAt: null, pid: null, error: null, createdAt: "2026-10-16T00:00:00.000Z", endedAt: null,
+		mode: "climb", caseId: "01CASE", climbOutcome: "improved",
+	};
+}
+
+function climbReportFixture(): OptimReport {
+	const score = { quality: 0, costUsd: 0 } as OptimReport["holdout"]["before"];
+	return {
+		optimRunId: "01OPTIM", target: "skill:ci-fix", baseArtifactId: "01BASE", bestArtifactId: "01BASE", improved: true,
+		holdout: { cases: [], before: score, after: score, wins: 0, losses: 0, ties: 0 }, diff: [], lineage: [],
+		evidence: { humanScored: false, judgeOnly: true, judgeKey: null, kappa: null } as OptimReport["evidence"],
+		stopReason: "completed", spentUsd: 0.5, rollouts: 4, iterations: 3, merges: 0, mergeNote: null,
+		climb: { caseId: "01CASE", guardIds: ["01G"], outcome: "improved", critique: "Run the tests\u001b[31m", comparisons: [{ label: "golden", winner: "B", votes: [] }] },
+		createdAt: "2026-10-16T00:00:00.000Z",
+	};
+}
+
+describe("nexo optimize climb", () => {
+	it("prints the climb's outcome, case and critique in list and show", () => {
+		const h = setup();
+		const db = openDb(resolveNexoPaths(h.env).db);
+		const run = climbRunFixture();
+		expect(optimRunLine(run)).toMatch(/^\S+\s+climb skill:ci-fix/);
+		const text = reportLines(db, run, climbReportFixture(), 0.6).join("\n");
+		db.close();
+		expect(text).toContain("climb on case 01CASE (1 guard) · improved");
+		expect(text).toContain("critique: Run the tests");
+		expect(text).not.toContain("\u001b[31m");
+		expect(text).not.toContain("iterations");
+	});
+
+	it("prints one line per climb step", () => {
+		expect(climbEventLine({ type: "step", step: "golden", detail: "golden wins" })).toBe("  golden: golden wins");
+		expect(climbEventLine({ type: "start", optimRunId: "01O", target: "skill:ci-fix", caseId: "01C", guardIds: ["01G"], budgetUsd: 2 })).toBe("climbing skill:ci-fix (01O) on case 01C with 1 guard · $2.00");
+	});
+
+	it("rejects bad flags before spending", async () => {
+		const h = setup();
+		const t = io();
+		expect(await runCli(["optimize", "climb"], t, h)).not.toBe(0);
+		expect(await runCli(["optimize", "climb", "--target", "skill:ci-fix", "--guards=-1"], t, h)).not.toBe(0);
+		expect(t.err()).toMatch(/--guards must be an integer from 0 to 10/);
 	});
 });
