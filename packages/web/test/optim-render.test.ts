@@ -118,6 +118,15 @@ describe("optimization view", () => {
 		expect(renderLineage([candidate({ parentIds: [], minibatch: null, meanScore: null })]).value).toContain("–");
 	});
 
+	it("renders a climb report inertly with readable winners", () => {
+		const climb = { caseId: "01CASE", guardIds: ["01G"], outcome: "improved" as const, critique: `Run ${XSS}`, comparisons: [{ label: "golden", winner: "B" as const, votes: [] }, { label: "verify", winner: "A" as const, votes: [] }, { label: "guard 01G", winner: "tie" as const, votes: [] }] };
+		const markup = renderOptimDetail(detail({ report: { ...report, climb } }), false).value;
+		expect(markup).toContain("golden preferred");
+		expect(markup).toContain("child preferred");
+		expect(markup).toContain("<td>tie</td>");
+		expectInert(markup);
+	});
+
 	it("explains a refused approval and links the runs to review", () => {
 		const refused = detail({
 			promotion: {

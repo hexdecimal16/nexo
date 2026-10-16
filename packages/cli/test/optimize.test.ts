@@ -164,7 +164,7 @@ function climbReportFixture(): OptimReport {
 		holdout: { cases: [], before: score, after: score, wins: 0, losses: 0, ties: 0 }, diff: [], lineage: [],
 		evidence: { humanScored: false, judgeOnly: true, judgeKey: null, kappa: null } as OptimReport["evidence"],
 		stopReason: "completed", spentUsd: 0.5, rollouts: 4, iterations: 3, merges: 0, mergeNote: null,
-		climb: { caseId: "01CASE", guardIds: ["01G"], outcome: "improved", critique: "Run the tests\u001b[31m", comparisons: [{ label: "golden", winner: "B", votes: [] }] },
+		climb: { caseId: "01CASE", guardIds: ["01G"], outcome: "improved", critique: "Run the tests\u001b[31m", comparisons: [{ label: "golden", winner: "B", votes: [] }, { label: "verify", winner: "A", votes: [] }, { label: "guard 01G", winner: "tie", votes: [] }] },
 		createdAt: "2026-10-16T00:00:00.000Z",
 	};
 }
@@ -179,6 +179,9 @@ describe("nexo optimize climb", () => {
 		db.close();
 		expect(text).toContain("climb on case 01CASE (1 guard) · improved");
 		expect(text).toContain("critique: Run the tests");
+		expect(text).toMatch(/golden\s+golden preferred/);
+		expect(text).toMatch(/verify\s+child preferred/);
+		expect(text).toMatch(/guard 01G\s+tie/);
 		expect(text).not.toContain("\u001b[31m");
 		expect(text).not.toContain("iterations");
 	});

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { type ClimbEvent, type NexoConfig, type OptimizeEvent, startClimb, startOptimization } from "@nexo/core";
-import type { OptimReport } from "@nexo/optimize";
+import { comparisonWinnerLabel, type OptimReport } from "@nexo/optimize";
 import {
 	addEvalCase,
 	approveOptimRun,
@@ -52,7 +52,7 @@ export function reportLines(db: Db, run: OptimRunRow, report: OptimReport | null
 		const c = report.climb;
 		lines.push(`  climb on case ${c.caseId} (${c.guardIds.length} guard${c.guardIds.length === 1 ? "" : "s"}) · ${c.outcome}`);
 		if (c.critique) lines.push(`  critique: ${escapeControl(c.critique)}`);
-		for (const p of c.comparisons) lines.push(`    ${escapeControl(p.label).padEnd(20)} ${p.winner === "tie" ? "tie" : `${p.winner} preferred`}`);
+		for (const p of c.comparisons) lines.push(`    ${escapeControl(p.label).padEnd(20)} ${comparisonWinnerLabel(p)}`);
 	}
 	const h = report.holdout;
 	lines.push(`  holdout (${h.cases.length} cases): quality ${q(h.before.quality)} → ${q(h.after.quality)}, cost ${usd(h.before.costUsd)} → ${usd(h.after.costUsd)} per case; ${h.wins} wins, ${h.losses} losses, ${h.ties} ties`);

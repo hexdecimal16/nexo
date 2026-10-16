@@ -259,7 +259,8 @@ export async function startClimb(baseEnv: EngineEnv, options: ClimbOptions): Pro
 
 			// 3. Consistency of the rationales where the golden won.
 			const rationales = golden.votes.flatMap((v) => [v.aFirst === "B" ? v.aFirstRationale : null, v.bFirst === "B" ? v.bFirstRationale : null]).filter((r): r is string => r !== null);
-			if (rationales.length < 2) {
+			const bothOrders = golden.votes.some((v) => v.aFirst === "B" && v.bFirst === "B");
+			if (rationales.length < 2 || !bothOrders) {
 				step("consistency", "too few rationales");
 				throw new Outcome("no_signal");
 			}
