@@ -110,11 +110,11 @@ export function syncRunEvalCases(db: Db, target: OptimTarget, nowIso: string): {
 			const existing = db.prepare("SELECT id, expected, golden_source FROM eval_cases WHERE target = ? AND source_run_id = ?").get(target.key, id);
 			if (existing) {
 				const caseId = String(existing.id);
-				if (existing.golden_source === "climb") {
-					// A climb raised this golden; the run's own output no longer replaces it.
-					db.prepare("UPDATE eval_cases SET reference_feedback = ?, skill = ?, status = 'active' WHERE id = ?").run(reference, run.skill, caseId);
+				if (existing.golden_source === "climb" || existing.golden_source === "manual") {
+					// Goldens from climb or a human are not replaced by the run's output. Only a proposed case becomes active.
+					db.prepare("UPDATE eval_cases SET reference_feedback = ?, skill = ?, status = CASE WHEN status = 'proposed' THEN 'active' ELSE status END WHERE id = ?").run(reference, run.skill, caseId);
 				} else {
-					db.prepare("UPDATE eval_cases SET expected = ?, reference_feedback = ?, skill = ?, status = 'active', golden_source = ? WHERE id = ?").run(
+					db.prepare("UPDATE eval_cases SET expected = ?, reference_feedback = ?, skill = ?, status = CASE WHEN status = 'proposed' THEN 'active' ELSE status END, golden_source = ? WHERE id = ?").run(
 						expected,
 						reference,
 						run.skill,
