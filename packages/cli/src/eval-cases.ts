@@ -19,7 +19,7 @@ export async function evalMineCommand(args: string[], io: CliIO, options: CliOpt
 	const runtime = createRuntime({ env: options.env ?? process.env, cwd: options.cwd ?? process.cwd(), prompter: nonInteractivePrompter, models: options.models });
 	try {
 		const result = await mineEvalCases(runtime.engine.env, target, days === undefined ? {} : { days });
-		io.stdout.write(`Considered ${result.considered} unreviewed runs of ${target.key} (${result.measure}); added ${result.added.length}\n`);
+		io.stdout.write(`Considered ${result.considered} unreviewed runs of ${target.key} (${result.measure}); added ${result.added.length}${result.fallbackReason ? ` — embeddings failed: ${escapeControl(result.fallbackReason)}` : ""}\n`);
 		for (const c of result.waiting) io.stdout.write(`  proposed ${c.id} (${c.minedFrom?.length ?? 0} runs) ${firstLine(c.input)}\n`);
 		if (result.waiting.length > 0) io.stdout.write("Accept with `nexo eval accept <id> [--expected <text>]`, or `nexo eval dismiss <id>`\n");
 		return 0;

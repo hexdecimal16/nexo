@@ -120,6 +120,13 @@ export interface PairwiseRecord {
 	votes: { model: string; aFirst: string | null; bFirst: string | null; winner: string }[];
 }
 
+/** Who won a comparison, in words: A is the baseline vs the golden in `golden`, the child vs the base in `verify` and `guard …`. */
+export function comparisonWinnerLabel(record: Pick<PairwiseRecord, "label" | "winner">): string {
+	if (record.winner === "tie") return "tie";
+	if (record.label === "golden") return record.winner === "A" ? "baseline preferred" : "golden preferred";
+	return record.winner === "A" ? "child preferred" : "base preferred";
+}
+
 /** What a climb did (design §4.4). */
 export interface ClimbReport {
 	caseId: string;

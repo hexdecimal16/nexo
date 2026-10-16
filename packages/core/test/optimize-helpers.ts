@@ -20,6 +20,8 @@ export interface CallContext {
 	system: string;
 	user: string;
 	context: TranscriptContext;
+	/** The id of the model the call went to. */
+	model: string;
 }
 
 /**
@@ -30,7 +32,7 @@ export function route(env: TestEnv, handlers: { agent?: (c: CallContext) => stri
 	const calls: Record<"agent" | "judge" | "reflect", CallContext[]> = { agent: [], judge: [], reflect: [] };
 	const factory: FauxResponseFactory = async (context, _opts, _state, model) => {
 		const role = model.id.endsWith("-judge") ? "judge" : model.id === "slow" ? "reflect" : "agent";
-		const call: CallContext = { system: context.messages.flatMap((m) => (m.role === "system" ? [getSystemMessageText(m)] : [])).join("\n"), user: firstUserText(context), context };
+		const call: CallContext = { system: context.messages.flatMap((m) => (m.role === "system" ? [getSystemMessageText(m)] : [])).join("\n"), user: firstUserText(context), context, model: model.id };
 		calls[role].push(call);
 		const handler = handlers[role];
 		if (!handler) throw new Error(`no ${role} handler`);

@@ -46,7 +46,7 @@ export const USAGE = `Usage:
   nexo sessions [--limit <n>]
   nexo settings                            open the settings screen (needs a terminal)
   nexo settings get <key>
-  nexo settings set <key> <value>          keys: models.s1|s2|judge|reflector, budgets.*, tools.policy.*, tools.autoApprove, tools.nonInteractiveAsk, models.approver, scoring.judge, learning.*, memory.*, optimize.*
+  nexo settings set <key> <value>          keys: models.s1|s2|judge|reflector, budgets.*, tools.policy.*, tools.autoApprove, tools.nonInteractiveAsk, models.approver, scoring.judge, learning.*, memory.*, optimize.minCases|patience|minJudgeKappa
   nexo settings reset <key>                remove it from the user config
   nexo settings set-key <provider>         reads the key from a hidden prompt, or from stdin when piped
   nexo run <instruction...> [--skill <name>] [--model <s1|s2|provider/id>] [--effort <level>] [--workspace <dir>] [--budget <usd>] [--no-review]

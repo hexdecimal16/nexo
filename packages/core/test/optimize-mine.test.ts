@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { addEvalCase, addSpend, dayScope, getSpent, insertRun, listEvalCases, monthScope, parseOptimTarget } from "@nexo/store";
+import { addEvalCase, addSpend, dayScope, getSpent, insertRun, listEvalCases, monthScope, parseOptimTarget, recordFeedback } from "@nexo/store";
 import { runRow } from "../../store/test/fixtures.ts";
 import { createEngineEnv, type EngineEnv, ledgerEmbedder, mineEvalCases, startOptimization } from "../src/index.ts";
 import { optimEnv } from "./optimize-helpers.ts";
@@ -52,6 +52,47 @@ describe("mineEvalCases", () => {
 		const result = await mineEvalCases(createEngineEnv(env.deps), target, { embed: async () => Promise.reject(new Error("HTTP 500")) });
 		expect(result.measure).toBe("jaccard");
 		expect(result.added).toHaveLength(1);
+	});
+
+	it("falls back to Jaccard and says why when the embedding call fails", async () => {
+		const env = optimEnv();
+		runs(env, ["fix ci lint", "fix ci lint", "fix ci lint"]);
+		const result = await mineEvalCases(createEngineEnv(env.deps), target, { embed: async () => Promise.reject(new Error("HTTP 400 too long")) });
+		expect(result).toMatchObject({ measure: "jaccard", fallbackReason: "HTTP 400 too long" });
+		const ok = await mineEvalCases(createEngineEnv(env.deps), target, { embed: async (texts) => texts.map(() => [1, 0]) });
+		expect(ok.fallbackReason).toBeNull();
+	});
+
+	it("clips each text to 2000 characters before embedding", async () => {
+		const env = optimEnv();
+		const long = `fix ci lint ${"x".repeat(5000)}`;
+		runs(env, [long, long, long]);
+		const embed = vi.fn(async (texts: readonly string[]) => texts.map(() => [1, 0]));
+		const result = await mineEvalCases(createEngineEnv(env.deps), target, { embed });
+		expect(result.measure).toBe("cosine");
+		const sent = embed.mock.calls.flatMap(([texts]) => [...texts]);
+		expect(sent).toHaveLength(3);
+		expect(Math.max(...sent.map((t) => t.length))).toBe(2000);
+	});
+
+	it("embeds in chunks of at most 100 texts and still clusters", async () => {
+		const env = optimEnv();
+		runs(env, Array.from({ length: 250 }, (_, i) => (i % 2 === 0 ? `alpha job ${i}` : `beta job ${i}`)));
+		const embed = vi.fn(async (texts: readonly string[]) => texts.map((t) => (t.startsWith("alpha") ? [1, 0] : [0, 1])));
+		const result = await mineEvalCases(createEngineEnv(env.deps), target, { embed });
+		expect(embed.mock.calls.map(([texts]) => texts.length)).toEqual([100, 100, 50]);
+		expect(result.measure).toBe("cosine");
+		expect(result.added.length).toBeGreaterThan(0);
+	});
+
+	it("syncs reviewed runs first: a mined case whose leader run gets a done verdict becomes active", async () => {
+		const env = optimEnv();
+		runs(env, ["fix the failing lint step in ci", "fix the failing lint step in the ci", "please fix the failing lint step in ci"]);
+		const [mined] = (await mineEvalCases(createEngineEnv(env.deps), target)).added;
+		expect(mined).toMatchObject({ status: "proposed" });
+		recordFeedback(env.deps.db, { runId: (mined?.minedFrom as string[])[0] as string, verdict: "done", comment: "", nowIso: new Date().toISOString(), redact: env.deps.redact });
+		await mineEvalCases(createEngineEnv(env.deps), target);
+		expect(listEvalCases(env.deps.db, "skill:ci-fix").map((c) => c.status)).toEqual(["active"]);
 	});
 
 	it("refuses judge_rubric", async () => {

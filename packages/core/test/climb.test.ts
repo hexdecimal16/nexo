@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { addEvalCase, approveOptimRun, getActiveArtifact, getArtifact, getEvalCase, listGoldens, listOptimCandidates, resolveSourcedArtifact } from "@nexo/store";
+import { addEvalCase, approveOptimRun, getActiveArtifact, getArtifact, getEvalCase, insertRun, insertScore, listGoldens, listOptimCandidates, listSpans, recordFeedback, resolveSourcedArtifact, rollbackOptimRun } from "@nexo/store";
+import { runRow } from "../../store/test/fixtures.ts";
 import { createEngineEnv, startClimb } from "../src/index.ts";
 import type { TestEnv } from "./helpers.ts";
 import { type CallContext, optimEnv, route, SKILL } from "./optimize-helpers.ts";
-import { verdict } from "./scoring-helpers.ts";
+import { judges, verdict } from "./scoring-helpers.ts";
 
 const BETTER = "Run the linter, then run the tests.\n";
 const NO_ESCALATION = { router: { maxEscalations: 0 } };
@@ -71,6 +72,24 @@ describe("startClimb", () => {
 		expect(calls.reflect[0]?.user).toContain("Run the tests after linting.");
 		// The approve path is the GEPA one: judge-only evidence with no κ yet is refused, as for GEPA.
 		expect(() => approveOptimRun(env.deps.db, run.id, { minJudgeKappa: 0.6, nowIso: new Date().toISOString() })).toThrow(/Promotion refused/);
+		const spans = listSpans(env.deps.db, run.id);
+		const purposes = (kind: string) => spans.filter((sp) => sp.kind === kind).map((sp) => sp.attrs.purpose);
+		expect(purposes("judge_call")).toEqual(expect.arrayContaining(["pairwise", "consistency"]));
+		expect(purposes("gepa_call")).toContain("reflect");
+
+		// Once the judge agrees with human verdicts, the climb promotes like a GEPA run, and rolls back.
+		const key = run.judgeKey as string;
+		for (const [i, passed] of [true, true, false, false].entries()) {
+			const reviewed = runRow({ status: "succeeded", skill: "ci-fix", instruction: `reviewed ${i}` });
+			insertRun(env.deps.db, reviewed);
+			insertScore(env.deps.db, { id: `sc${i}`, runId: reviewed.id, round: 1, scorerKind: "judge", scorerType: "llm_judge", scorerName: "judge", status: "ok", value: passed ? 1 : 0, passed, rationale: "", criteria: null, details: {}, error: null, model: key, costUsd: 0, costUnknown: false, createdAt: new Date().toISOString() });
+			recordFeedback(env.deps.db, { runId: reviewed.id, verdict: passed ? "done" : "not_done", comment: "", nowIso: new Date().toISOString(), redact: env.deps.redact });
+		}
+		const base = getActiveArtifact(env.deps.db, "skill", "ci-fix");
+		approveOptimRun(env.deps.db, run.id, { minJudgeKappa: 0.6, nowIso: new Date().toISOString() });
+		expect(getActiveArtifact(env.deps.db, "skill", "ci-fix")?.id).toBe(run.bestArtifactId);
+		rollbackOptimRun(env.deps.db, run.id, new Date().toISOString());
+		expect(getActiveArtifact(env.deps.db, "skill", "ci-fix")?.id).toBe(base?.id);
 	});
 
 	it("raises the golden when the current version already beats it", async () => {
@@ -94,6 +113,27 @@ describe("startClimb", () => {
 			expect(calls.reflect).toHaveLength(0);
 			expect(getEvalCase(env.deps.db, c.id)?.goldenSource).toBe("manual");
 		}
+	});
+
+	it("stops with no_signal when no model preferred the golden in both orders", async () => {
+		const env = optimEnv({ ...NO_ESCALATION, ...judges("gemini-judge", "gpt-judge") });
+		goldenCase(env);
+		const calls = route(env, {
+			agent: () => "Linted.",
+			// Each model prefers the golden in one order only and ties the other.
+			judge: (c) => {
+				if (!c.system.includes("comparing two answers")) return verdict(0.3);
+				const [first] = answers(c.user);
+				const goldenFirst = first.includes("GOLDEN");
+				const prefersGolden = c.model === "gemini-judge" ? goldenFirst : !goldenFirst;
+				return JSON.stringify({ preferred: prefersGolden ? (goldenFirst ? "first" : "second") : "tie", rationale: "The golden is better." });
+			},
+			reflect: () => "unused",
+		});
+		const { run } = await startClimb(createEngineEnv(env.deps), { target: "skill:ci-fix", budgetUsd: 2 });
+		expect(run.climbOutcome).toBe("no_signal");
+		expect(calls.reflect).toHaveLength(0);
+		expect(calls.judge.filter((c) => c.system.includes("critiques"))).toHaveLength(0);
 	});
 
 	it("treats an invalid consistency reply after one repair as no signal", async () => {
@@ -199,6 +239,21 @@ describe("startClimb", () => {
 		const { run, report } = await startClimb(createEngineEnv(env.deps), { target: "skill:ci-fix", budgetUsd: 0.5 });
 		expect(report).toBeNull();
 		expect(run).toMatchObject({ status: "failed", stopReason: "budget_usd", climbOutcome: null });
+	});
+
+	it("fails with budget_usd when the budget covers everything up to verification but not the guard rollouts", async () => {
+		const env = optimEnv({ ...NO_ESCALATION, budgets: { perRunUsd: 0.05 }, pricingOverrides: { "faux/gemini-judge": { input: 10, output: 10 } } });
+		goldenCase(env);
+		goldenCase(env, "Fix CI build 2", "GOLDEN 2");
+		goldenCase(env, "Fix CI build 3", "GOLDEN 3");
+		script(env);
+		const steps: string[] = [];
+		const { run, report } = await startClimb(createEngineEnv(env.deps), { target: "skill:ci-fix", budgetUsd: 0.12, onEvent: (e) => e.type === "step" && steps.push(e.step) });
+		expect(steps).toEqual(["baseline", "golden", "consistency", "edit", "verify"]);
+		expect(report).toBeNull();
+		expect(run).toMatchObject({ status: "failed", stopReason: "budget_usd", climbOutcome: null });
+		const child = listOptimCandidates(env.deps.db, run.id).find((c) => c.origin === "reflect");
+		expect(getArtifact(env.deps.db, child!.artifactId)?.status).toBe("retired");
 	});
 
 	it("skips a guard whose base rollout fails and still improves", async () => {

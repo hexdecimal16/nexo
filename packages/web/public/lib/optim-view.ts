@@ -93,11 +93,18 @@ export function renderApproval(data: OptimDetailResponse, readOnly: boolean): Sa
 ${review.length > 0 ? html`<p>Review these runs to calibrate the judge:</p><ul>${review.map((id) => html`<li><a href="${runLink(id)}">${id}</a></li>`)}</ul>` : ""}`;
 }
 
+/** The winner of a climb comparison in words (mirrors comparisonWinnerLabel of @nexo/optimize, which public/ cannot import). */
+function comparisonWinner(c: { label: string; winner: "A" | "B" | "tie" }): string {
+	if (c.winner === "tie") return "tie";
+	if (c.label === "golden") return c.winner === "A" ? "baseline preferred" : "golden preferred";
+	return c.winner === "A" ? "child preferred" : "base preferred";
+}
+
 function renderClimb(climb: NonNullable<OptimReport["climb"]>): SafeHtml {
 	return html`<h3>Climb</h3>
 <p>Case <span class="mono">${climb.caseId}</span> · ${climb.guardIds.length} guard${climb.guardIds.length === 1 ? "" : "s"} · outcome <strong>${climb.outcome.replace("_", " ")}</strong>.</p>
 ${climb.critique ? html`<p class="muted">${climb.critique}</p>` : ""}
-${climb.comparisons.length === 0 ? "" : html`<table class="runs"><thead><tr><th>Comparison</th><th>Winner</th></tr></thead><tbody>${climb.comparisons.map((c) => html`<tr><td>${c.label}</td><td>${c.winner}</td></tr>`)}</tbody></table>`}`;
+${climb.comparisons.length === 0 ? "" : html`<table class="runs"><thead><tr><th>Comparison</th><th>Winner</th></tr></thead><tbody>${climb.comparisons.map((c) => html`<tr><td>${c.label}</td><td>${comparisonWinner(c)}</td></tr>`)}</tbody></table>`}`;
 }
 
 /** The proposed (mined) eval cases with Accept / Dismiss buttons. */

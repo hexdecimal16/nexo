@@ -12,6 +12,7 @@ import {
 	normalizeCaseInput,
 	type OptimTarget,
 	proposeClusters,
+	syncRunEvalCases,
 } from "@nexo/store";
 import { NexoError } from "@nexo/telemetry";
 import type { EngineEnv } from "../engine/run.ts";
@@ -28,7 +29,14 @@ export interface MineResult {
 	measure: "cosine" | "jaccard";
 	/** Runs considered. */
 	considered: number;
+	/** The error message when embedding was attempted and failed; null otherwise. */
+	fallbackReason: string | null;
 }
+
+/** Longest text sent to the embedder; clustering needs only the gist. */
+const EMBED_CLIP_CHARS = 2000;
+/** Most texts per embedding request. */
+const EMBED_CHUNK = 100;
 
 /**
  * Embeds through `models.embedding`, charging the day and month ledgers and `scopes`. Refuses an exhausted ledger
@@ -64,24 +72,30 @@ export async function mineEvalCases(env: EngineEnv, target: OptimTarget, options
 		throw new NexoError({ code: "INVALID_REQUEST", message: "judge_rubric cases come from reviewed runs that the judge scored, not from mining", context: { target: target.key } });
 	}
 	const { db, config, redact, logger } = env.deps;
+	syncRunEvalCases(db, target, env.now().toISOString());
 	const settings = config.optimize.mine;
 	const now = env.now();
 	const days = options.days ?? settings.days;
 	const items = mineCandidateRuns(db, target, { sinceIso: new Date(now.getTime() - days * 86_400_000).toISOString(), maxRuns: settings.maxRuns });
 	const existing = listEvalCases(db, target.key);
 	const waitingOf = () => listEvalCases(db, target.key).filter((c) => c.status === "proposed");
-	if (items.length < settings.minCluster) return { added: [], waiting: waitingOf(), measure: "jaccard", considered: items.length };
+	if (items.length < settings.minCluster) {
+		logger.info("mined eval cases", { target: target.key, considered: items.length, measure: "jaccard", added: 0 });
+		return { added: [], waiting: waitingOf(), measure: "jaccard", considered: items.length, fallbackReason: null };
+	}
 
 	const text = (s: string) => normalizeCaseInput(s);
 	let measure: "cosine" | "jaccard" = "jaccard";
+	let fallbackReason: string | null = null;
 	let similar = (a: MineItem, b: MineItem) => jaccard(text(a.instruction), text(b.instruction)) >= settings.jaccard;
 	let nearExisting = (leader: MineItem) => existing.some((c) => jaccard(text(leader.instruction), text(c.input)) >= settings.jaccard);
 
 	const embed = options.embed === undefined ? ledgerEmbedder(env, [`mine:${target.key}`]) : options.embed;
 	if (embed) {
 		try {
-			const texts = [...items.map((i) => text(i.instruction)), ...existing.map((c) => text(c.input))];
-			const vectors = await embed(texts);
+			const texts = [...items.map((i) => text(i.instruction)), ...existing.map((c) => text(c.input))].map((t) => t.slice(0, EMBED_CLIP_CHARS));
+			const vectors: number[][] = [];
+			for (let at = 0; at < texts.length; at += EMBED_CHUNK) vectors.push(...(await embed(texts.slice(at, at + EMBED_CHUNK))));
 			if (vectors.length !== texts.length) throw new Error(`embedder returned ${vectors.length} vectors for ${texts.length} texts`);
 			const byRun = new Map(items.map((i, k) => [i.runId, vectors[k] as number[]]));
 			const caseVectors = existing.map((_, k) => vectors[items.length + k] as number[]);
@@ -89,6 +103,7 @@ export async function mineEvalCases(env: EngineEnv, target: OptimTarget, options
 			nearExisting = (leader) => caseVectors.some((v) => cosine(byRun.get(leader.runId) as number[], v) >= settings.cosine);
 			measure = "cosine";
 		} catch (error) {
+			fallbackReason = error instanceof Error ? error.message : String(error);
 			logger.warn("embedding mined instructions failed; clustering by word overlap instead", { target: target.key, error });
 		}
 	}
@@ -96,7 +111,7 @@ export async function mineEvalCases(env: EngineEnv, target: OptimTarget, options
 	const clusters = proposeClusters(items, { similar, nearExisting, minCluster: settings.minCluster, maxNew: settings.maxNew });
 	const added = insertMinedCases(db, target, clusters, redact, now.toISOString());
 	logger.info("mined eval cases", { target: target.key, considered: items.length, measure, added: added.length });
-	return { added, waiting: waitingOf(), measure, considered: items.length };
+	return { added, waiting: waitingOf(), measure, considered: items.length, fallbackReason };
 }
 
 /** Mining before an optimization or climb: never fails it, only logs. */
