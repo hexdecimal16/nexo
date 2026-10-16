@@ -18,6 +18,7 @@ export * from "./optimize/optimize.ts";
 export * from "./optimize/optimizer-run.ts";
 export * from "./optimize/reflect.ts";
 export * from "./providers/claude-p.ts";
+export * from "./providers/kiro-p.ts";
 export * from "./providers/models.ts";
 export * from "./scoring/calibration.ts";
 export * from "./scoring/sources.ts";
