@@ -1,10 +1,12 @@
 import type { SQLInputValue } from "node:sqlite";
 import type { Redactor } from "@nexo/telemetry";
+import { NexoError } from "@nexo/telemetry";
 import { type Db, transaction } from "./db.ts";
 import { invalidRequest } from "./errors.ts";
 import { latestFeedback } from "./feedback.ts";
+import { recordGolden } from "./goldens.ts";
 import { newId } from "./ids.ts";
-import { type EvalCaseRow, type EvalSplit, evalSplitFor, listEvalCases } from "./judge-calibration.ts";
+import { type EvalCaseRow, type EvalSplit, evalSplitFor, getEvalCase, listActiveEvalCases, listEvalCases } from "./judge-calibration.ts";
 import { readRunJson } from "./run-dir.ts";
 import { getRun } from "./runs.ts";
 
@@ -104,14 +106,30 @@ export function syncRunEvalCases(db: Db, target: OptimTarget, nowIso: string): {
 				expected = feedback.verdict === "done" && output.trim() ? clip(output) : null;
 			}
 			const reference = feedback.comment.trim() ? clip(feedback.comment) : null;
-			const existing = db.prepare("SELECT id FROM eval_cases WHERE target = ? AND source_run_id = ?").get(target.key, id);
+			const rubric = target.kind === "judge_rubric";
+			const existing = db.prepare("SELECT id, expected, golden_source FROM eval_cases WHERE target = ? AND source_run_id = ?").get(target.key, id);
 			if (existing) {
-				db.prepare("UPDATE eval_cases SET expected = ?, reference_feedback = ?, skill = ? WHERE id = ?").run(expected, reference, run.skill, String(existing.id));
+				const caseId = String(existing.id);
+				if (existing.golden_source === "climb") {
+					// A climb raised this golden; the run's own output no longer replaces it.
+					db.prepare("UPDATE eval_cases SET reference_feedback = ?, skill = ?, status = 'active' WHERE id = ?").run(reference, run.skill, caseId);
+				} else {
+					db.prepare("UPDATE eval_cases SET expected = ?, reference_feedback = ?, skill = ?, status = 'active', golden_source = ? WHERE id = ?").run(
+						expected,
+						reference,
+						run.skill,
+						!rubric && expected !== null ? "run" : null,
+						caseId,
+					);
+					if (!rubric && expected !== null && expected !== existing.expected) recordGolden(db, { caseId, expected, source: "run", sourceRunId: id, nowIso });
+				}
 				updated++;
 			} else {
+				const caseId = newId();
 				db.prepare(
-					"INSERT INTO eval_cases (id, target, source_run_id, input, expected, reference_feedback, scorer_spec_json, split, created_at, skill, origin) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'run')",
-				).run(newId(), target.key, id, run.instruction, expected, reference, caseSplit(run.instruction), nowIso, run.skill);
+					"INSERT INTO eval_cases (id, target, source_run_id, input, expected, reference_feedback, scorer_spec_json, split, created_at, skill, origin, status, golden_source) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'run', 'active', ?)",
+				).run(caseId, target.key, id, run.instruction, expected, reference, caseSplit(run.instruction), nowIso, run.skill, !rubric && expected !== null ? "run" : null);
+				if (!rubric && expected !== null) recordGolden(db, { caseId, expected, source: "run", sourceRunId: id, nowIso });
 				added++;
 			}
 		}
@@ -167,9 +185,12 @@ export function addEvalCase(db: Db, input: NewEvalCase, redact: Redactor, nowIso
 		goldenSource: input.expected?.trim() ? "manual" : null,
 		minedFrom: null,
 	};
-	db.prepare(
-		"INSERT INTO eval_cases (id, target, source_run_id, input, expected, reference_feedback, scorer_spec_json, split, created_at, skill, origin, golden_source) VALUES (?, ?, NULL, ?, ?, ?, NULL, ?, ?, ?, 'manual', ?)",
-	).run(row.id, row.target, row.input, row.expected, row.referenceFeedback, row.split, nowIso, skill, row.goldenSource);
+	transaction(db, () => {
+		db.prepare(
+			"INSERT INTO eval_cases (id, target, source_run_id, input, expected, reference_feedback, scorer_spec_json, split, created_at, skill, origin, status, golden_source) VALUES (?, ?, NULL, ?, ?, ?, NULL, ?, ?, ?, 'manual', 'active', ?)",
+		).run(row.id, row.target, row.input, row.expected, row.referenceFeedback, row.split, nowIso, skill, row.goldenSource);
+		if (row.expected !== null) recordGolden(db, { caseId: row.id, expected: row.expected, source: "manual", nowIso });
+	});
 	return row;
 }
 
@@ -202,4 +223,71 @@ export function runsNeedingReview(db: Db, target: OptimTarget, limit = RUNS_TO_R
 			startedAt: String(row.started_at),
 		};
 	});
+}
+
+/**
+ * The user's decision on a proposed (mined) case: `accept` makes it active, optionally with a golden; `dismiss` keeps it
+ * out of optimizations and stops its cluster from being proposed again. Throws NOT_FOUND, CONFLICT (not proposed) or
+ * INVALID_REQUEST (golden too long).
+ */
+export function reviewProposedCase(db: Db, id: string, decision: "accept" | "dismiss", options: { expected?: string | null; redact: Redactor; nowIso: string }): EvalCaseRow {
+	const golden = options.expected?.trim() ? options.redact(options.expected.trim()) : null;
+	if (golden && golden.length > MAX_EVAL_INPUT_CHARS) throw invalidRequest(`expected is longer than ${MAX_EVAL_INPUT_CHARS} characters`, { length: golden.length });
+	return transaction(db, () => {
+		const c = getEvalCase(db, id);
+		if (!c) throw new NexoError({ code: "NOT_FOUND", message: `Eval case ${id} does not exist`, context: { caseId: id } });
+		if (c.status !== "proposed") throw new NexoError({ code: "CONFLICT", message: `Eval case ${id} is ${c.status}, not proposed`, context: { caseId: id, status: c.status } });
+		if (decision === "dismiss") {
+			db.prepare("UPDATE eval_cases SET status = 'dismissed' WHERE id = ?").run(id);
+		} else if (golden) {
+			db.prepare("UPDATE eval_cases SET status = 'active', expected = ?, golden_source = 'manual' WHERE id = ?").run(golden, id);
+			recordGolden(db, { caseId: id, expected: golden, source: "manual", nowIso: options.nowIso });
+		} else {
+			db.prepare("UPDATE eval_cases SET status = 'active' WHERE id = ?").run(id);
+		}
+		return getEvalCase(db, id) as EvalCaseRow;
+	});
+}
+
+/**
+ * The case a climb runs on (design §4.2). With `caseId`: that case, which must be an active case of `target` with a
+ * golden. Without: the newest such case with no succeeded climb against `baseArtifactId`. Throws NOT_FOUND,
+ * INVALID_REQUEST, EVAL_SET_TOO_SMALL (no case has a golden) or CONFLICT (every case was climbed against this base).
+ */
+export function chooseClimbCase(db: Db, target: OptimTarget, baseArtifactId: string, caseId?: string): EvalCaseRow {
+	if (caseId !== undefined) {
+		const c = getEvalCase(db, caseId);
+		if (!c) throw new NexoError({ code: "NOT_FOUND", message: `Eval case ${caseId} does not exist`, context: { caseId }, hint: `List cases with \`nexo eval list --target ${target.key}\`` });
+		if (c.target !== target.key) throw invalidRequest(`Eval case ${caseId} belongs to ${c.target}, not ${target.key}`, { caseId });
+		if (c.status !== "active") throw invalidRequest(`Eval case ${caseId} is ${c.status}; climb needs an active case`, { caseId }, `Accept it with \`nexo eval accept ${caseId}\``);
+		if (c.expected === null) throw invalidRequest(`Eval case ${caseId} has no golden (expected output)`, { caseId }, "Mark a run of this instruction done, or accept it with --expected");
+		return c;
+	}
+	const withGolden = listActiveEvalCases(db, target.key).filter((c) => c.expected !== null);
+	if (withGolden.length === 0) {
+		const runsToReview = runsNeedingReview(db, target).map((r) => r.runId);
+		const proposed = listEvalCases(db, target.key).filter((c) => c.status === "proposed").map((c) => c.id);
+		throw new NexoError({
+			code: "EVAL_SET_TOO_SMALL",
+			message: `Climbing ${target.key} needs an active eval case with a golden (a run marked done); it has none`,
+			hint: runsToReview.length > 0 ? `Mark one of these runs done: ${runsToReview.join(", ")}` : `Add one with \`nexo eval add --target ${target.key} --input "<instruction>" --expected "<answer>"\``,
+			context: { target: target.key, runsToReview, proposedCases: proposed },
+		});
+	}
+	const climbed = new Set(
+		db
+			.prepare("SELECT case_id FROM optim_runs WHERE mode = 'climb' AND status = 'succeeded' AND base_artifact_id = ? AND case_id IS NOT NULL")
+			.all(baseArtifactId)
+			.map((row) => String(row.case_id)),
+	);
+	const next = [...withGolden].reverse().find((c) => !climbed.has(c.id));
+	if (!next) {
+		throw new NexoError({
+			code: "CONFLICT",
+			message: `Every eval case of ${target.key} with a golden was already climbed against the current version`,
+			hint: "Pass --case <id> to climb one again, or add cases",
+			context: { target: target.key, baseArtifactId },
+		});
+	}
+	return next;
 }

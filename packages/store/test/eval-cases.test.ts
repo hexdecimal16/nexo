@@ -6,14 +6,18 @@ import { createRedactor } from "@nexo/telemetry";
 import {
 	addEvalCase,
 	caseSplit,
+	chooseClimbCase,
 	type Db,
+	getEvalCase,
 	insertRun,
 	insertScore,
 	insertSpan,
 	listEvalCases,
+	listGoldens,
 	normalizeCaseInput,
 	openDb,
 	parseOptimTarget,
+	raiseGolden,
 	recordFeedback,
 	RunDir,
 	type RunRow,
@@ -172,5 +176,63 @@ describe("runsNeedingReview", () => {
 		expect(list.map((r) => r.runId)).toEqual([low.id, high.id, newer.id, older.id]);
 		expect(list[0]).toMatchObject({ instruction: "low", score: 0.2 });
 		expect(runsNeedingReview(db, target, 1)).toHaveLength(1);
+	});
+});
+
+describe("the sync guard", () => {
+	it("keeps a golden that climb raised when the source run's done output changes", () => {
+		const db = openDb(":memory:");
+		const run = finishedRun(db, { skill: "ci-fix", instruction: "Fix CI" }, "first output");
+		verdict(db, run.id, "done");
+		syncRunEvalCases(db, parseOptimTarget("skill:ci-fix"), NOW);
+		const [c] = listEvalCases(db, "skill:ci-fix");
+		expect(c).toMatchObject({ expected: "first output", goldenSource: "run" });
+		raiseGolden(db, { caseId: c!.id, expected: "climbed output", sourceRunId: "R9", optimRunId: "O1", redact, nowIso: NOW });
+		verdict(db, run.id, "done", "even better now");
+		syncRunEvalCases(db, parseOptimTarget("skill:ci-fix"), NOW);
+		expect(getEvalCase(db, c!.id)).toMatchObject({ expected: "climbed output", goldenSource: "climb", referenceFeedback: "even better now" });
+	});
+
+	it("records a history row only when a run golden changes", () => {
+		const db = openDb(":memory:");
+		const run = finishedRun(db, { skill: "ci-fix", instruction: "Fix CI" }, "out");
+		verdict(db, run.id, "done");
+		syncRunEvalCases(db, parseOptimTarget("skill:ci-fix"), NOW);
+		syncRunEvalCases(db, parseOptimTarget("skill:ci-fix"), NOW);
+		const [c] = listEvalCases(db, "skill:ci-fix");
+		expect(listGoldens(db, c!.id)).toHaveLength(1);
+		verdict(db, run.id, "not_done");
+		syncRunEvalCases(db, parseOptimTarget("skill:ci-fix"), NOW);
+		expect(getEvalCase(db, c!.id)).toMatchObject({ expected: null, goldenSource: null });
+	});
+
+	it("activates a proposed mined case when its leader run gets a verdict", () => {
+		const db = openDb(":memory:");
+		const run = finishedRun(db, { skill: "ci-fix", instruction: "Fix CI" }, "leader output");
+		db.prepare("INSERT INTO eval_cases (id, target, source_run_id, input, split, created_at, skill, origin, status, mined_from_json) VALUES ('M1', 'skill:ci-fix', ?, 'Fix CI', 'pareto', ?, 'ci-fix', 'mined', 'proposed', '[]')").run(run.id, NOW);
+		verdict(db, run.id, "done");
+		syncRunEvalCases(db, parseOptimTarget("skill:ci-fix"), NOW);
+		expect(getEvalCase(db, "M1")).toMatchObject({ origin: "mined", status: "active", expected: "leader output", goldenSource: "run" });
+	});
+});
+
+describe("chooseClimbCase", () => {
+	it("picks the newest active case with a golden not yet climbed against the base, and explains every refusal", () => {
+		const db = openDb(":memory:");
+		const target = parseOptimTarget("skill:ci-fix");
+		expect(() => chooseClimbCase(db, target, "BASE")).toThrow(expect.objectContaining({ code: "EVAL_SET_TOO_SMALL" }));
+		const older = addEvalCase(db, { target: "skill:ci-fix", input: "a", expected: "A" }, redact, "2026-10-01T00:00:00.000Z");
+		const newer = addEvalCase(db, { target: "skill:ci-fix", input: "b", expected: "B" }, redact, "2026-10-02T00:00:00.000Z");
+		addEvalCase(db, { target: "skill:ci-fix", input: "no golden" }, redact, "2026-10-03T00:00:00.000Z");
+		expect(chooseClimbCase(db, target, "BASE").id).toBe(newer.id);
+		db.prepare("INSERT INTO artifacts (id, kind, name, version, content, content_hash, status, origin, parent_version_id, created_at) VALUES ('BASE', 'skill', 'ci-fix', 1, 'x', 'h', 'active', 'manual', NULL, ?)").run(NOW);
+		db.prepare("INSERT INTO optim_runs (id, target, status, budget_usd, seed, base_artifact_id, dir_path, created_at, mode, case_id) VALUES ('O1', 'skill:ci-fix', 'succeeded', 1, 1, 'BASE', '/tmp', ?, 'climb', ?)").run(NOW, newer.id);
+		expect(chooseClimbCase(db, target, "BASE").id).toBe(older.id);
+		db.prepare("INSERT INTO optim_runs (id, target, status, budget_usd, seed, base_artifact_id, dir_path, created_at, mode, case_id) VALUES ('O2', 'skill:ci-fix', 'succeeded', 1, 1, 'BASE', '/tmp', ?, 'climb', ?)").run(NOW, older.id);
+		expect(() => chooseClimbCase(db, target, "BASE")).toThrow(expect.objectContaining({ code: "CONFLICT" }));
+		expect(chooseClimbCase(db, target, "BASE", older.id).id).toBe(older.id);
+		expect(() => chooseClimbCase(db, target, "BASE", "NOPE")).toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+		const other = addEvalCase(db, { target: "system_prompt", input: "c", expected: "C" }, redact, NOW);
+		expect(() => chooseClimbCase(db, target, "BASE", other.id)).toThrow(expect.objectContaining({ code: "INVALID_REQUEST" }));
 	});
 });
