@@ -1,5 +1,5 @@
 import type { Feedback, ReadOnlyInfo, RunDetailResponse, RunStatus, RunSummary } from "./api-types.ts";
-import { renderError, runLink, sessionLink, statusBadge, verdictBadge } from "./common-view.ts";
+import { renderError, runLink, sessionLink, stateClass, statusBadge, verdictBadge } from "./common-view.ts";
 import { durationMs, formatDuration, formatTime, formatUsd, shortId, truncate } from "./format.ts";
 import { html, type SafeHtml } from "./html.ts";
 
@@ -10,7 +10,7 @@ export function shouldPoll(status: RunStatus): boolean {
 export function renderRunHeader(detail: RunDetailResponse, nowMs: number): SafeHtml {
 	const { run, runJson } = detail;
 	const model = runJson?.model;
-	return html`<header class="run-header">
+	return html`<header class="run-header ${stateClass(run.status)}">
 	<div class="crumbs">${run.parentRunId ? html`<a href="${runLink(run.parentRunId)}">← parent run ${shortId(run.parentRunId)}</a>` : html`<a href="/">← runs</a>`}</div>
 	<h1>${truncate(run.instruction.split("\n")[0] ?? "", 200)}</h1>
 	<div class="facts">
@@ -52,7 +52,7 @@ export function renderFeedbackForm(run: RunSummary, latest: Feedback | undefined
 export function renderChildren(children: RunSummary[], nowMs: number, readOnly: ReadOnlyInfo | null = null, latestByRun: Record<string, Feedback> = {}): SafeHtml {
 	if (children.length === 0) return html`<p class="muted">This run started no subagents.</p>`;
 	return html`<div class="children">${children.map(
-		(child) => html`<section class="child">
+		(child) => html`<section class="child ${stateClass(child.status)}">
 	<h3><a href="${runLink(child.id)}">${truncate(child.instruction.split("\n")[0] ?? "", 120)}</a></h3>
 	<div class="facts">${statusBadge(child.status)} ${verdictBadge(child.verdict)} <span class="mono">${shortId(child.id)}</span> <span>${formatDuration(durationMs(child.startedAt, child.endedAt, nowMs))}</span> <span class="${child.costUnknown ? "warn" : ""}">${formatUsd(child.costUsd, child.costUnknown)}</span>${child.modelFinal ? html` <span class="mono">${child.modelFinal}</span>` : ""}</div>
 	${renderFeedbackForm(child, latestByRun[child.id], readOnly)}
