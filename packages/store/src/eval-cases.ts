@@ -57,7 +57,7 @@ export function caseSplit(input: string): EvalSplit {
 }
 
 /** Root runs that can be eval cases of `target`: finished, not optimization runs, not a session turn after the first. */
-function targetRunFilter(target: OptimTarget): { sql: string; args: SQLInputValue[] } {
+export function targetRunFilter(target: OptimTarget): { sql: string; args: SQLInputValue[] } {
 	const base = "r.parent_run_id IS NULL AND r.optim_run_id IS NULL AND r.status != 'running' AND (r.session_id IS NULL OR r.turn_index = 1)";
 	if (target.kind === "skill") {
 		return {
