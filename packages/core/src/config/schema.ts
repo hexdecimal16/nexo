@@ -209,6 +209,20 @@ export const ConfigSchema = Type.Object(
 				patience: Type.Integer({ minimum: 1 }),
 				/** Lowest judge Cohen's κ that lets judge-only evidence promote a candidate. */
 				minJudgeKappa: Type.Number({ minimum: -1, maximum: 1 }),
+				/** Mining proposed eval cases from unreviewed runs (design §3). */
+				mine: Type.Object(
+					{
+						days: Type.Integer({ minimum: 1 }),
+						maxRuns: Type.Integer({ minimum: 10, maximum: 5000 }),
+						minCluster: Type.Integer({ minimum: 2 }),
+						maxNew: Type.Integer({ minimum: 1 }),
+						cosine: Type.Number({ exclusiveMinimum: 0, maximum: 1 }),
+						jaccard: Type.Number({ exclusiveMinimum: 0, maximum: 1 }),
+					},
+					{ additionalProperties: false },
+				),
+				/** `nexo optimize climb` (design §4). */
+				climb: Type.Object({ guards: Type.Integer({ minimum: 0, maximum: 10 }) }, { additionalProperties: false }),
 			},
 			{ additionalProperties: false },
 		),
@@ -262,5 +276,5 @@ export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 	redaction: { patterns: [] },
 	memory: { enabled: true, maxTokens: 1500, weights: { relevance: 1, importance: 0.5, recency: 0.3 }, tauDays: 14, topK: 20, minRelevance: 0 },
 	learning: { enabled: true, maxPlaybookItems: 50, perJobUsd: 0.15, staleMinutes: 10, drainAfterRunMs: 30_000 },
-	optimize: { minCases: 10, patience: 5, minJudgeKappa: 0.6 },
+	optimize: { minCases: 10, patience: 5, minJudgeKappa: 0.6, mine: { days: 30, maxRuns: 500, minCluster: 3, maxNew: 3, cosine: 0.8, jaccard: 0.5 }, climb: { guards: 2 } },
 };

@@ -29,6 +29,7 @@ import {
 	insertOptimCandidate,
 	insertOptimRun,
 	isPidAlive,
+	listActiveEvalCases,
 	listEvalCases,
 	listOptimCandidates,
 	liveJudgeKappa,
@@ -53,6 +54,7 @@ import { RunBudget } from "../cost/budget.ts";
 import { DEFAULT_PLANNER_PROMPT, DEFAULT_SYSTEM_PROMPT } from "../engine/prompts.ts";
 import { createEngineEnv, type EngineEnv } from "../engine/run.ts";
 import { judgeKey, judgeModels, loadJudgeRubric } from "../scoring/sources.ts";
+import { mineQuietly } from "./mine.ts";
 import { assertReflectionFits } from "./reflect.ts";
 import { createOptimAdapter, type DetailedEvaluation, type OptimContext, type OptimEvent } from "./adapter.ts";
 import { closeOptimizerRun, openOptimizerRun } from "./optimizer-run.ts";
@@ -89,7 +91,7 @@ function toEvalCase(c: EvalCaseRow): EvalCase {
 }
 
 /** The version the optimization starts from: what the next normal run would use. */
-function baseVersion(env: EngineEnv, target: OptimTarget, nowIso: string): ArtifactRow {
+export function baseVersion(env: EngineEnv, target: OptimTarget, nowIso: string): ArtifactRow {
 	const { db, redact, config, skills } = env.deps;
 	switch (target.kind) {
 		case "skill": {
@@ -109,7 +111,7 @@ function baseVersion(env: EngineEnv, target: OptimTarget, nowIso: string): Artif
 }
 
 /** Refuses targets nothing can score (D5). */
-function assertEvaluator(env: EngineEnv, target: OptimTarget): void {
+export function assertEvaluator(env: EngineEnv, target: OptimTarget): void {
 	const { config, skills } = env.deps;
 	if (judgeModels(config).length === 0 && (target.kind === "judge_rubric" || !config.scoring.enabled || (config.scoring.scorers.length === 0 && !(target.kind === "skill" && skills.skills.get(target.name)?.meta.scorers)))) {
 		throw new NexoError({
@@ -124,7 +126,7 @@ function assertEvaluator(env: EngineEnv, target: OptimTarget): void {
 }
 
 /** Throws BUDGET_EXCEEDED when the optimization budget is more than what is left of the daily or monthly budget (D10). */
-function assertBudget(env: EngineEnv, budgetUsd: number): void {
+export function assertBudget(env: EngineEnv, budgetUsd: number): void {
 	const { db, config } = env.deps;
 	const now = env.now();
 	checkAdmission(db, config.budgets, now);
@@ -148,7 +150,7 @@ function assertBudget(env: EngineEnv, budgetUsd: number): void {
 function loadCases(env: EngineEnv, target: OptimTarget, nowIso: string): { feedback: EvalCase[]; pareto: EvalCase[]; holdout: EvalCase[] } {
 	const { db, config } = env.deps;
 	syncRunEvalCases(db, target, nowIso);
-	let cases = listEvalCases(db, target.key);
+	let cases = listActiveEvalCases(db, target.key);
 	if (target.kind === "judge_rubric") {
 		cases = cases.filter((c) => {
 			const run = c.sourceRunId ? getRun(db, c.sourceRunId) : undefined;
@@ -160,6 +162,7 @@ function loadCases(env: EngineEnv, target: OptimTarget, nowIso: string): { feedb
 	const empty = (["feedback", "pareto", "holdout"] as const).find((s) => split[s].length === 0);
 	if (cases.length < config.optimize.minCases || empty) {
 		const runsToReview = runsNeedingReview(db, target).map((r) => r.runId);
+		const proposedCases = listEvalCases(db, target.key).filter((c) => c.status === "proposed").map((c) => c.id);
 		throw new NexoError({
 			code: "EVAL_SET_TOO_SMALL",
 			message:
@@ -168,8 +171,9 @@ function loadCases(env: EngineEnv, target: OptimTarget, nowIso: string): { feedb
 					: `Optimizing ${target.key} needs cases in every split; the ${empty} split is empty (${cases.length} cases)`,
 			hint:
 				(runsToReview.length > 0 ? `Review these runs (done / not done) so they become eval cases: ${runsToReview.join(", ")}. ` : "") +
+				(proposedCases.length > 0 ? `Accept proposed cases with \`nexo eval accept <id>\`: ${proposedCases.join(", ")}. ` : "") +
 				(target.kind === "judge_rubric" ? "Judge rubric cases come from reviewed runs that the judge scored." : `Or add cases with \`nexo eval add --target ${target.key} --input "<instruction>"\`.`),
-			context: { target: target.key, cases: cases.length, minCases: config.optimize.minCases, runsToReview },
+			context: { target: target.key, cases: cases.length, minCases: config.optimize.minCases, runsToReview, proposedCases },
 		});
 	}
 	return split;
@@ -198,6 +202,7 @@ export async function startOptimization(baseEnv: EngineEnv, options: OptimizeOpt
 	}
 	assertEvaluator(env, target);
 	assertBudget(env, budgetUsd);
+	await mineQuietly(env, target);
 	const cases = loadCases(env, target, nowIso());
 	const minibatch = Math.min(MINIBATCH_SIZE, cases.feedback.length);
 	const minRollouts = 2 * (cases.pareto.length + cases.holdout.length) + 2 * minibatch;
