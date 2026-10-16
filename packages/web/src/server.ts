@@ -8,6 +8,8 @@ import type { ReadOnlyInfo } from "../public/lib/api-types.ts";
 import {
 	type ApiContext,
 	costResponse,
+	evalCasesResponse,
+	reviewEvalCaseResponse,
 	feedbackResponse,
 	judgeCalibrationResponse,
 	learnJobsResponse,
@@ -86,6 +88,8 @@ const ROUTES = {
 	optimList: /^\/api\/optim$/,
 	optim: new RegExp(`^/api/optim/${RUN_ID}$`),
 	optimApprove: new RegExp(`^/api/optim/${RUN_ID}/approve$`),
+	evalCases: /^\/api\/eval-cases$/,
+	evalCaseReview: new RegExp(`^/api/eval-cases/${RUN_ID}/(accept|dismiss)$`),
 	meta: /^\/api\/meta$/,
 };
 
@@ -263,6 +267,15 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 			if (method !== "POST") throw methodNotAllowed(method, path, "POST");
 			assertWritable();
 			return sendJson(res, 200, approveOptimResponse(ctx, m[1] as string));
+		}
+		if (ROUTES.evalCases.test(path)) {
+			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
+			return sendJson(res, 200, evalCasesResponse(ctx, url.searchParams));
+		}
+		if ((m = ROUTES.evalCaseReview.exec(path))) {
+			if (method !== "POST") throw methodNotAllowed(method, path, "POST");
+			assertWritable();
+			return sendJson(res, 200, reviewEvalCaseResponse(ctx, m[1] as string, m[2] as "accept" | "dismiss"));
 		}
 		throw new NexoError({ code: "NOT_FOUND", message: `No API route ${path}`, context: { path } });
 	};

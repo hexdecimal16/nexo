@@ -130,3 +130,32 @@ describe("optimization API", () => {
 		expect(getActiveArtifact(db, "skill", "test-fix")?.version).toBe(1);
 	});
 });
+
+describe("eval-case routes", () => {
+	const proposed = (id: string, input: string) =>
+		db.prepare("INSERT INTO eval_cases (id, target, source_run_id, input, split, created_at, origin, status, mined_from_json) VALUES (?, 'skill:web-x', ?, ?, 'pareto', ?, 'mined', 'proposed', '[\"a\",\"b\",\"c\"]')").run(id, `SRC${id}`, input, NOW);
+
+	it("lists proposed cases without their golden or cluster ids", async () => {
+		proposed("01MINEDA", "Summarize <b>PRs</b>");
+		const res = await raw(server.port, "/api/eval-cases?status=proposed");
+		expect(res.status).toBe(200);
+		const body = res.json() as { cases: Record<string, unknown>[] };
+		const item = body.cases.find((c) => c.id === "01MINEDA");
+		expect(item).toEqual({ id: "01MINEDA", target: "skill:web-x", input: "Summarize <b>PRs</b>", origin: "mined", status: "proposed", clusterSize: 3, createdAt: NOW });
+	});
+
+	it("refuses an unknown status filter", async () => {
+		expect((await raw(server.port, "/api/eval-cases?status=bogus")).status).toBe(400);
+	});
+
+	it("accepts and dismisses, with 404 for unknown ids and 409 for repeat decisions", async () => {
+		proposed("01MINEDB", "b");
+		proposed("01MINEDC", "c");
+		expect((await post(server, "/api/eval-cases/01MINEDB/accept")).status).toBe(200);
+		expect((await post(server, "/api/eval-cases/01MINEDC/dismiss")).status).toBe(200);
+		expect((await post(server, "/api/eval-cases/01MINEDB/dismiss")).status).toBe(409);
+		expect((await post(server, "/api/eval-cases/NOPE/accept")).status).toBe(404);
+		expect((await raw(server.port, "/api/eval-cases/01MINEDB/accept")).status).toBe(405);
+		expect((await post(readOnly, "/api/eval-cases/01MINEDC/accept")).status).not.toBe(200);
+	});
+});

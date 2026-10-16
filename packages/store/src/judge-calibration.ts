@@ -260,3 +260,8 @@ export function listDisagreements(db: Db, options: { judgeKey?: string; limit?: 
 	}
 	return out.reverse().slice(0, options.limit ?? 50);
 }
+
+/** Cases in `status` across targets, newest first. */
+export function listEvalCasesByStatus(db: Db, status: EvalCaseStatus, limit: number): EvalCaseRow[] {
+	return db.prepare("SELECT * FROM eval_cases WHERE status = ? ORDER BY created_at DESC, id DESC LIMIT ?").all(status, limit).map(decodeCase);
+}
