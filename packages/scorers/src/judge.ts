@@ -324,6 +324,9 @@ export interface PairwiseVote {
 	/** Preference with A shown first, and with B shown first; null when that call failed. */
 	aFirst: PairwiseWinner | null;
 	bFirst: PairwiseWinner | null;
+	/** The rationale of each order's verdict; null when that call failed. */
+	aFirstRationale: string | null;
+	bFirstRationale: string | null;
 	/** The model's verdict: the shared preference when both orders agree, otherwise a tie. */
 	winner: PairwiseWinner;
 	error?: string;
@@ -355,7 +358,7 @@ export async function comparePairwise(caller: JudgeCaller, models: readonly Mode
 	let costUsd = 0;
 	let costUnknown = false;
 	let failures = 0;
-	const ask = async (model: ModelRef, first: string, second: string): Promise<"first" | "second" | "tie" | null> => {
+	const ask = async (model: ModelRef, first: string, second: string): Promise<{ preferred: PairwiseVerdict["preferred"]; rationale: string } | null> => {
 		try {
 			const r = await completeStructured<PairwiseVerdict>(
 				caller,
@@ -366,7 +369,7 @@ export async function comparePairwise(caller: JudgeCaller, models: readonly Mode
 			);
 			costUsd += r.costUsd;
 			costUnknown ||= r.costUnknown;
-			return r.value.preferred;
+			return { preferred: r.value.preferred, rationale: r.value.rationale };
 		} catch (error) {
 			if (signal.aborted) throw signal.reason ?? error;
 			const ctx = error instanceof NexoError ? error.context : undefined;
@@ -379,10 +382,10 @@ export async function comparePairwise(caller: JudgeCaller, models: readonly Mode
 	const votes = await Promise.all(
 		models.map(async (model): Promise<PairwiseVote> => {
 			const [ab, ba] = await Promise.all([ask(model, input.outputA, input.outputB), ask(model, input.outputB, input.outputA)]);
-			const aFirst: PairwiseWinner | null = ab === null ? null : ab === "first" ? "A" : ab === "second" ? "B" : "tie";
-			const bFirst: PairwiseWinner | null = ba === null ? null : ba === "first" ? "B" : ba === "second" ? "A" : "tie";
+			const aFirst: PairwiseWinner | null = ab === null ? null : ab.preferred === "first" ? "A" : ab.preferred === "second" ? "B" : "tie";
+			const bFirst: PairwiseWinner | null = ba === null ? null : ba.preferred === "first" ? "B" : ba.preferred === "second" ? "A" : "tie";
 			const winner: PairwiseWinner = aFirst !== null && aFirst === bFirst ? aFirst : "tie";
-			return { model: modelKeyOf(model), aFirst, bFirst, winner };
+			return { model: modelKeyOf(model), aFirst, bFirst, winner, aFirstRationale: ab?.rationale ?? null, bFirstRationale: ba?.rationale ?? null };
 		}),
 	);
 	if (failures === models.length * 2) {

@@ -288,6 +288,18 @@ describe("pairwise comparison", () => {
 		expect((await comparePairwise(panel, [GEMINI, GPT], { instruction: "i", outputA: "a", outputB: "b", rubric: "r" }, signal)).winner).toBe("B");
 	});
 
+	it("keeps each order's rationale, and null for a failed call", async () => {
+		const caller: JudgeCaller = {
+			complete: async (_m, request) => {
+				const aShownFirst = request.user.includes("<<<nexo:data:first_answer>>>\nanswer A\n");
+				const text = aShownFirst ? JSON.stringify({ preferred: "first", rationale: "A is complete." }) : "not json";
+				return { text, costUsd: 0, costUnknown: false };
+			},
+		};
+		const r = await comparePairwise(caller, [GEMINI], { instruction: "i", outputA: "answer A", outputB: "answer B", rubric: "r" }, signal);
+		expect(r.votes[0]).toMatchObject({ aFirst: "A", aFirstRationale: "A is complete.", bFirst: null, bFirstRationale: null, winner: "tie" });
+	});
+
 	it("fails with SCORER_FAILED only when every call fails", async () => {
 		const down = scripted({ "google/gemini-x": [new Error("down"), new Error("down")] });
 		await expect(comparePairwise(down, [GEMINI], { instruction: "i", outputA: "a", outputB: "b", rubric: "r" }, signal)).rejects.toMatchObject({ code: "SCORER_FAILED" });
