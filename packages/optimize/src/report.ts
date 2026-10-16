@@ -1,4 +1,4 @@
-import type { CaseScore, OptimCandidateRow, OptimStopReason } from "@nexo/store";
+import type { CaseScore, ClimbOutcome, OptimCandidateRow, OptimStopReason } from "@nexo/store";
 import { meanOf } from "./pareto.ts";
 
 export interface DiffLine {
@@ -108,7 +108,26 @@ export interface OptimReport {
 	merges: number;
 	/** Why merging did nothing, when `--merge` was given and no merge happened. */
 	mergeNote: string | null;
+	climb?: ClimbReport;
 	createdAt: string;
+}
+
+/** One pairwise comparison of a climb, as stored in its report. */
+export interface PairwiseRecord {
+	/** `golden`, `verify` or `guard <case id>`. A is the first output named by the label: baseline vs golden, child vs baseline. */
+	label: string;
+	winner: "A" | "B" | "tie";
+	votes: { model: string; aFirst: string | null; bFirst: string | null; winner: string }[];
+}
+
+/** What a climb did (design §4.4). */
+export interface ClimbReport {
+	caseId: string;
+	guardIds: string[];
+	outcome: ClimbOutcome;
+	/** The shared weakness the edit addressed; null when the climb stopped before the consistency gate passed. */
+	critique: string | null;
+	comparisons: PairwiseRecord[];
 }
 
 export interface ReportInput {

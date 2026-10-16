@@ -154,7 +154,7 @@ async function evaluateAgent(ctx: OptimContext, batch: readonly EvalCase[], cand
 }
 
 /** A JudgeCaller whose calls are `judge_call` spans on the optimizer's run, charged to the optimization. */
-function optimJudgeCaller(ctx: OptimContext, refused: { hit: boolean }): JudgeCaller {
+export function optimJudgeCaller(ctx: OptimContext, refused: { hit: boolean }): JudgeCaller {
 	return {
 		complete: async (ref, request, signal) => {
 			const model = ctx.env.registry.get(ref.provider, ref.id);
