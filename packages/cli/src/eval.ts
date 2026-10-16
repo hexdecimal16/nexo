@@ -3,6 +3,7 @@ import { calibrateJudge, loadConfig } from "@nexo/core";
 import { ensureNexoDirs, openDb, resolveNexoPaths } from "@nexo/store";
 import { escapeControl } from "@nexo/tui";
 import { type CliIO, type CliOptions, usageError } from "./common.ts";
+import { evalGoldenCommand, evalMineCommand, evalReviewCommand } from "./eval-cases.ts";
 import { evalAddCommand, evalListCommand } from "./optimize.ts";
 
 function pct(value: number | null): string {
@@ -11,12 +12,16 @@ function pct(value: number | null): string {
 
 /**
  * `nexo eval judge [--judge <provider/id[+provider/id…]>]`: judge-vs-human agreement, stored for the UI.
- * `nexo eval add …` and `nexo eval list …` manage the optimizer's eval cases.
+ * `nexo eval add …` and `nexo eval list …` manage the optimizer's eval cases; `nexo eval mine …` proposes cases from
+ * unreviewed runs, `nexo eval accept|dismiss <id>` decides a proposed case and `nexo eval golden revert <id>` undoes a climbed golden.
  */
-export function evalCommand(args: string[], io: CliIO, options: CliOptions): number {
+export async function evalCommand(args: string[], io: CliIO, options: CliOptions): Promise<number> {
 	const [sub, ...rest] = args;
 	if (sub === "add") return evalAddCommand(rest, io, options);
 	if (sub === "list") return evalListCommand(rest, io, options);
+	if (sub === "mine") return evalMineCommand(rest, io, options);
+	if (sub === "accept" || sub === "dismiss") return evalReviewCommand(sub, rest, io, options);
+	if (sub === "golden") return evalGoldenCommand(rest, io, options);
 	if (sub !== "judge") throw usageError(sub === undefined ? "nexo eval needs a subcommand" : `Unknown eval subcommand "${sub}"`);
 	const { values } = parseArgs({ args: rest, options: { judge: { type: "string" } } });
 	if (values.judge !== undefined && !values.judge.split("+").every((part) => /^[^/+\s]+\/\S+$/.test(part))) {

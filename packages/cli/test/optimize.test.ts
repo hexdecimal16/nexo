@@ -71,7 +71,7 @@ describe("nexo eval add / list", () => {
 		const l = io();
 		expect(await runCli(["eval", "list", "--target", "skill:ci-fix"], l, h)).toBe(0);
 		expect(l.out()).toContain("1 eval case for skill:ci-fix");
-		expect(l.out()).toContain('manual Fix CI build 1 — "Run the tests"');
+		expect(l.out()).toContain('manual active    Fix CI build 1 — "Run the tests"');
 		const bad = io();
 		expect(await runCli(["eval", "add", "--target", "judge_rubric", "--input", "x"], bad, h)).toBe(1);
 		expect(bad.err()).toContain("judge_rubric cases come from reviewed runs");

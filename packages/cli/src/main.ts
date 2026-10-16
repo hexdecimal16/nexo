@@ -217,7 +217,7 @@ export async function runCli(argv: string[], io: CliIO, options: CliOptions = {}
 			case "reindex":
 				return reindexCommand(io, options);
 			case "eval":
-				return evalCommand(rest, io, options);
+				return await evalCommand(rest, io, options);
 			case "optimize":
 				return await optimizeCommand(rest, io, options);
 			case "learn":
