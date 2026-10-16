@@ -5,6 +5,7 @@ export * from "./db.ts";
 export * from "./errors.ts";
 export * from "./eval-cases.ts";
 export * from "./feedback.ts";
+export * from "./goldens.ts";
 export * from "./ids.ts";
 export * from "./judge-calibration.ts";
 export * from "./learn-jobs.ts";
