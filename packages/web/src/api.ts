@@ -4,6 +4,9 @@ import { extname, join, relative, sep } from "node:path";
 import {
 	agreementStats,
 	approveOptimRun,
+	type EvalCaseRow,
+	listEvalCasesByStatus,
+	reviewProposedCase,
 	checkPromotion,
 	getArtifact,
 	getOptimRun,
@@ -62,6 +65,9 @@ import { resolveConfined } from "@nexo/tools";
 import type {
 	CostResponse,
 	DirListing,
+	EvalCaseItem,
+	EvalCaseResponse,
+	EvalCasesResponse,
 	Escalation,
 	Feedback,
 	FeedbackResponse,
@@ -604,4 +610,22 @@ export function learnJobsResponse(ctx: ApiContext, params: URLSearchParams): Lea
 		counts: countLearnJobs(ctx.db),
 		jobs: jobs.map((j) => ({ id: j.id, runId: j.runId, kind: j.kind, trigger: j.trigger, status: j.status, attempts: j.attempts, lastError: j.lastError, createdAt: j.createdAt, updatedAt: j.updatedAt })),
 	};
+}
+
+function evalCaseItem(c: EvalCaseRow): EvalCaseItem {
+	return { id: c.id, target: c.target, input: c.input, origin: c.origin, status: c.status, clusterSize: c.minedFrom?.length ?? 0, createdAt: c.createdAt };
+}
+
+/** `GET /api/eval-cases?status=proposed|active|dismissed`: cases in that status, newest first, at most 100. */
+export function evalCasesResponse(ctx: ApiContext, params: URLSearchParams): EvalCasesResponse {
+	const status = params.get("status") ?? "proposed";
+	if (status !== "proposed" && status !== "active" && status !== "dismissed") {
+		throw new NexoError({ code: "INVALID_REQUEST", message: `Unknown eval case status "${status}"`, hint: "Use proposed, active or dismissed", context: { status } });
+	}
+	return { cases: listEvalCasesByStatus(ctx.db, status, 100).map(evalCaseItem) };
+}
+
+/** `POST /api/eval-cases/{id}/accept|dismiss`: a user decision on a proposed case; 404 unknown, 409 not proposed. */
+export function reviewEvalCaseResponse(ctx: ApiContext, id: string, decision: "accept" | "dismiss"): EvalCaseResponse {
+	return { case: evalCaseItem(reviewProposedCase(ctx.db, id, decision, { redact: ctx.redact, nowIso: ctx.now().toISOString() })) };
 }

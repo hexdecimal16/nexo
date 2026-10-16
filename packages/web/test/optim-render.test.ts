@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OptimCandidate, OptimDetailResponse, OptimReport, OptimRunItem } from "../public/lib/api-types.ts";
-import { renderApproval, renderDiff, renderLineage, renderOptimDetail, renderOptimList } from "../public/lib/optim-view.ts";
+import { renderApproval, renderDiff, renderLineage, renderOptimDetail, renderOptimList, renderProposedCases } from "../public/lib/optim-view.ts";
 
 const XSS = `<img src=x onerror="alert(1)"><script>alert('x')</script>\``;
 
@@ -37,6 +37,9 @@ function run(overrides: Partial<OptimRunItem> = {}): OptimRunItem {
 		error: null,
 		createdAt: "2026-10-12T00:00:00.000Z",
 		endedAt: "2026-10-12T00:10:00.000Z",
+		mode: "gepa",
+		caseId: null,
+		climbOutcome: null,
 		baseVersion: 1,
 		bestVersion: 3,
 		...overrides,
@@ -132,4 +135,14 @@ describe("optimization view", () => {
 		expect(renderApproval(detail({ run: run({ promotion: "approved", promotedAt: "2026-10-12T01:00:00.000Z" }) }), false).value).toContain("nexo optimize rollback 01OPTIM");
 		expect(renderOptimDetail(detail({ report: null, run: run({ status: "running" }) }), false).value).toContain("still running");
 	});
+});
+
+it("renders proposed cases escaped, with buttons only when writable", () => {
+	const cases = [{ id: "01M", target: "skill:x", input: "<script>alert(1)</script>", origin: "mined" as const, status: "proposed" as const, clusterSize: 4, createdAt: "2026-10-16T00:00:00.000Z" }];
+	const writable = renderProposedCases(cases, false).value;
+	expect(writable).toContain("&lt;script&gt;");
+	expect(writable).toContain('data-accept="01M"');
+	expect(writable).toContain('data-dismiss="01M"');
+	expect(renderProposedCases(cases, true).value).not.toContain("data-accept");
+	expect(renderProposedCases([], false).value).toContain("No proposed eval cases");
 });

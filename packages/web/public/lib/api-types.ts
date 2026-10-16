@@ -439,6 +439,9 @@ export interface OptimRun {
 	error: ApiErrorBody | null;
 	createdAt: string;
 	endedAt: string | null;
+	mode: "gepa" | "climb";
+	caseId: string | null;
+	climbOutcome: "improved" | "golden_raised" | "no_signal" | "not_improved" | "guard_regressed" | null;
 }
 
 /** An optimization with the version numbers of its base and best candidate. */
@@ -511,6 +514,7 @@ export interface OptimReport {
 	iterations: number;
 	merges: number;
 	mergeNote: string | null;
+	climb?: { caseId: string; guardIds: string[]; outcome: string; critique: string | null; comparisons: { label: string; winner: "A" | "B" | "tie" }[] };
 	createdAt: string;
 }
 
@@ -533,4 +537,23 @@ export interface OptimApproveResponse {
 	promoted: PlaybookVersion;
 	replaced: PlaybookVersion | null;
 	run: OptimRunItem;
+}
+
+export interface EvalCaseItem {
+	id: string;
+	target: string;
+	input: string;
+	origin: "run" | "manual" | "mined";
+	status: "proposed" | "active" | "dismissed";
+	/** Runs in the mined cluster; 0 for cases that were not mined. */
+	clusterSize: number;
+	createdAt: string;
+}
+
+export interface EvalCasesResponse {
+	cases: EvalCaseItem[];
+}
+
+export interface EvalCaseResponse {
+	case: EvalCaseItem;
 }

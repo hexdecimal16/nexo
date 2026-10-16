@@ -1,4 +1,4 @@
-import type { CaseScore, DiffLine, OptimCandidate, OptimDetailResponse, OptimReport, OptimRunItem, PromotionState } from "./api-types.ts";
+import type { CaseScore, DiffLine, EvalCaseItem, OptimCandidate, OptimDetailResponse, OptimReport, OptimRunItem, PromotionState } from "./api-types.ts";
 import { runLink, statusBadge } from "./common-view.ts";
 import { formatTime, formatUsd, shortId, truncate } from "./format.ts";
 import { html, type SafeHtml } from "./html.ts";
@@ -19,7 +19,7 @@ export function renderOptimList(runs: readonly OptimRunItem[]): SafeHtml {
 	<tbody>${runs.map(
 		(r) => html`<tr>
 		<td class="mono"><button type="button" class="link" data-optim="${r.id}">${formatTime(r.createdAt)}</button></td>
-		<td class="mono">${r.target}</td><td>${statusBadge(r.status)}</td><td>${r.stopReason ?? "–"}</td>
+		<td class="mono">${r.mode === "climb" ? "climb " : ""}${r.target}</td><td>${statusBadge(r.status)}${r.climbOutcome ? html` <span class="muted">${r.climbOutcome.replace("_", " ")}</span>` : ""}</td><td>${r.stopReason ?? "–"}</td>
 		<td class="num">${formatUsd(r.spentUsd)} of $${r.budgetUsd.toFixed(2)}</td><td class="num">${r.rollouts}</td>
 		<td>${r.holdoutBefore === null ? "–" : `${quality(r.holdoutBefore)} → ${quality(r.holdoutAfter)}`}</td>
 		<td>${version(r.baseVersion)} → ${version(r.bestVersion)}</td><td>${r.promotion ? r.promotion.replace("_", " ") : "–"}</td>
@@ -93,12 +93,30 @@ export function renderApproval(data: OptimDetailResponse, readOnly: boolean): Sa
 ${review.length > 0 ? html`<p>Review these runs to calibrate the judge:</p><ul>${review.map((id) => html`<li><a href="${runLink(id)}">${id}</a></li>`)}</ul>` : ""}`;
 }
 
+function renderClimb(climb: NonNullable<OptimReport["climb"]>): SafeHtml {
+	return html`<h3>Climb</h3>
+<p>Case <span class="mono">${climb.caseId}</span> · ${climb.guardIds.length} guard${climb.guardIds.length === 1 ? "" : "s"} · outcome <strong>${climb.outcome.replace("_", " ")}</strong>.</p>
+${climb.critique ? html`<p class="muted">${climb.critique}</p>` : ""}
+${climb.comparisons.length === 0 ? "" : html`<table class="runs"><thead><tr><th>Comparison</th><th>Winner</th></tr></thead><tbody>${climb.comparisons.map((c) => html`<tr><td>${c.label}</td><td>${c.winner}</td></tr>`)}</tbody></table>`}`;
+}
+
+/** The proposed (mined) eval cases with Accept / Dismiss buttons. */
+export function renderProposedCases(cases: readonly EvalCaseItem[], readOnly: boolean): SafeHtml {
+	if (cases.length === 0) return html`<p class="empty">No proposed eval cases. Mine some with <code>nexo eval mine --target &lt;target&gt;</code>.</p>`;
+	return html`<table><thead><tr><th>Target</th><th>Instruction</th><th>Runs</th><th>Proposed</th><th></th></tr></thead><tbody>${cases.map(
+		(c) => html`<tr><td>${c.target}</td><td>${truncate(c.input.split("\n")[0] ?? "", 100)}</td><td>${String(c.clusterSize)}</td><td>${formatTime(c.createdAt)}</td><td>${
+			readOnly ? "" : html`<button type="button" data-accept="${c.id}">Accept</button> <button type="button" data-dismiss="${c.id}">Dismiss</button>`
+		}</td></tr>`,
+	)}</tbody></table>`;
+}
+
 /** One optimization: header, holdout report, approval, diff and lineage. */
 export function renderOptimDetail(data: OptimDetailResponse, readOnly: boolean): SafeHtml {
 	const r = data.run;
 	return html`<h2>${r.target} ${statusBadge(r.status)}</h2>
 <p class="muted mono">${r.id} · ${version(r.baseVersion)} → ${version(r.bestVersion)} · ${formatUsd(r.spentUsd)} of $${r.budgetUsd.toFixed(2)} · ${r.rollouts} rollouts · seed ${r.seed}</p>
 ${r.error ? html`<div class="error" role="alert"><strong>${r.error.code}</strong> ${r.error.message}</div>` : ""}
+${data.report?.climb ? renderClimb(data.report.climb) : ""}
 ${data.report ? renderHoldout(data.report) : html`<p class="muted">No report: ${r.status === "running" ? "the optimization is still running" : "the optimization did not finish"}.</p>`}
 ${renderApproval(data, readOnly)}
 ${data.report ? html`<h3>Text diff</h3>${renderDiff(data.report.diff)}` : ""}
