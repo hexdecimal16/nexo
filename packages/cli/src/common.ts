@@ -55,6 +55,10 @@ export const USAGE = `Usage:
   nexo eval judge [--judge <provider/id[+provider/id…]>]   judge-vs-human agreement and Cohen's κ
   nexo eval add --target <target> --input <text> [--skill <name>] [--expected <text>] [--feedback <text>]
   nexo eval list --target <target>
+  nexo eval mine --target <target> [--days <n>]   propose eval cases from unreviewed runs
+  nexo eval accept <case-id> [--expected <text>]
+  nexo eval dismiss <case-id>
+  nexo eval golden revert <case-id>
   nexo optimize --target skill:<name>|system_prompt|planner_prompt|judge_rubric [--budget-usd <n>] [--max-rollouts <n>] [--merge] [--seed <n>]
   nexo optimize list
   nexo optimize show <id> [--diff]

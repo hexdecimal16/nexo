@@ -219,7 +219,7 @@ export function evalListCommand(args: string[], io: CliIO, options: CliOptions):
 		const cases = listEvalCases(store.db, target.key);
 		io.stdout.write(`${cases.length} eval case${cases.length === 1 ? "" : "s"} for ${target.key}\n`);
 		for (const c of cases) {
-			io.stdout.write(`  ${c.id} ${c.split.padEnd(8)} ${c.origin.padEnd(6)} ${escapeControl(c.input.replace(/\s+/g, " ").slice(0, 80))}${c.referenceFeedback ? ` — "${escapeControl(c.referenceFeedback.slice(0, 60))}"` : ""}\n`);
+			io.stdout.write(`  ${c.id} ${c.split.padEnd(8)} ${c.origin.padEnd(6)} ${c.status.padEnd(9)} ${escapeControl(c.input.replace(/\s+/g, " ").slice(0, 80))}${c.referenceFeedback ? ` — "${escapeControl(c.referenceFeedback.slice(0, 60))}"` : ""}\n`);
 		}
 		return 0;
 	} finally {
