@@ -1,3 +1,4 @@
+import { curateWikiKnowledge } from "./wiki.ts";
 import { existsSync } from "node:fs";
 import {
 	applyCuratorDelta,
@@ -205,6 +206,12 @@ export async function runLearnJob(env: EngineEnv, job: LearnJobRow, options: { w
 			throw error;
 		}
 		recorder.finish(writeSpan, { status: "ok", attrs: { result: curation } });
+
+		try {
+			await curateWikiKnowledge(deps, run, output, spans);
+		} catch (err) {
+			logger.warn("wiki curation pass failed; continuing without it", { run_id: run.id, error: err });
+		}
 		return { lessons: reflection.lessons.length, curation, costUsd, costUnknown };
 	} catch (error) {
 		recorder.finish(learnSpan, { status: "error", costUsd: 0, attrs: { error: redact(toErrorPayload(error)), totalCostUsd: costUsd } });
