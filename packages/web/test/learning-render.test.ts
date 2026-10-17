@@ -47,11 +47,12 @@ function item(overrides: Partial<PlaybookItem> = {}): PlaybookItem {
 
 describe("learning views", () => {
 	it("builds the memories query from the filter form", () => {
-		expect(memoriesQuery("", "", false)).toBe("/api/memories?limit=50");
-		expect(memoriesQuery(" skill:ci ", "lesson", true)).toBe("/api/memories?scope=skill%3Aci&type=lesson&all=1&limit=50");
-		expect(memoriesQuery("", "", false, "c&d")).toBe("/api/memories?limit=50&cursor=c%26d");
-		expect(jobsQuery(null)).toBe("/api/learn/jobs?limit=20");
-		expect(jobsQuery("x y")).toBe("/api/learn/jobs?limit=20&cursor=x+y");
+		const page = { offset: 0, limit: 25 };
+		expect(memoriesQuery("", "", false, page)).toBe("/api/memories?limit=25");
+		expect(memoriesQuery(" skill:ci ", "lesson", true, page)).toBe("/api/memories?scope=skill%3Aci&type=lesson&all=1&limit=25");
+		expect(memoriesQuery("", "", false, { offset: 25, limit: 25 })).toBe("/api/memories?limit=25&offset=25");
+		expect(jobsQuery(page)).toBe("/api/learn/jobs?limit=25");
+		expect(jobsQuery({ offset: 50, limit: 25 })).toBe("/api/learn/jobs?limit=25&offset=50");
 	});
 
 	it("renders memories inert, with retire only for live memories and never read-only", () => {
@@ -88,6 +89,7 @@ describe("learning views", () => {
 		const data: LearnJobsResponse = {
 			counts: { pending: 1, running: 0, succeeded: 2, failed: 1 },
 			nextCursor: null,
+			total: 4,
 			jobs: [{ id: "j", runId: "01RUN", kind: "reflect", trigger: "run_end", status: "failed", attempts: 3, lastError: { code: "SCORER_FAILED", message: XSS, retryable: false }, createdAt: "2026-10-12T00:00:00.000Z", updatedAt: "2026-10-12T00:00:00.000Z" }],
 		};
 		const markup = renderJobs(data).value;
