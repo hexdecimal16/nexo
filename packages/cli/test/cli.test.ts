@@ -209,7 +209,7 @@ describe("nexo ui", () => {
 		expect(ui.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/\?token=[\w-]{32}$/);
 		expect(t.err()).toContain("config is missing or invalid; the UI is read-only");
 		const res = await fetch(new URL("/api/runs", ui.url));
-		expect(await res.json()).toEqual({ runs: [], nextCursor: null });
+		expect(await res.json()).toEqual({ runs: [], nextCursor: null, total: 0 });
 		const meta = (await (await fetch(new URL("/api/meta", ui.url))).json()) as { readOnly: { message: string } | null };
 		expect(meta.readOnly?.message).toBe("the nexo config is missing or invalid");
 		const refused = await ui.postVerdict("01UNKNOWN0000000000000000");

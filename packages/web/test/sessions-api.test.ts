@@ -88,3 +88,24 @@ describe("GET /api/sessions pagination", () => {
 		expect(bad.json().error.code).toBe("INVALID_REQUEST");
 	});
 });
+
+describe("offset paging with totals", () => {
+	it("pages sessions by offset and reports the total; a bad offset is 400", async () => {
+		const page = (await raw(server.port, "/api/sessions?limit=1&offset=1")).json() as SessionListResponse;
+		expect(page.sessions.map((s) => s.id)).toEqual(["older"]);
+		expect(page.total).toBe(2);
+		expect(page.nextCursor).toBeNull();
+		for (const offset of ["-1", "x", "1.5"]) expect((await raw(server.port, `/api/sessions?offset=${offset}`)).status, offset).toBe(400);
+	});
+
+	it("pages runs by offset and reports the total of the filtered list", async () => {
+		const all = (await raw(server.port, "/api/runs")).json() as RunListResponse;
+		expect(all.total).toBe(all.runs.length);
+		const page = (await raw(server.port, "/api/runs?limit=1&offset=1")).json() as RunListResponse;
+		expect(page.runs.map((r) => r.id)).toEqual([all.runs[1]?.id]);
+		expect(page.total).toBe(all.total);
+		const turns = (await raw(server.port, "/api/runs?session=newer&limit=1")).json() as RunListResponse;
+		expect(turns.total).toBe(2);
+		expect((await raw(server.port, "/api/runs?offset=-1")).status).toBe(400);
+	});
+});

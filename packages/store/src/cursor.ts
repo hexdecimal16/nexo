@@ -22,6 +22,13 @@ export function pageOf<T>(rows: T[], limit: number, keyOf: (row: T) => { key: st
 	return { items, nextCursor: rows.length > limit && last ? encodeCursor(keyOf(last).key, keyOf(last).id) : null };
 }
 
+/** `offset` (absent means 0) as an integer from 0 up, or INVALID_REQUEST. */
+export function checkOffset(offset: number | undefined): number {
+	const value = offset ?? 0;
+	if (!Number.isInteger(value) || value < 0) throw invalidRequest("offset must be an integer from 0 up", { offset: value });
+	return value;
+}
+
 /** `limit` as an integer from 1 to `max`, or INVALID_REQUEST. */
 export function checkLimit(limit: number, max: number): number {
 	if (!Number.isInteger(limit) || limit < 1 || limit > max) throw invalidRequest(`limit must be an integer from 1 to ${max}`, { limit });
