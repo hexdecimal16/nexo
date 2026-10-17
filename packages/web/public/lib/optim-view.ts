@@ -2,6 +2,7 @@ import type { CaseScore, DiffLine, EvalCaseItem, OptimCandidate, OptimDetailResp
 import { runLink, statusBadge } from "./common-view.ts";
 import { formatTime, formatUsd, shortId, truncate } from "./format.ts";
 import { html, type SafeHtml } from "./html.ts";
+import { type Page, pageParams } from "./pager.ts";
 
 function quality(value: number | null | undefined): string {
 	return value === null || value === undefined ? "–" : value.toFixed(3);
@@ -11,13 +12,9 @@ function version(v: number | null): string {
 	return v === null ? "–" : `v${v}`;
 }
 
-export const OPTIM_PAGE_SIZE = 50;
-
-/** One page of `/api/optim`, newest first; `cursor` asks for the page after a previous one. */
-export function optimQuery(cursor: string | null, limit: number = OPTIM_PAGE_SIZE): string {
-	const params = new URLSearchParams({ limit: String(limit) });
-	if (cursor) params.set("cursor", cursor);
-	return `/api/optim?${params.toString()}`;
+/** One page of `/api/optim`, newest first. */
+export function optimQuery(page: Page): string {
+	return `/api/optim?${pageParams(page).toString()}`;
 }
 
 /** The optimizations table; each row opens its detail (`data-optim`). */

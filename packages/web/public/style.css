@@ -73,8 +73,15 @@ button.danger { color: var(--bad); }
 button.danger:hover { background: var(--hover); }
 .link, button.link { border: 0; padding: 0; background: none; color: inherit; text-decoration: underline; text-decoration-color: var(--pen); text-underline-offset: 3px; }
 .link:hover, button.link:hover { background: none; }
-.load-more { display: block; margin: 16px 0 0; }
-.load-more[hidden] { display: none; }
+/* Page controls under a table: range, Prev, page numbers, Next, rows per page */
+.pager { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; margin: 12px 0 0; font: 12.5px/20px var(--mono); color: var(--muted); }
+.pager-range { margin-right: 8px; color: var(--fg); }
+.pager button { min-width: 28px; padding: 2px 8px; font: inherit; color: var(--fg); }
+.pager button[aria-current='page'] { background: var(--fg); color: var(--bg); border-color: var(--fg); font-weight: 600; }
+.pager button:disabled { color: var(--muted); cursor: default; background: none; }
+.pager-gap { padding: 0 2px; }
+.pager label { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.pager select { height: 26px; font: inherit; }
 .tabs { display: inline-flex; gap: 16px; margin-bottom: 12px; }
 .tabs button { border: 0; padding: 2px 0; color: var(--muted); }
 .tabs button:hover { background: none; color: var(--fg); }

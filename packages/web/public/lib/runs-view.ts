@@ -2,6 +2,7 @@ import type { RunStatus, RunSummary } from "./api-types.ts";
 import { runLink, sessionLink, stateClass, statusBadge, verdictBadge } from "./common-view.ts";
 import { durationMs, formatDuration, formatTime, formatUsd, truncate } from "./format.ts";
 import { html, type SafeHtml } from "./html.ts";
+import { type Page, pageParams } from "./pager.ts";
 import { renderScoreCell } from "./score-view.ts";
 
 export type RunsTab = "all" | "review";
@@ -16,8 +17,6 @@ export interface RunFilters {
 	/** "true" (scored runs), "false" (finished runs without scores) or "" (all). */
 	scored: string;
 }
-
-export const PAGE_SIZE = 50;
 
 /** Filters from the page address: `?session=` picks a session's turns and `?tab=review` the review queue. */
 export function readRunFilters(search: string): RunFilters {
@@ -38,7 +37,7 @@ export function runsPageSearch(filters: RunFilters): string {
  * API path for one page of the runs list. Without a session filter the list holds one-shot runs only; chat turns are
  * listed per session. The review tab asks for finished runs without feedback, chat turns included.
  */
-export function runsQuery(filters: RunFilters, cursor: string | null, limit: number = PAGE_SIZE): string {
+export function runsQuery(filters: RunFilters, page: Page): string {
 	const params = new URLSearchParams();
 	if (filters.session) params.set("session", filters.session);
 	else if (filters.tab !== "review") params.set("oneShot", "true");
@@ -47,9 +46,7 @@ export function runsQuery(filters: RunFilters, cursor: string | null, limit: num
 	if (filters.skill.trim()) params.set("skill", filters.skill.trim());
 	if (filters.since) params.set("since", filters.since);
 	if (filters.scored === "true" || filters.scored === "false") params.set("scored", filters.scored);
-	params.set("limit", String(limit));
-	if (cursor) params.set("cursor", cursor);
-	return `/api/runs?${params.toString()}`;
+	return `/api/runs?${pageParams(page, params).toString()}`;
 }
 
 export function renderRunRows(runs: RunSummary[], nowMs: number): SafeHtml {

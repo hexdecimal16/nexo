@@ -2,6 +2,7 @@ import type { SessionListItem } from "./api-types.ts";
 import { runLink, sessionLink, statusBadge } from "./common-view.ts";
 import { formatTime, formatUsd, truncate } from "./format.ts";
 import { html, type SafeHtml } from "./html.ts";
+import { type Page, pageParams } from "./pager.ts";
 
 /** One table row per session; the title opens the session's turns, and unreviewed turns are highlighted. */
 export function renderSessionRows(sessions: readonly SessionListItem[]): SafeHtml {
@@ -21,11 +22,7 @@ export function renderSessionRows(sessions: readonly SessionListItem[]): SafeHtm
 	)}`;
 }
 
-export const SESSIONS_PAGE_SIZE = 50;
-
-/** API path for one page of sessions; `cursor` (from the previous page) asks for the next one. */
-export function sessionsQuery(cursor: string | null, limit: number = SESSIONS_PAGE_SIZE): string {
-	const params = new URLSearchParams({ limit: String(limit) });
-	if (cursor) params.set("cursor", cursor);
-	return `/api/sessions?${params.toString()}`;
+/** API path for one page of sessions. */
+export function sessionsQuery(page: Page): string {
+	return `/api/sessions?${pageParams(page).toString()}`;
 }

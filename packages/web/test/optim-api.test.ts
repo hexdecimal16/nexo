@@ -178,3 +178,14 @@ describe("optimization list pagination", () => {
 		expect((await raw(server.port, "/api/optim?cursor=nope")).status).toBe(400);
 	});
 });
+
+describe("optimization offset paging with totals", () => {
+	it("pages optimizations by offset and reports the total", async () => {
+		const all = (await raw(server.port, "/api/optim?limit=100")).json() as OptimListResponse;
+		expect(all.total).toBe(all.runs.length);
+		const page = (await raw(server.port, "/api/optim?limit=1&offset=1")).json() as OptimListResponse;
+		expect(page.runs.map((r) => r.id)).toEqual([all.runs[1]?.id]);
+		expect(page.total).toBe(all.total);
+		expect((await raw(server.port, "/api/optim?offset=x")).status).toBe(400);
+	});
+});

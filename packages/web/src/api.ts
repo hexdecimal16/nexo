@@ -169,14 +169,16 @@ export function listRunsResponse(ctx: ApiContext, params: URLSearchParams): RunL
 	if (limit !== undefined) query.limit = /^\d+$/.test(limit) ? Number(limit) : Number.NaN;
 	const cursor = optional(params, "cursor");
 	if (cursor !== undefined) query.cursor = cursor;
+	const offset = optional(params, "offset");
+	if (offset !== undefined) query.offset = /^\d+$/.test(offset) ? Number(offset) : Number.NaN;
 	return queryRuns(ctx.db, query);
 }
 
-/** `GET /api/sessions?limit=&cursor=`: one page of chat sessions, most recently updated first, with their turn aggregates. */
+/** `GET /api/sessions?limit=&offset=&cursor=`: one page of chat sessions, most recently updated first, with their turn aggregates. */
 export function listSessionsResponse(ctx: ApiContext, params: URLSearchParams): SessionListResponse {
 	const limit = intParam(params, "limit", 50);
 	if (limit < 1 || limit > MAX_RUN_PAGE) throw invalidRequest(`limit must be an integer from 1 to ${MAX_RUN_PAGE}`, { limit });
-	return querySessionSummaries(ctx.db, { limit, cursor: optional(params, "cursor") });
+	return querySessionSummaries(ctx.db, { limit, cursor: optional(params, "cursor"), offset: intParam(params, "offset", 0) });
 }
 
 export function runDetailResponse(ctx: ApiContext, id: string): RunDetailResponse {
@@ -492,7 +494,7 @@ function intParam(params: URLSearchParams, name: string, fallback: number): numb
 	return value;
 }
 
-/** `GET /api/memories?scope=&type=&all=1&limit=&cursor=`: one page of live memories (all with `all=1`), newest first. */
+/** `GET /api/memories?scope=&type=&all=1&limit=&offset=&cursor=`: one page of live memories (all with `all=1`), newest first. */
 export function memoriesResponse(ctx: ApiContext, params: URLSearchParams): MemoryListResponse {
 	return queryMemories(ctx.db, {
 		scope: optional(params, "scope"),
@@ -500,6 +502,7 @@ export function memoriesResponse(ctx: ApiContext, params: URLSearchParams): Memo
 		includeInactive: params.get("all") === "1",
 		limit: intParam(params, "limit", 200),
 		cursor: optional(params, "cursor"),
+		offset: intParam(params, "offset", 0),
 	});
 }
 
@@ -583,10 +586,10 @@ function readOptimReport(run: OptimRunRow): OptimReport | null {
 	}
 }
 
-/** `GET /api/optim?limit=&cursor=`: one page of optimizations, newest first. */
+/** `GET /api/optim?limit=&offset=&cursor=`: one page of optimizations, newest first. */
 export function optimListResponse(ctx: ApiContext, params: URLSearchParams): OptimListResponse {
-	const { runs, nextCursor } = queryOptimRuns(ctx.db, { limit: intParam(params, "limit", 50), cursor: optional(params, "cursor") });
-	return { runs: runs.map((run) => optimItem(ctx, run)), nextCursor };
+	const { runs, nextCursor, total } = queryOptimRuns(ctx.db, { limit: intParam(params, "limit", 50), cursor: optional(params, "cursor"), offset: intParam(params, "offset", 0) });
+	return { runs: runs.map((run) => optimItem(ctx, run)), nextCursor, total };
 }
 
 /** `GET /api/optim/{id}`: the optimization, its candidates (lineage), its holdout report and whether it can be approved. */
@@ -610,13 +613,14 @@ export function approveOptimResponse(ctx: ApiContext, id: string): OptimApproveR
 	return { promoted: versionView(promoted), replaced: replaced ? versionView(replaced) : null, run: optimItem(ctx, requireOptimRun(ctx, id)) };
 }
 
-/** `GET /api/learn/jobs?status=&limit=&cursor=`: job counts by status and one page of jobs, newest first. */
+/** `GET /api/learn/jobs?status=&limit=&offset=&cursor=`: job counts by status and one page of jobs, newest first. */
 export function learnJobsResponse(ctx: ApiContext, params: URLSearchParams): LearnJobsResponse {
-	const { jobs, nextCursor } = queryLearnJobs(ctx.db, { status: optional(params, "status"), limit: intParam(params, "limit", 50), cursor: optional(params, "cursor") });
+	const { jobs, nextCursor, total } = queryLearnJobs(ctx.db, { status: optional(params, "status"), limit: intParam(params, "limit", 50), cursor: optional(params, "cursor"), offset: intParam(params, "offset", 0) });
 	return {
 		counts: countLearnJobs(ctx.db),
 		jobs: jobs.map((j) => ({ id: j.id, runId: j.runId, kind: j.kind, trigger: j.trigger, status: j.status, attempts: j.attempts, lastError: j.lastError, createdAt: j.createdAt, updatedAt: j.updatedAt })),
 		nextCursor,
+		total,
 	};
 }
 

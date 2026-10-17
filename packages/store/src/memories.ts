@@ -1,7 +1,7 @@
 import { NexoError, type Redactor } from "@nexo/telemetry";
 import type { Db } from "./db.ts";
 import { transaction } from "./db.ts";
-import { checkLimit, decodeCursor, pageOf } from "./cursor.ts";
+import { checkLimit, checkOffset, decodeCursor, pageOf } from "./cursor.ts";
 import { invalidRequest } from "./errors.ts";
 import { newId } from "./ids.ts";
 
@@ -48,6 +48,8 @@ export interface MemoryFilter {
 	limit?: number;
 	/** `nextCursor` of a previous page: the page continues after it. */
 	cursor?: string;
+	/** Rows to skip before the page (offset paging). */
+	offset?: number;
 }
 
 const SCOPE = /^(user|global|skill:[a-z0-9]+(-[a-z0-9]+)*)$/;
@@ -197,7 +199,7 @@ export function listMemories(db: Db, filter: MemoryFilter = {}): MemoryRow[] {
 }
 
 /** One page of `listMemories`, newest first, with the cursor of the next page when there is one. */
-export function queryMemories(db: Db, filter: MemoryFilter = {}): { memories: MemoryRow[]; nextCursor: string | null } {
+export function queryMemories(db: Db, filter: MemoryFilter = {}): { memories: MemoryRow[]; nextCursor: string | null; total: number } {
 	if (filter.scope !== undefined && !isMemoryScope(filter.scope)) throw invalidRequest("scope must be user, global or skill:<name>", { scope: filter.scope });
 	if (filter.type !== undefined && !isMemoryType(filter.type)) throw invalidRequest(`type must be one of ${MEMORY_TYPES.join(", ")}`, { type: filter.type });
 	const limit = checkLimit(filter.limit ?? 200, 1000);
@@ -212,14 +214,16 @@ export function queryMemories(db: Db, filter: MemoryFilter = {}): { memories: Me
 		where.push("type = ?");
 		args.push(filter.type);
 	}
+	const offset = checkOffset(filter.offset);
+	const total = Number((db.prepare(`SELECT COUNT(*) AS n FROM memories ${where.length ? `WHERE ${where.join(" AND ")}` : ""}`).get(...args) as { n: number }).n);
 	if (filter.cursor !== undefined) {
 		const after = decodeCursor(filter.cursor);
 		where.push("(created_at < ? OR (created_at = ? AND id < ?))");
 		args.push(after.key, after.key, after.id);
 	}
-	const sql = `SELECT * FROM memories ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC, id DESC LIMIT ?`;
-	const { items, nextCursor } = pageOf(db.prepare(sql).all(...args, limit + 1).map(decode), limit, (m) => ({ key: m.createdAt, id: m.id }));
-	return { memories: items, nextCursor };
+	const sql = `SELECT * FROM memories ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`;
+	const { items, nextCursor } = pageOf(db.prepare(sql).all(...args, limit + 1, offset).map(decode), limit, (m) => ({ key: m.createdAt, id: m.id }));
+	return { memories: items, nextCursor, total };
 }
 
 /** Live memories in any of `scopes` (retrieval candidates). */

@@ -160,7 +160,7 @@ it("renders the empty proposed-cases state as a muted line, like the runs list",
 	expect(renderProposedCases([], false).value).toContain('<p class="muted">No proposed eval cases');
 });
 
-it("asks for a page of optimizations, then the next one by cursor", () => {
-	expect(optimQuery(null)).toBe("/api/optim?limit=50");
-	expect(optimQuery("c&d")).toBe("/api/optim?limit=50&cursor=c%26d");
+it("asks for a page of optimizations by offset", () => {
+	expect(optimQuery({ offset: 0, limit: 25 })).toBe("/api/optim?limit=25");
+	expect(optimQuery({ offset: 50, limit: 25 })).toBe("/api/optim?limit=25&offset=50");
 });
