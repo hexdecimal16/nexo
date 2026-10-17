@@ -3,15 +3,17 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { dirname, relative, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import { NexoError } from "@nexo/telemetry";
 import { Type } from "typebox";
 import type { ChangeTracker } from "./change-tracker.ts";
-import { nexoHomeGuard, resolveConfined, resolveConfinedOrIn } from "./confine.ts";
+import { canonicalPath, nexoHomeGuard, resolveConfined, resolveConfinedOrIn, SECRET_PATH } from "./confine.ts";
 import type { FileLeases } from "./leases.ts";
 
 export const MAX_BASH_OUTPUT_BYTES = 1_000_000;
 const MAX_READ_LINES = 2000;
 const MAX_FETCH_CHARS = 100_000;
 const FETCH_TIMEOUT_MS = 30_000;
+const MAX_READ_BATCH = 20;
 
 /** Paths with this prefix open the run's saved large tool outputs (`tool_outputs/` in the run directory) with `read`. */
 export const TOOL_OUTPUT_PREFIX = "@tool_outputs/";
@@ -139,9 +141,19 @@ function textResult(text: string, isError = false): AgentToolResult<undefined> {
 }
 
 const ReadParams = Type.Object({
-	path: Type.String({ description: "File path relative to the workspace" }),
+	path: Type.Optional(Type.String({ description: "File path: relative to the workspace, or absolute" })),
 	offset: Type.Optional(Type.Integer({ minimum: 1, description: "1-based first line" })),
 	limit: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum number of lines" })),
+	paths: Type.Optional(
+		Type.Array(
+			Type.Object({
+				path: Type.String(),
+				offset: Type.Optional(Type.Integer({ minimum: 1 })),
+				limit: Type.Optional(Type.Integer({ minimum: 1 })),
+			}),
+			{ minItems: 1, maxItems: MAX_READ_BATCH, description: "Several files in one call, each with its own offset and limit; use instead of path" },
+		),
+	),
 });
 const WriteParams = Type.Object({ path: Type.String(), content: Type.String() });
 const EditParams = Type.Object({
@@ -160,6 +172,20 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 	const guard = ctx.nexoHome === undefined ? null : nexoHomeGuard(ctx.nexoHome, root, ctx.runWorkspace, ctx.wikiRoots);
 	/** A tool path argument made absolute: inside the workspace, or inside a wiki root when given absolutely. */
 	const resolvePath = (target: string): string => resolveConfinedOrIn(root, target, ctx.wikiRoots ?? []);
+
+	/** Reads are not confined to the workspace. Outside it, key, token and credential files are refused: bash reads them through approval. */
+	const resolveReadPath = (target: string): string => {
+		const abs = canonicalPath(target, root);
+		if (abs !== root && !abs.startsWith(root + sep) && SECRET_PATH.test(abs)) {
+			throw new NexoError({
+				code: "TOOL_DENIED",
+				message: `Path "${target}" looks like a key, token or credential file`,
+				hint: "Read it with bash, which asks for approval",
+				context: { target },
+			});
+		}
+		return abs;
+	};
 	const writeFile = (abs: string, content: string): void => {
 		ctx.leases.acquire(abs, ctx.holder);
 		if (abs === root || abs.startsWith(root + sep)) ctx.changeTracker?.beforeWrite(abs);
@@ -178,20 +204,36 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 		throw new Error(`File not found: ${path}`);
 	};
 
+	const readOne = (path: string, offset?: number, limit?: number): string => {
+		const outputs = ctx.toolOutputsDir;
+		const savedOutput = outputs !== undefined && path.startsWith(TOOL_OUTPUT_PREFIX);
+		const abs = savedOutput ? resolveSavedOutput(outputs, path) : resolveReadPath(path);
+		guard?.checkRead(abs);
+		if (!existsSync(abs)) throw new Error(`File not found: ${path}`);
+		const lines = readFileSync(abs, "utf8").split("\n");
+		const start = (offset ?? 1) - 1;
+		return lines.slice(start, start + (limit ?? MAX_READ_LINES)).join("\n");
+	};
+
 	const read: AgentTool<typeof ReadParams> = {
 		name: "read",
 		label: "Read file",
-		description: `Read a text file from the workspace. Paths starting with ${TOOL_OUTPUT_PREFIX} open saved large tool outputs.`,
+		description: `Read text files. Relative paths start at the workspace; absolute paths are read where they are, except key, token and credential files (use bash for those). Pass paths to read several files in one call. Paths starting with ${TOOL_OUTPUT_PREFIX} open saved large tool outputs.`,
 		parameters: ReadParams,
 		execute: async (_id, params) => {
-			const outputs = ctx.toolOutputsDir;
-			const savedOutput = outputs !== undefined && params.path.startsWith(TOOL_OUTPUT_PREFIX);
-			const abs = savedOutput ? resolveSavedOutput(outputs, params.path) : resolvePath(params.path);
-			guard?.checkRead(abs);
-			if (!existsSync(abs)) throw new Error(`File not found: ${params.path}`);
-			const lines = readFileSync(abs, "utf8").split("\n");
-			const start = (params.offset ?? 1) - 1;
-			return textResult(lines.slice(start, start + (params.limit ?? MAX_READ_LINES)).join("\n"));
+			if (params.paths !== undefined) {
+				if (params.path !== undefined) throw new Error("Give either path or paths, not both");
+				const parts = params.paths.map((p) => {
+					try {
+						return { failed: false, text: `==> ${p.path} <==\n${readOne(p.path, p.offset, p.limit)}` };
+					} catch (error) {
+						return { failed: true, text: `==> ${p.path} <==\n[error] ${error instanceof Error ? error.message : String(error)}` };
+					}
+				});
+				return textResult(parts.map((p) => p.text).join("\n\n"), parts.every((p) => p.failed));
+			}
+			if (params.path === undefined) throw new Error("Give path or paths");
+			return textResult(readOne(params.path, params.offset, params.limit));
 		},
 	};
 
@@ -240,7 +282,7 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 				case "failed":
 					return textResult(`Failed to start bash: ${r.output}`, true);
 				case "timeout":
-					return textResult(`Command timed out after ${timeoutMs}ms\n${body}`, true);
+					return textResult(`Command timed out after ${timeoutMs}ms and was killed with its child processes.\nFor a long job, start it in the background (nohup <command> > job.log 2>&1 &) and poll job.log, or pass a larger timeoutMs.\n${body}`, true);
 				case "aborted":
 					return textResult(`Command aborted\n${body}`, true);
 				case "exited":

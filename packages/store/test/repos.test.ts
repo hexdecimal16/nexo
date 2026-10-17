@@ -70,6 +70,20 @@ describe("runs", () => {
 		expect(getRun(db, alive.id)?.status).toBe("running");
 	});
 
+	it("ends a crashed run's open spans at its last recorded activity", () => {
+		const db = openDb(":memory:");
+		const dead = run({ pid: 111 });
+		insertRun(db, dead);
+		insertSpan(db, span(dead.id, { status: "ok", startedAt: "2026-10-10T00:00:01.000Z", endedAt: "2026-10-10T00:00:05.000Z" }));
+		const open = span(dead.id, { status: "running", startedAt: "2026-10-10T00:00:06.000Z" });
+		insertSpan(db, open);
+		recoverCrashedRuns(db, () => false, "2026-10-10T09:00:00.000Z");
+		expect(getRun(db, dead.id)).toMatchObject({ status: "aborted", endedAt: "2026-10-10T00:00:06.000Z" });
+		const closed = listSpans(db, dead.id).find((s) => s.id === open.id);
+		expect(closed).toMatchObject({ status: "error", endedAt: "2026-10-10T00:00:06.000Z" });
+		expect(closed?.attrs.interrupted).toBe(1);
+	});
+
 	it("leaves running rows without a pid alone", () => {
 		const db = openDb(":memory:");
 		const noPid = run({ pid: null });

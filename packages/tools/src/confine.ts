@@ -122,3 +122,6 @@ export function nexoHomeGuard(
 		},
 	};
 }
+
+/** Paths the read tool refuses outside the workspace: keys, tokens and credential files. Bash reads them through approval. */
+export const SECRET_PATH = /(^|[/~])\.(ssh|aws|gnupg|kube|docker|netrc|npmrc|pypirc|git-credentials|env)(\b|$)|id_(rsa|dsa|ecdsa|ed25519)|credential|secret|token|passw|service-account|-access\.json$|\.pem$|\.key$|\.p12$|keychain/i;

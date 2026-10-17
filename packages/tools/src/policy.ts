@@ -72,6 +72,15 @@ export const READ_ONLY_REASON = "read-only command";
 /** Shell metacharacters that chain or redirect commands; an allow rule never vouches for a command containing them. */
 const SHELL_CHAINING = /[;&|`<>\n]|\$\(/;
 
+/** A leading `cd <path> &&`: agents start most shell commands with it, and it only changes the directory. */
+const CD_PREFIX = /^\s*cd\s+(?:"[^"\n$`\\]*"|'[^'\n]*'|[^\s;&|`<>$()\\"'\n]+)\s*&&\s*/;
+
+/** The command without its leading `cd <path> &&`, or the command itself when it has none. */
+export function stripCdPrefix(command: string): string {
+	const match = CD_PREFIX.exec(command);
+	return match ? command.slice(match[0].length) : command;
+}
+
 /** Replaces control characters (newlines, ANSI escapes) so a subject cannot forge prompt text. */
 function escapeControl(text: string): string {
 	return text.replace(/[\u0000-\u001f\u007f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
@@ -127,10 +136,15 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
 	 */
 	const decide = (toolName: string, args: unknown): PolicyDecision => {
 		const subject = subjectOf(toolName, args);
+		// Allow rules see a bash command without its leading `cd <path> &&`; deny and ask rules see it both ways.
+		const stripped = toolName === "bash" ? stripCdPrefix(subject) : subject;
 		for (let i = 0; i < rules.length; i++) {
 			const rule = rules[i];
-			if (!rule || !toolPatternMatches(rule.tool, toolName) || (rule.re && !rule.re.test(subject))) continue;
-			if (rule.action === "allow" && toolName === "bash" && SHELL_CHAINING.test(subject)) continue;
+			if (!rule || !toolPatternMatches(rule.tool, toolName)) continue;
+			if (rule.action === "allow") {
+				if (rule.re && !rule.re.test(stripped)) continue;
+				if (toolName === "bash" && SHELL_CHAINING.test(stripped)) continue;
+			} else if (rule.re && !rule.re.test(subject) && !rule.re.test(stripped)) continue;
 			return { action: rule.action, rule: i, subject };
 		}
 		return { action: policyFor(cfg.policy, toolName) ?? "ask", subject };

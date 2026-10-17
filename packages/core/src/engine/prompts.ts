@@ -4,6 +4,8 @@ Working rules:
 - Your workspace directory is {{workspace}}. Use paths relative to it, and save files you create there unless the user names another location.
 - A skill's scripts and project files may live elsewhere: run them by absolute path from the workspace instead of changing into their folder, and point their output into the workspace.
 - Before following a skill, call load_skill with its name and follow its instructions.
+- Make independent tool calls in the same turn, and combine related shell steps into one command. To read several files, pass paths to one read call.
+- Scope searches to a directory, never find /. Start a command that may outlive the bash timeout in the background (nohup ... > job.log 2>&1 &) and poll the log.
 - A budget line is appended to your latest input each turn. Finish within the budget; prefer fewer, larger steps when it is low.
 - End with a concise final answer that states what you did and where any output files are.`;
 

@@ -61,7 +61,7 @@ describe("engine run", () => {
 		const env = makeEnv();
 		let toolResult = "";
 		env.faux.setResponses([
-			fauxAssistantMessage([fauxToolCall("read", { path: "../../outside.txt" })]),
+			fauxAssistantMessage([fauxToolCall("read", { path: "/tmp/outside/.aws/credentials" })]),
 			async (ctx) => {
 				toolResult = lastToolResultText(ctx);
 				return fauxAssistantMessage("ok");
@@ -69,8 +69,8 @@ describe("engine run", () => {
 		]);
 		const result = await createEngine(env.deps).run({ instruction: "Read outside" });
 		expect(result.status).toBe("succeeded");
-		expect(toolResult).toMatch(/^TOOL_DENIED: Path "..\/..\/outside.txt" is outside the workspace/);
-		expect(toolResult).toContain("hint: Use a path inside the workspace");
+		expect(toolResult).toContain('TOOL_DENIED: Path "/tmp/outside/.aws/credentials" looks like a key, token or credential file');
+		expect(toolResult).toContain("hint: Read it with bash, which asks for approval");
 	});
 
 	it("denies writes to the nexo home from a workspace that contains it", async () => {
