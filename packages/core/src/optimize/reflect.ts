@@ -1,5 +1,5 @@
 import { repairPrompt, validateReply } from "@nexo/memory";
-import { BudgetStop, ProposalSchema, proposalProblem, type ReflectiveExample, reflectionPrompt, reflectionSystem } from "@nexo/optimize";
+import { BudgetStop, type Prediction, ProposalSchema, proposalProblem, type ReflectiveExample, reflectionPrompt, reflectionSystem, type Scratchpad } from "@nexo/optimize";
 import { addSpend, dayScope, monthScope, type OptimTarget } from "@nexo/store";
 import { NexoError } from "@nexo/telemetry";
 import { optimScope } from "../cost/admission.ts";
@@ -116,8 +116,8 @@ async function reflectionCompletion(payer: OptimPayer, request: { system: string
  */
 export async function proposeText(
 	payer: OptimPayer,
-	input: { target: OptimTarget; component: string; currentText: string; examples: readonly ReflectiveExample[] },
-): Promise<{ text: string; rationale: string } | { problem: string }> {
+	input: { target: OptimTarget; component: string; currentText: string; examples: readonly ReflectiveExample[]; scratchpad?: Scratchpad },
+): Promise<{ text: string; rationale: string; prediction?: Prediction } | { problem: string }> {
 	const system = reflectionSystem(input.target);
 	const user = reflectionPrompt(input);
 	const currentTextChars = input.currentText.length;
@@ -129,5 +129,5 @@ export async function proposeText(
 		if (!checked.ok) return { problem: `the reflection reply did not match its schema after one repair: ${checked.errors.slice(0, 3).join("; ")}` };
 	}
 	const problem = proposalProblem(checked.value.text, input.currentText);
-	return problem ? { problem } : { text: checked.value.text, rationale: checked.value.rationale };
+	return problem ? { problem } : { text: checked.value.text, rationale: checked.value.rationale, ...(checked.value.prediction ? { prediction: checked.value.prediction } : {}) };
 }

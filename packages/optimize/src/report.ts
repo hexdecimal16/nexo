@@ -76,7 +76,7 @@ export interface LineageEntry {
 	meanScore: number | null;
 	meanCostUsd: number | null;
 	/** Mean minibatch quality of the parent and of this candidate; null for the seed and merges. */
-	minibatch: { parent: number; child: number } | null;
+	minibatch: { parent: number; child: number; rationale?: string; prediction?: NonNullable<NonNullable<OptimCandidateRow["minibatch"]>["prediction"]> } | null;
 }
 
 export interface ReportEvidence {
@@ -193,7 +193,7 @@ export function buildReport(input: ReportInput): OptimReport {
 			accepted: c.accepted,
 			meanScore: c.meanScore,
 			meanCostUsd: c.meanCostUsd,
-			minibatch: c.minibatch ? { parent: mean(c.minibatch.parent), child: mean(c.minibatch.child) } : null,
+			minibatch: c.minibatch ? { parent: mean(c.minibatch.parent), child: mean(c.minibatch.child), ...(c.minibatch.rationale ? { rationale: c.minibatch.rationale } : {}), ...(c.minibatch.prediction ? { prediction: c.minibatch.prediction } : {}) } : null,
 		})),
 		evidence: input.evidence,
 		stopReason: input.stopReason,

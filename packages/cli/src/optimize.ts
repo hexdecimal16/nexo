@@ -101,7 +101,7 @@ export function optimizeEventLine(event: OptimizeEvent): string | null {
 		case "rejected":
 			return `    rejected: ${escapeControl(event.reason)}`;
 		case "minibatch":
-			return `    minibatch ${q(event.parentQuality)} → ${q(event.childQuality)} ${event.accepted ? "✓ accepted" : "✗ not better"}`;
+			return `    minibatch ${q(event.parentQuality)} → ${q(event.childQuality)} ${event.accepted ? "✓ accepted" : "✗ not better"}${event.prediction ? ` · predicted fixes ${event.prediction.fixesHit}/${event.prediction.fixesPredicted}, risks ${event.prediction.atRiskHit}/${event.prediction.atRiskPredicted}${event.prediction.unpredictedRegressions > 0 ? `, ${event.prediction.unpredictedRegressions} unpredicted` : ""}` : ""}`;
 		case "pareto":
 			return `    pareto mean ${q(event.meanQuality)} at ${usd(event.meanCostUsd)}${event.newMember ? " · new Pareto member" : ""}`;
 		case "merge":

@@ -169,6 +169,18 @@ export const EDITABLE_SETTINGS: readonly SettingDefinition[] = [
 		description: "Lowest judge–human agreement (Cohen's κ) that lets judge-only evidence promote a candidate",
 		type: { kind: "number", integer: false, min: -1, max: 1 },
 	},
+	{
+		key: "optimize.noveltySimilarity",
+		label: "Optimization novelty limit",
+		description: "Embedding similarity (0.5 to 1) at or above which a reflected text is skipped as a near-duplicate of a candidate",
+		type: { kind: "number", integer: false, min: 0.5, max: 1 },
+	},
+	{
+		key: "optimize.offspringAlpha",
+		label: "Optimization offspring penalty",
+		description: "How strongly a parent's child count lowers its chance of being picked again (0 turns it off)",
+		type: { kind: "number", integer: false, min: 0, max: 10 },
+	},
 ];
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

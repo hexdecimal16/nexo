@@ -59,6 +59,17 @@ function mean(scores: readonly CaseScore[]): string {
 	return scores.length === 0 ? "–" : quality(scores.reduce((s, x) => s + x.quality, 0) / scores.length);
 }
 
+const RATIONALE_CHARS = 160;
+
+/** How an edit's prediction held up on the minibatch, and its rationale (clipped); empty without either. */
+function predictionNote(minibatch: NonNullable<OptimCandidate["minibatch"]>): SafeHtml | "" {
+	const p = minibatch.prediction;
+	const why = minibatch.rationale ? (minibatch.rationale.length > RATIONALE_CHARS ? `${minibatch.rationale.slice(0, RATIONALE_CHARS - 1)}…` : minibatch.rationale) : "";
+	if (!p && !why) return "";
+	const check = p ? `fixes ${p.fixesHit}/${p.fixesPredicted} · risks ${p.atRiskHit}/${p.atRiskPredicted}${p.unpredictedRegressions > 0 ? ` · ${p.unpredictedRegressions} unpredicted` : ""}` : "";
+	return html`${check ? html`<div class="muted">${check}</div>` : ""}${why ? html`<div class="muted">${why}</div>` : ""}`;
+}
+
 /** Every candidate with its parents, minibatch comparison and pareto mean (the lineage). */
 export function renderLineage(candidates: readonly OptimCandidate[]): SafeHtml {
 	return html`<table class="runs lineage">
@@ -67,7 +78,7 @@ export function renderLineage(candidates: readonly OptimCandidate[]): SafeHtml {
 		(c) => html`<tr>
 		<td class="mono">${shortId(c.id)}</td><td>${c.origin}${c.component ? ` · ${c.component}` : ""}</td>
 		<td class="mono">${c.parentIds.map(shortId).join(", ") || "–"}</td><td class="num">${c.iteration}</td>
-		<td>${c.minibatch ? `${mean(c.minibatch.parent)} → ${mean(c.minibatch.child)}` : "–"}</td>
+		<td>${c.minibatch ? html`${mean(c.minibatch.parent)} → ${mean(c.minibatch.child)}${predictionNote(c.minibatch)}` : "–"}</td>
 		<td>${c.meanScore === null ? "–" : html`${quality(c.meanScore)} <span class="muted">${formatUsd(c.meanCostUsd ?? 0)}</span>`}</td>
 		<td>${version(c.version)} ${c.artifactStatus ? html`<span class="muted">${c.artifactStatus}</span>` : ""}</td><td>${c.accepted ? "yes" : "no"}</td>
 	</tr>`,

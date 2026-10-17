@@ -53,12 +53,12 @@ export function paretoMembers(table: ScoreTable, caseIds: readonly string[]): { 
 }
 
 /** Pareto sampling (spec §8.2.2.1): a member, picked in proportion to its win count. */
-export function selectCandidate(table: ScoreTable, caseIds: readonly string[], rng: Rng): string {
+export function selectCandidate(table: ScoreTable, caseIds: readonly string[], rng: Rng, offspring?: ReadonlyMap<string, number>, alpha = OFFSPRING_ALPHA): string {
 	const members = paretoMembers(table, caseIds);
 	if (members.length === 0) throw new RangeError("selectCandidate needs at least one evaluated candidate");
 	return pickWeighted(
 		members.map((m) => m.id),
-		members.map((m) => m.wins),
+		members.map((m) => m.wins / (1 + alpha * (offspring?.get(m.id) ?? 0))),
 		rng,
 	);
 }
@@ -86,3 +86,9 @@ export function bestCandidate(table: ScoreTable, caseIds: readonly string[]): st
 	if (!best) throw new RangeError("bestCandidate needs at least one evaluated candidate");
 	return best.id;
 }
+
+/**
+ * Darwin Godel Machine parent weighting: a member's win count is divided by 1 + OFFSPRING_ALPHA * children, so a
+ * parent that already has many children is sampled less and the other Pareto branches get explored.
+ */
+export const OFFSPRING_ALPHA = 0.5;

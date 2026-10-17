@@ -466,6 +466,18 @@ export interface OptimListResponse {
 	total: number;
 }
 
+/** A reflection's testable claim and how its minibatch rollouts bore it out. */
+export interface OptimPrediction {
+	rootCause: string;
+	fixes: number[];
+	atRisk: number[];
+	fixesPredicted: number;
+	fixesHit: number;
+	atRiskPredicted: number;
+	atRiskHit: number;
+	unpredictedRegressions: number;
+}
+
 export interface OptimCandidate {
 	id: string;
 	optimRunId: string;
@@ -474,7 +486,7 @@ export interface OptimCandidate {
 	iteration: number;
 	origin: "seed" | "reflect" | "merge";
 	component: string | null;
-	minibatch: { caseIds: string[]; parent: CaseScore[]; child: CaseScore[] } | null;
+	minibatch: { caseIds: string[]; parent: CaseScore[]; child: CaseScore[]; rationale?: string; prediction?: OptimPrediction } | null;
 	perCase: Record<string, CaseScore>;
 	meanScore: number | null;
 	meanCostUsd: number | null;
@@ -517,7 +529,7 @@ export interface OptimReport {
 		accepted: boolean;
 		meanScore: number | null;
 		meanCostUsd: number | null;
-		minibatch: { parent: number; child: number } | null;
+		minibatch: { parent: number; child: number; rationale?: string; prediction?: OptimPrediction } | null;
 	}[];
 	evidence: { judgeOnly: boolean; humanScored: boolean; judgeKey: string | null; kappa: number | null; minJudgeKappa: number };
 	stopReason: string;

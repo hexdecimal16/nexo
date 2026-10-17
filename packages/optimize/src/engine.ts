@@ -1,7 +1,8 @@
 import type { CaseScore, MinibatchRecord, OptimStopReason } from "@nexo/store";
 import { findMerge, type LineageNode } from "./merge.ts";
 import { bestCandidate, meanOf, paretoMembers, type ScoreTable, selectCandidate } from "./pareto.ts";
-import type { ReflectiveExample } from "./proposer.ts";
+import { NOVELTY_MAX_JACCARD, NOVELTY_MAX_SIMILARITY, textCosine, wordJaccard } from "./novelty.ts";
+import { checkPrediction, emptyScratchpad, type Prediction, type PredictionCheck, type ProposalNotes, type ReflectiveExample, SCRATCHPAD_ENTRIES, type Scratchpad, scratchpadEntry } from "./proposer.ts";
 import { type Rng, sampleWithoutReplacement } from "./rng.ts";
 import type { ComponentTexts } from "./target.ts";
 
@@ -49,13 +50,17 @@ export interface GepaAdapter {
 	evaluate(batch: readonly EvalCase[], candidate: CandidateRef, captureTraces: boolean, signal: AbortSignal): Promise<EvaluationBatch>;
 	makeReflectiveDataset(candidate: CandidateRef, evalBatch: EvaluationBatch, components: readonly string[]): Record<string, ReflectiveExample[]>;
 	/** New texts for `components`, or null when the reflection produced no usable text. */
-	proposeNewTexts?(candidate: CandidateRef, dataset: Record<string, ReflectiveExample[]>, components: readonly string[], signal: AbortSignal): Promise<ComponentTexts | null>;
+	proposeNewTexts?(candidate: CandidateRef, dataset: Record<string, ReflectiveExample[]>, components: readonly string[], signal: AbortSignal, hints?: Scratchpad): Promise<ComponentTexts | null>;
+	/** The notes (rationale, prediction) of the last proposeNewTexts call; reading them clears them. */
+	takeProposalNotes?(): ProposalNotes | null;
+	/** Embeddings of `texts`, same order, for the novelty filter; null when unavailable (word overlap is used then). */
+	embed?(texts: readonly string[], signal: AbortSignal): Promise<number[][] | null>;
 }
 
 export type GepaEvent =
 	| { type: "iteration"; iteration: number; parentId: string; component: string }
 	| { type: "rejected"; iteration: number; reason: string }
-	| { type: "minibatch"; iteration: number; candidateId: string; parentQuality: number; childQuality: number; accepted: boolean }
+	| { type: "minibatch"; iteration: number; candidateId: string; parentQuality: number; childQuality: number; accepted: boolean; prediction?: PredictionCheck }
 	| { type: "pareto"; candidateId: string; meanQuality: number; meanCostUsd: number; newMember: boolean }
 	| { type: "merge"; candidateId: string; parents: [string, string]; accepted: boolean };
 
@@ -69,6 +74,8 @@ export interface GepaCallbacks {
 	recordPareto(candidateId: string, perCase: Record<string, CaseScore>, accepted: boolean): void;
 	/** Why no further iteration can start (a budget), or null when one can. */
 	canStartIteration(): OptimStopReason | null;
+	/** The reflection's rationale and prediction (with how the minibatch bore it out) for a candidate just compared with its parent. */
+	recordNotes?(candidateId: string, notes: { rationale: string; prediction: (Prediction & PredictionCheck) | null }): void;
 	onEvent?(event: GepaEvent): void;
 }
 
@@ -82,6 +89,10 @@ export interface GepaOptions {
 	feedback: readonly EvalCase[];
 	pareto: readonly EvalCase[];
 	patience: number;
+	/** Reject a reflected text at least this similar (0..1) to a pool text before any rollout; NOVELTY_MAX_SIMILARITY by default. */
+	noveltySimilarity?: number;
+	/** Weight of a parent's child count when sampling parents; OFFSPRING_ALPHA by default, 0 turns the penalty off. */
+	offspringAlpha?: number;
 	merge: boolean;
 	rng: Rng;
 	signal: AbortSignal;
@@ -129,6 +140,20 @@ export async function runGepa(options: GepaOptions): Promise<GepaResult> {
 	let stale = 0;
 	let merges = 0;
 	let componentIndex = 0;
+	const scratchpad = emptyScratchpad();
+	const noveltyLimit = options.noveltySimilarity ?? NOVELTY_MAX_SIMILARITY;
+	const vectors = new Map<string, number[]>();
+	const joined = (t: ComponentTexts) => options.components.map((c) => t[c] ?? "").join(" ");
+	const maxSimilarity = async (text: string, known: readonly string[]): Promise<{ value: number; embedded: boolean }> => {
+		if (adapter.embed) {
+			const missing = [...new Set([text, ...known])].filter((t) => !vectors.has(t));
+			const embedded = missing.length > 0 ? await adapter.embed(missing, signal) : [];
+			if (embedded && embedded.length === missing.length) missing.forEach((t, i) => vectors.set(t, embedded[i] as number[]));
+			const mine = vectors.get(text);
+			if (mine && known.every((k) => vectors.has(k))) return { value: Math.max(0, ...known.map((k) => textCosine(mine, vectors.get(k) as number[]))), embedded: true };
+		}
+		return { value: Math.max(0, ...known.map((k) => wordJaccard(text, k))), embedded: false };
+	};
 	let stopReason: OptimStopReason | null = null;
 
 	const remember = (ref: CandidateRef, parentIds: string[]) => {
@@ -162,23 +187,37 @@ export async function runGepa(options: GepaOptions): Promise<GepaResult> {
 				break;
 			}
 			iterations++;
-			const parentId = selectCandidate(table, caseIds, rng);
+			const parentId = selectCandidate(table, caseIds, rng, offspringCounts(nodes), options.offspringAlpha);
 			const parent = refs.get(parentId) as CandidateRef;
 			const component = options.components[componentIndex++ % options.components.length] as string;
 			emit({ type: "iteration", iteration: iterations, parentId, component });
 			const batch = sampleWithoutReplacement(options.feedback, MINIBATCH_SIZE, rng);
 			const parentEval = await evaluate(batch, parent, true);
 			const dataset = adapter.makeReflectiveDataset(parent, parentEval, [component]);
-			const proposed = await propose(parent, dataset, [component], signal);
+			const proposed = await propose(parent, dataset, [component], signal, scratchpad);
+			const notes = adapter.takeProposalNotes?.() ?? null;
 			if (!proposed) {
 				stale++;
 				emit({ type: "rejected", iteration: iterations, reason: "the reflection produced no usable text" });
+				continue;
+			}
+			const outside = Object.keys(proposed).filter((k) => !options.components.includes(k));
+			if (outside.length > 0) {
+				stale++;
+				emit({ type: "rejected", iteration: iterations, reason: `the reflection changed ${outside.join(", ")}, which this optimization does not own` });
 				continue;
 			}
 			const childTexts = { ...parent.texts, ...proposed };
 			if ([...texts.values()].some((known) => sameTexts(known, childTexts))) {
 				stale++;
 				emit({ type: "rejected", iteration: iterations, reason: "the proposed text is already a candidate" });
+				continue;
+			}
+			const found = await maxSimilarity(joined(childTexts), [...texts.values()].map(joined));
+			const similarity = found.value;
+			if (similarity >= (found.embedded ? noveltyLimit : NOVELTY_MAX_JACCARD)) {
+				stale++;
+				emit({ type: "rejected", iteration: iterations, reason: `the proposed text is a near-duplicate of a candidate (similarity ${similarity.toFixed(3)})` });
 				continue;
 			}
 			const child = callbacks.createCandidate({ parentIds: [parentId], texts: childTexts, iteration: iterations, origin: "reflect", component });
@@ -188,7 +227,12 @@ export async function runGepa(options: GepaOptions): Promise<GepaResult> {
 			const childQuality = meanQuality(childEval.scores);
 			const accepted = childQuality > parentQuality + EPS;
 			callbacks.recordMinibatch(child.id, { caseIds: batch.map((c) => c.id), parent: parentEval.scores, child: childEval.scores }, accepted);
-			emit({ type: "minibatch", iteration: iterations, candidateId: child.id, parentQuality, childQuality, accepted });
+			const prediction = notes?.prediction
+				? checkPrediction(notes.prediction, parentEval.scores.map((s) => s.quality), childEval.scores.map((s) => s.quality), EPS)
+				: undefined;
+			emit({ type: "minibatch", iteration: iterations, candidateId: child.id, parentQuality, childQuality, accepted, ...(prediction ? { prediction } : {}) });
+			if (notes?.rationale) learn(scratchpad, accepted, notes.rationale, prediction);
+			if (notes) callbacks.recordNotes?.(child.id, { rationale: notes.rationale, prediction: notes.prediction && prediction ? { ...notes.prediction, ...prediction } : null });
 			if (!accepted) {
 				stale++;
 				continue;
@@ -222,4 +266,19 @@ export async function runGepa(options: GepaOptions): Promise<GepaResult> {
 		else throw error;
 	}
 	return { table, bestId: bestCandidate(table, caseIds), stopReason: stopReason ?? "patience", iterations, merges };
+}
+
+/** Children per candidate, counted from the lineage (rejected children count too). */
+function offspringCounts(nodes: ReadonlyMap<string, LineageNode>): Map<string, number> {
+	const counts = new Map<string, number>();
+	for (const node of nodes.values()) for (const parent of node.parentIds) counts.set(parent, (counts.get(parent) ?? 0) + 1);
+	return counts;
+}
+
+/** Adds an iteration's rationale to the scratchpad: a pattern when the child was accepted, else an anti-pattern. */
+function learn(pad: Scratchpad, accepted: boolean, rationale: string, check?: PredictionCheck): void {
+	const missed = check && check.fixesPredicted > 0 && check.fixesHit === 0 ? " (its predicted fixes did not materialize)" : "";
+	const list = accepted ? pad.patterns : pad.antiPatterns;
+	list.push(scratchpadEntry(`${rationale}${missed}`));
+	while (list.length > SCRATCHPAD_ENTRIES) list.shift();
 }

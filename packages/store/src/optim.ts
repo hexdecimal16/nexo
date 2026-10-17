@@ -68,6 +68,19 @@ export interface MinibatchRecord {
 	caseIds: string[];
 	parent: CaseScore[];
 	child: CaseScore[];
+	/** The reflection's reasoning for the change; absent on older rows. */
+	rationale?: string;
+	/** The reflection's testable claim and how the minibatch rollouts bore it out; absent when it made none. */
+	prediction?: {
+		rootCause: string;
+		fixes: number[];
+		atRisk: number[];
+		fixesPredicted: number;
+		fixesHit: number;
+		atRiskPredicted: number;
+		atRiskHit: number;
+		unpredictedRegressions: number;
+	};
 }
 
 export interface OptimCandidateRow {

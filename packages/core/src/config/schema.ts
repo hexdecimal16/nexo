@@ -209,6 +209,10 @@ export const ConfigSchema = Type.Object(
 				patience: Type.Integer({ minimum: 1 }),
 				/** Lowest judge Cohen's κ that lets judge-only evidence promote a candidate. */
 				minJudgeKappa: Type.Number({ minimum: -1, maximum: 1 }),
+				/** Embedding cosine at or above which a reflected text counts as a near-duplicate of a candidate and is skipped before any rollout. */
+				noveltySimilarity: Type.Number({ exclusiveMinimum: 0, maximum: 1 }),
+				/** How strongly a parent's child count lowers its chance of being sampled again (0 turns the penalty off). */
+				offspringAlpha: Type.Number({ minimum: 0, maximum: 10 }),
 				/** Mining proposed eval cases from unreviewed runs (design §3). */
 				mine: Type.Object(
 					{
@@ -276,5 +280,5 @@ export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 	redaction: { patterns: [] },
 	memory: { enabled: true, maxTokens: 1500, weights: { relevance: 1, importance: 0.5, recency: 0.3 }, tauDays: 14, topK: 20, minRelevance: 0 },
 	learning: { enabled: true, maxPlaybookItems: 50, perJobUsd: 0.15, staleMinutes: 10, drainAfterRunMs: 30_000 },
-	optimize: { minCases: 10, patience: 5, minJudgeKappa: 0.6, mine: { days: 30, maxRuns: 500, minCluster: 3, maxNew: 3, cosine: 0.8, jaccard: 0.5 }, climb: { guards: 2 } },
+	optimize: { minCases: 10, patience: 5, minJudgeKappa: 0.6, noveltySimilarity: 0.98, offspringAlpha: 0.5, mine: { days: 30, maxRuns: 500, minCluster: 3, maxNew: 3, cosine: 0.8, jaccard: 0.5 }, climb: { guards: 2 } },
 };
