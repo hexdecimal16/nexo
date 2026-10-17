@@ -115,6 +115,8 @@ export interface SessionListItem {
 
 export interface SessionListResponse {
 	sessions: SessionListItem[];
+	/** Cursor of the next page, or null on the last one. */
+	nextCursor: string | null;
 }
 
 export interface ModelInfo {
@@ -318,6 +320,7 @@ export interface Memory {
 
 export interface MemoryListResponse {
 	memories: Memory[];
+	nextCursor: string | null;
 }
 
 export interface MemoryDetailResponse {
@@ -403,6 +406,7 @@ export interface LearnJob {
 export interface LearnJobsResponse {
 	counts: Record<LearnJobStatus, number>;
 	jobs: LearnJob[];
+	nextCursor: string | null;
 }
 
 export type OptimStatus = "running" | "succeeded" | "failed" | "aborted";
@@ -452,6 +456,7 @@ export interface OptimRunItem extends OptimRun {
 
 export interface OptimListResponse {
 	runs: OptimRunItem[];
+	nextCursor: string | null;
 }
 
 export interface OptimCandidate {

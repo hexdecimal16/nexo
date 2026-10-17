@@ -159,3 +159,22 @@ describe("eval-case routes", () => {
 		expect((await post(readOnly, "/api/eval-cases/01MINEDC/accept")).status).not.toBe(200);
 	});
 });
+
+describe("optimization list pagination", () => {
+	it("pages optimizations with a cursor in the same order as the full list", async () => {
+		optimization("page-a");
+		optimization("page-b");
+		const all = (await raw(server.port, "/api/optim?limit=100")).json() as OptimListResponse;
+		expect(all.runs.length).toBeGreaterThanOrEqual(3);
+		const seen: string[] = [];
+		let cursor: string | null = null;
+		do {
+			const page = (await raw(server.port, `/api/optim?limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`)).json() as OptimListResponse;
+			expect(page.runs.length).toBeLessThanOrEqual(2);
+			seen.push(...page.runs.map((r) => r.id));
+			cursor = page.nextCursor;
+		} while (cursor);
+		expect(seen).toEqual(all.runs.map((r) => r.id));
+		expect((await raw(server.port, "/api/optim?cursor=nope")).status).toBe(400);
+	});
+});

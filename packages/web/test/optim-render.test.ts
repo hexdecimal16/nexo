@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OptimCandidate, OptimDetailResponse, OptimReport, OptimRunItem } from "../public/lib/api-types.ts";
-import { renderApproval, renderDiff, renderLineage, renderOptimDetail, renderOptimList, renderProposedCases } from "../public/lib/optim-view.ts";
+import { optimQuery, renderApproval, renderDiff, renderLineage, renderOptimDetail, renderOptimList, renderProposedCases } from "../public/lib/optim-view.ts";
 
 const XSS = `<img src=x onerror="alert(1)"><script>alert('x')</script>\``;
 
@@ -154,4 +154,13 @@ it("renders proposed cases escaped, with buttons only when writable", () => {
 	expect(writable).toContain('data-dismiss="01M"');
 	expect(renderProposedCases(cases, true).value).not.toContain("data-accept");
 	expect(renderProposedCases([], false).value).toContain("No proposed eval cases");
+});
+
+it("renders the empty proposed-cases state as a muted line, like the runs list", () => {
+	expect(renderProposedCases([], false).value).toContain('<p class="muted">No proposed eval cases');
+});
+
+it("asks for a page of optimizations, then the next one by cursor", () => {
+	expect(optimQuery(null)).toBe("/api/optim?limit=50");
+	expect(optimQuery("c&d")).toBe("/api/optim?limit=50&cursor=c%26d");
 });

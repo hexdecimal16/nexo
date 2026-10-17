@@ -135,3 +135,13 @@ describe("calibration view", () => {
 		expect(renderCalibration({ ...data, current: { ...data.current!, cases: 0 } }).value).toContain("No run has both a score from this judge and a human verdict yet");
 	});
 });
+
+describe("score cell when no scorer answered", () => {
+	it("says the scorers failed, not the run, and warns instead of marking a quality failure", () => {
+		const one = renderScoreCell({ value: null, passed: null, scorers: 0, failedScorers: 1 }).value;
+		expect(one).toContain("scorer failed");
+		expect(one).toContain('class="badge warn"');
+		expect(one).not.toContain("score-failed");
+		expect(renderScoreCell({ value: null, passed: null, scorers: 0, failedScorers: 2 }).value).toContain("2 scorers failed");
+	});
+});

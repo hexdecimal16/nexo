@@ -74,3 +74,17 @@ describe("GET /api/runs oneShot", () => {
 		expect((await raw(server.port, "/api/runs?oneShot=maybe")).status).toBe(400);
 	});
 });
+
+describe("GET /api/sessions pagination", () => {
+	it("pages newest first with a cursor and rejects a bad cursor", async () => {
+		const first = (await raw(server.port, "/api/sessions?limit=1")).json() as SessionListResponse;
+		expect(first.sessions.map((s) => s.id)).toEqual(["newer"]);
+		expect(first.nextCursor).toBeTruthy();
+		const second = (await raw(server.port, `/api/sessions?limit=1&cursor=${encodeURIComponent(first.nextCursor ?? "")}`)).json() as SessionListResponse;
+		expect(second.sessions.map((s) => s.id)).toEqual(["older"]);
+		expect(second.nextCursor).toBeNull();
+		const bad = await raw(server.port, "/api/sessions?cursor=nope");
+		expect(bad.status).toBe(400);
+		expect(bad.json().error.code).toBe("INVALID_REQUEST");
+	});
+});

@@ -19,6 +19,21 @@ export interface RunFilters {
 
 export const PAGE_SIZE = 50;
 
+/** Filters from the page address: `?session=` picks a session's turns and `?tab=review` the review queue. */
+export function readRunFilters(search: string): RunFilters {
+	const params = new URLSearchParams(search);
+	return { tab: params.get("tab") === "review" ? "review" : "all", status: "", skill: "", since: "", session: params.get("session") ?? "", scored: "" };
+}
+
+/** The search string that reopens the same tab and session, so a reload or the back button keeps them; empty for the default view. */
+export function runsPageSearch(filters: RunFilters): string {
+	const params = new URLSearchParams();
+	if (filters.session) params.set("session", filters.session);
+	if (filters.tab === "review") params.set("tab", "review");
+	const query = params.toString();
+	return query ? `?${query}` : "";
+}
+
 /**
  * API path for one page of the runs list. Without a session filter the list holds one-shot runs only; chat turns are
  * listed per session. The review tab asks for finished runs without feedback, chat turns included.

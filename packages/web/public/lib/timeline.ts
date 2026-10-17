@@ -73,8 +73,8 @@ function renderTicks(totalMs: number): SafeHtml {
 	return html`${xs.map((x) => html`<line class="tl-tick" x1="${x}" x2="${x}" y1="0" y2="10"></line>`)}`;
 }
 
-/** One SVG bar per row over a shared time grid, with a ruler above and a cap on running rows (geometry in attributes, so the page CSP needs no inline styles). */
-export function renderTimeline(timeline: Timeline): SafeHtml {
+/** One SVG bar per row over a shared time grid, with a ruler above and a cap on running rows (geometry in attributes, so the page CSP needs no inline styles). The selected span's label gets aria-current. */
+export function renderTimeline(timeline: Timeline, selectedId: string | null = null): SafeHtml {
 	if (timeline.rows.length === 0) return html`<p class="muted">No run spans recorded yet.</p>`;
 	const ticks = renderTicks(timeline.totalMs);
 	return html`<div class="timeline"><div class="tl-scale"><span></span><span><span>0s</span><span>${formatDuration(timeline.totalMs)}</span></span><span></span></div>${timeline.rows.map((row) => {
@@ -84,7 +84,7 @@ export function renderTimeline(timeline: Timeline): SafeHtml {
 		const runW = scaled(Math.max(row.durationMs, timeline.totalMs / WIDTH), timeline.totalMs);
 		const headX = Math.max(0, Number(runX) + Number(runW) - 3).toFixed(1);
 		return html`<div class="tl-row">
-		<button type="button" class="tl-label depth-${Math.min(row.depth, 6)}" data-span-id="${row.spanId}">${row.label}</button>
+		<button type="button" class="tl-label depth-${Math.min(row.depth, 6)}" data-span-id="${row.spanId}"${row.spanId === selectedId ? html` aria-current="true"` : ""}>${row.label}</button>
 		<svg class="tl-bar" viewBox="0 0 ${WIDTH} 10" preserveAspectRatio="none" role="img" aria-label="${row.label}">
 			${ticks}
 			${row.queuedMs > 0 ? html`<rect class="tl-queue" x="${scaled(queueStart, timeline.totalMs)}" y="2" width="${scaled(row.queuedMs, timeline.totalMs)}" height="6"></rect>` : ""}

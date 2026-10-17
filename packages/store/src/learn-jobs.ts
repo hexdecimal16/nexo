@@ -1,6 +1,7 @@
 import type { ErrorPayload } from "@nexo/telemetry";
 import type { Db } from "./db.ts";
 import { transaction } from "./db.ts";
+import { checkLimit, decodeCursor, pageOf } from "./cursor.ts";
 import { invalidRequest } from "./errors.ts";
 import { newId } from "./ids.ts";
 
@@ -147,11 +148,15 @@ export function retryFailedLearnJobs(db: Db, nowIso: string): number {
 
 /** Jobs by status (or run), newest first. Throws INVALID_REQUEST for a bad status or limit. */
 export function listLearnJobs(db: Db, filter: { status?: string; runId?: string; limit?: number } = {}): LearnJobRow[] {
+	return queryLearnJobs(db, filter).jobs;
+}
+
+/** One page of `listLearnJobs`, newest first; `cursor` (from a previous page) continues after its last job. */
+export function queryLearnJobs(db: Db, filter: { status?: string; runId?: string; limit?: number; cursor?: string } = {}): { jobs: LearnJobRow[]; nextCursor: string | null } {
 	if (filter.status !== undefined && !(LEARN_JOB_STATUSES as readonly string[]).includes(filter.status)) {
 		throw invalidRequest(`status must be one of ${LEARN_JOB_STATUSES.join(", ")}`, { status: filter.status });
 	}
-	const limit = filter.limit ?? 50;
-	if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw invalidRequest("limit must be an integer from 1 to 1000", { limit });
+	const limit = checkLimit(filter.limit ?? 50, 1000);
 	const where: string[] = [];
 	const args: string[] = [];
 	if (filter.status) {
@@ -162,10 +167,17 @@ export function listLearnJobs(db: Db, filter: { status?: string; runId?: string;
 		where.push("run_id = ?");
 		args.push(filter.runId);
 	}
-	return db
+	if (filter.cursor !== undefined) {
+		const after = decodeCursor(filter.cursor);
+		where.push("(created_at < ? OR (created_at = ? AND id < ?))");
+		args.push(after.key, after.key, after.id);
+	}
+	const rows = db
 		.prepare(`SELECT * FROM learn_jobs ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC, id DESC LIMIT ?`)
-		.all(...args, limit)
+		.all(...args, limit + 1)
 		.map(decode);
+	const { items, nextCursor } = pageOf(rows, limit, (j) => ({ key: j.createdAt, id: j.id }));
+	return { jobs: items, nextCursor };
 }
 
 export function countLearnJobs(db: Db): Record<LearnJobStatus, number> {

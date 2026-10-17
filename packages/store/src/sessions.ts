@@ -2,6 +2,7 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 import { join } from "node:path";
 import type { SQLInputValue } from "node:sqlite";
 import { NexoError, type Redactor } from "@nexo/telemetry";
+import { checkLimit, decodeCursor, pageOf } from "./cursor.ts";
 import type { Db } from "./db.ts";
 import type { RunStatus } from "./runs.ts";
 import { insertRow } from "./sql.ts";
@@ -159,6 +160,13 @@ export interface SessionSummary {
  * count as turns, and optimization runs never do.
  */
 export function listSessionSummaries(db: Db, options: { limit?: number } = {}): SessionSummary[] {
+	return querySessionSummaries(db, options).sessions;
+}
+
+/** One page of `listSessionSummaries`, newest update first; `cursor` (from a previous page) continues after its last session. */
+export function querySessionSummaries(db: Db, options: { limit?: number; cursor?: string } = {}): { sessions: SessionSummary[]; nextCursor: string | null } {
+	const limit = checkLimit(options.limit ?? 50, 200);
+	const after = options.cursor === undefined ? null : decodeCursor(options.cursor);
 	const rows = db
 		.prepare(
 			`WITH turns AS (
@@ -170,11 +178,11 @@ export function listSessionSummaries(db: Db, options: { limit?: number } = {}): 
 SELECT s.*, last.id AS last_id, last.status AS last_status, last.started_at AS last_started_at,
 	(SELECT COUNT(*) FROM turns u WHERE u.session_id = s.id AND u.is_unreviewed) AS unreviewed
 FROM sessions s LEFT JOIN turns last ON last.session_id = s.id AND last.recency = 1
-WHERE s.turns > 0 OR EXISTS (SELECT 1 FROM runs WHERE runs.session_id = s.id)
+WHERE (s.turns > 0 OR EXISTS (SELECT 1 FROM runs WHERE runs.session_id = s.id))${after ? " AND (s.updated_at < ? OR (s.updated_at = ? AND s.id < ?))" : ""}
 ORDER BY s.updated_at DESC, s.id DESC LIMIT ?`,
 		)
-		.all(options.limit ?? 50);
-	return rows.map((row) => {
+		.all(...(after ? [after.key, after.key, after.id] : []), limit + 1);
+	const summaries = rows.map((row) => {
 		const session = decode(row);
 		return {
 			id: session.id,
@@ -189,6 +197,8 @@ ORDER BY s.updated_at DESC, s.id DESC LIMIT ?`,
 			unreviewedTurns: Number(row.unreviewed),
 		};
 	});
+	const { items, nextCursor } = pageOf(summaries, limit, (s) => ({ key: s.updatedAt, id: s.id }));
+	return { sessions: items, nextCursor };
 }
 
 export function deleteSessionRow(db: Db, id: string): void {

@@ -11,6 +11,15 @@ function version(v: number | null): string {
 	return v === null ? "–" : `v${v}`;
 }
 
+export const OPTIM_PAGE_SIZE = 50;
+
+/** One page of `/api/optim`, newest first; `cursor` asks for the page after a previous one. */
+export function optimQuery(cursor: string | null, limit: number = OPTIM_PAGE_SIZE): string {
+	const params = new URLSearchParams({ limit: String(limit) });
+	if (cursor) params.set("cursor", cursor);
+	return `/api/optim?${params.toString()}`;
+}
+
 /** The optimizations table; each row opens its detail (`data-optim`). */
 export function renderOptimList(runs: readonly OptimRunItem[]): SafeHtml {
 	if (runs.length === 0) return html`<p class="muted">No optimizations yet. Start one with <code>nexo optimize --target skill:&lt;name&gt;</code>.</p>`;
@@ -109,7 +118,7 @@ ${climb.comparisons.length === 0 ? "" : html`<table class="runs"><thead><tr><th>
 
 /** The proposed (mined) eval cases with Accept / Dismiss buttons. */
 export function renderProposedCases(cases: readonly EvalCaseItem[], readOnly: boolean): SafeHtml {
-	if (cases.length === 0) return html`<p class="empty">No proposed eval cases. Mine some with <code>nexo eval mine --target &lt;target&gt;</code>.</p>`;
+	if (cases.length === 0) return html`<p class="muted">No proposed eval cases. Mine some with <code>nexo eval mine --target &lt;target&gt;</code>.</p>`;
 	return html`<table><thead><tr><th>Target</th><th>Instruction</th><th>Runs</th><th>Proposed</th><th></th></tr></thead><tbody>${cases.map(
 		(c) => html`<tr><td>${c.target}</td><td>${truncate(c.input.split("\n")[0] ?? "", 100)}</td><td>${String(c.clusterSize)}</td><td>${formatTime(c.createdAt)}</td><td>${
 			readOnly ? "" : html`<button type="button" data-accept="${c.id}">Accept</button> <button type="button" data-dismiss="${c.id}">Dismiss</button>`
