@@ -96,6 +96,8 @@ export interface Escalation {
 export interface RunListResponse {
 	runs: RunSummary[];
 	nextCursor: string | null;
+	/** Runs matching the filters across every page. */
+	total: number;
 }
 
 export interface SessionListItem {
@@ -117,6 +119,7 @@ export interface SessionListResponse {
 	sessions: SessionListItem[];
 	/** Cursor of the next page, or null on the last one. */
 	nextCursor: string | null;
+	total: number;
 }
 
 export interface ModelInfo {
@@ -321,6 +324,7 @@ export interface Memory {
 export interface MemoryListResponse {
 	memories: Memory[];
 	nextCursor: string | null;
+	total: number;
 }
 
 export interface MemoryDetailResponse {
@@ -407,6 +411,8 @@ export interface LearnJobsResponse {
 	counts: Record<LearnJobStatus, number>;
 	jobs: LearnJob[];
 	nextCursor: string | null;
+	/** Jobs matching the status filter across every page. */
+	total: number;
 }
 
 export type OptimStatus = "running" | "succeeded" | "failed" | "aborted";
@@ -457,6 +463,7 @@ export interface OptimRunItem extends OptimRun {
 export interface OptimListResponse {
 	runs: OptimRunItem[];
 	nextCursor: string | null;
+	total: number;
 }
 
 export interface OptimCandidate {

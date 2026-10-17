@@ -53,7 +53,7 @@ function codeOf(fn: () => unknown): string | undefined {
 
 describe("queryRuns pagination", () => {
 	it("returns an empty page with no cursor for an empty index", () => {
-		expect(queryRuns(openDb(":memory:"))).toEqual({ runs: [], nextCursor: null });
+		expect(queryRuns(openDb(":memory:"))).toEqual({ runs: [], nextCursor: null, total: 0 });
 	});
 
 	it("gives no next cursor when the last page is exactly full", () => {

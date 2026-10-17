@@ -1,30 +1,28 @@
-import type { EvalCasesResponse, MetaResponse, OptimDetailResponse, OptimListResponse, OptimRunItem } from "../lib/api-types.ts";
+import type { EvalCasesResponse, MetaResponse, OptimDetailResponse, OptimListResponse } from "../lib/api-types.ts";
 import { renderError } from "../lib/common-view.ts";
 import { optimQuery, renderOptimDetail, renderOptimList, renderProposedCases } from "../lib/optim-view.ts";
+import { DEFAULT_PAGE_SIZE, type Page, renderPager } from "../lib/pager.ts";
 import { asErrorBody, el, getJson, postJson } from "./api.ts";
+import { bindPager } from "./paging.ts";
 
 const errorBox = el<HTMLDivElement>("#error");
 const listBox = el<HTMLDivElement>("#optim-runs");
-const listMore = el<HTMLButtonElement>("#load-more");
+const listPager = el<HTMLDivElement>("#pager");
 const proposedBox = el<HTMLDivElement>("#eval-proposed");
 const detailBox = el<HTMLDivElement>("#optim-detail");
 
 let readOnly = false;
-const loaded: OptimRunItem[] = [];
-let cursor: string | null = null;
+const page: Page = { offset: 0, limit: DEFAULT_PAGE_SIZE };
 
 function showError(error: unknown): void {
 	errorBox.innerHTML = renderError(asErrorBody(error)).value;
 }
 
-/** Loads the first page of optimizations, or with `append` the page after the last one, and renders everything loaded so far. */
-async function loadList(append = false): Promise<void> {
-	const page = await getJson<OptimListResponse>(optimQuery(append ? cursor : null));
-	if (!append) loaded.length = 0;
-	loaded.push(...page.runs);
-	cursor = page.nextCursor ?? null;
-	listBox.innerHTML = renderOptimList(loaded).value;
-	listMore.hidden = cursor === null;
+/** Loads and renders the current page of optimizations. */
+async function loadList(): Promise<void> {
+	const result = await getJson<OptimListResponse>(optimQuery(page));
+	listBox.innerHTML = renderOptimList(result.runs).value;
+	listPager.innerHTML = renderPager({ ...page, total: result.total ?? result.runs.length }).value;
 }
 
 async function loadProposed(): Promise<void> {
@@ -50,9 +48,7 @@ document.addEventListener("click", (event) => {
 	const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>("button") : null;
 	if (!target) return;
 	const { optim, approve, accept, dismiss } = target.dataset;
-	if (target === listMore) {
-		if (cursor !== null) loadList(true).catch(showError);
-	} else if (optim) {
+	if (optim) {
 		errorBox.innerHTML = "";
 		loadDetail(optim).catch(showError);
 	} else if (approve) {
@@ -68,4 +64,5 @@ document.addEventListener("click", (event) => {
 	}
 });
 
+bindPager(listPager, page, () => loadList().catch(showError));
 loadAll().catch(showError);

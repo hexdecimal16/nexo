@@ -153,3 +153,17 @@ describe("learning API pagination", () => {
 		expect(second.counts).toEqual(first.counts);
 	});
 });
+
+describe("learning API offset paging with totals", () => {
+	it("pages memories and learn jobs by offset and reports totals", async () => {
+		const all = (await raw(server.port, "/api/memories?all=1&limit=200")).json() as MemoryListResponse;
+		expect(all.total).toBe(all.memories.length);
+		const page = (await raw(server.port, "/api/memories?all=1&limit=2&offset=2")).json() as MemoryListResponse;
+		expect(page.memories.map((m) => m.id)).toEqual(all.memories.slice(2, 4).map((m) => m.id));
+		expect(page.total).toBe(all.total);
+		const jobs = (await raw(server.port, "/api/learn/jobs?limit=1&offset=1")).json() as LearnJobsResponse;
+		expect(jobs.jobs).toHaveLength(1);
+		expect(jobs.total).toBeGreaterThanOrEqual(2);
+		expect((await raw(server.port, "/api/learn/jobs?offset=-1")).status).toBe(400);
+	});
+});

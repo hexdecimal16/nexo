@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { SQLInputValue } from "node:sqlite";
 import type { ErrorPayload } from "@nexo/telemetry";
 import type { Db } from "./db.ts";
+import { checkOffset } from "./cursor.ts";
 import { invalidRequest } from "./errors.ts";
 import type { Verdict } from "./feedback.ts";
 import { decodeRunScore, RUN_SCORE_SQL, type RunScore } from "./scores.ts";
@@ -183,6 +184,8 @@ export interface RunQuery {
 	since?: string;
 	limit?: number;
 	cursor?: string;
+	/** Rows to skip before the page (offset paging; combines with `limit`). */
+	offset?: number;
 	/** Defaults to true: subagent runs appear inside their root run. */
 	rootOnly?: boolean;
 	/** Only the turns of this session. */
@@ -198,6 +201,8 @@ export interface RunQuery {
 export interface RunPage {
 	runs: RunSummary[];
 	nextCursor: string | null;
+	/** Runs matching the filters, regardless of the page. */
+	total: number;
 }
 
 const SINCE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?Z)?$/;
@@ -313,16 +318,18 @@ export function queryRuns(db: Db, query: RunQuery = {}): RunPage {
 	if (query.reviewed === false) where.push("r.status != 'running' AND NOT EXISTS (SELECT 1 FROM feedback f WHERE f.run_id = r.id)");
 	if (query.scored === true) where.push("EXISTS (SELECT 1 FROM scores s WHERE s.run_id = r.id)");
 	if (query.scored === false) where.push("r.status != 'running' AND NOT EXISTS (SELECT 1 FROM scores s WHERE s.run_id = r.id)");
+	const offset = checkOffset(query.offset);
+	const total = Number((db.prepare(`SELECT COUNT(*) AS n FROM runs r ${where.length ? `WHERE ${where.join(" AND ")}` : ""}`).get(...args) as { n: number }).n);
 	if (query.cursor !== undefined) {
 		const after = decodeRunCursor(query.cursor);
 		where.push("(r.started_at < ? OR (r.started_at = ? AND r.id < ?))");
 		args.push(after.startedAt, after.startedAt, after.id);
 	}
-	const sql = `${SUMMARY_SELECT} ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY r.started_at DESC, r.id DESC LIMIT ?`;
-	const rows = db.prepare(sql).all(...args, limit + 1);
+	const sql = `${SUMMARY_SELECT} ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY r.started_at DESC, r.id DESC LIMIT ? OFFSET ?`;
+	const rows = db.prepare(sql).all(...args, limit + 1, offset);
 	const runs = rows.slice(0, limit).map(decodeSummary);
 	const last = runs.at(-1);
-	return { runs, nextCursor: rows.length > limit && last ? encodeRunCursor(last.startedAt, last.id) : null };
+	return { runs, nextCursor: rows.length > limit && last ? encodeRunCursor(last.startedAt, last.id) : null, total };
 }
 
 export function getRunSummary(db: Db, id: string): RunSummary | undefined {

@@ -2,28 +2,22 @@ import type { LearnJobsResponse, Memory, PlaybookItem, PlaybookListResponse, Pla
 import { runLink, statusBadge } from "./common-view.ts";
 import { formatTime, truncate } from "./format.ts";
 import { html, type SafeHtml } from "./html.ts";
+import { type Page, pageParams } from "./pager.ts";
 
 export const MEMORY_SCOPES_HINT = "user, global or skill:<name>";
 
-export const MEMORIES_PAGE_SIZE = 50;
-export const JOBS_PAGE_SIZE = 20;
-
-/** One page of `/api/memories` with the filter form's values (empty values left out); `cursor` asks for the page after a previous one. */
-export function memoriesQuery(scope: string, type: string, all: boolean, cursor: string | null = null, limit: number = MEMORIES_PAGE_SIZE): string {
+/** One page of `/api/memories` with the filter form's values (empty values left out). */
+export function memoriesQuery(scope: string, type: string, all: boolean, page: Page): string {
 	const params = new URLSearchParams();
 	if (scope.trim()) params.set("scope", scope.trim());
 	if (type) params.set("type", type);
 	if (all) params.set("all", "1");
-	params.set("limit", String(limit));
-	if (cursor) params.set("cursor", cursor);
-	return `/api/memories?${params.toString()}`;
+	return `/api/memories?${pageParams(page, params).toString()}`;
 }
 
 /** One page of `/api/learn/jobs`, newest first. */
-export function jobsQuery(cursor: string | null, limit: number = JOBS_PAGE_SIZE): string {
-	const params = new URLSearchParams({ limit: String(limit) });
-	if (cursor) params.set("cursor", cursor);
-	return `/api/learn/jobs?${params.toString()}`;
+export function jobsQuery(page: Page): string {
+	return `/api/learn/jobs?${pageParams(page).toString()}`;
 }
 
 function sourceBadge(source: string): SafeHtml {

@@ -111,12 +111,13 @@ describe("runs view", () => {
 	});
 
 	it("builds list queries; the review tab asks for reviewed=false", () => {
-		expect(runsQuery({ tab: "review", status: "", skill: " ", since: "", session: "", scored: "" }, null)).toBe("/api/runs?reviewed=false&limit=50");
-		expect(runsQuery({ tab: "all", status: "failed", skill: "a b", since: "2026-10-01", session: "", scored: "" }, "c&d", 10)).toBe(
-			"/api/runs?oneShot=true&status=failed&skill=a+b&since=2026-10-01&limit=10&cursor=c%26d",
+		const page = { offset: 0, limit: 25 };
+		expect(runsQuery({ tab: "review", status: "", skill: " ", since: "", session: "", scored: "" }, page)).toBe("/api/runs?reviewed=false&limit=25");
+		expect(runsQuery({ tab: "all", status: "failed", skill: "a b", since: "2026-10-01", session: "", scored: "" }, { offset: 20, limit: 10 })).toBe(
+			"/api/runs?oneShot=true&status=failed&skill=a+b&since=2026-10-01&limit=10&offset=20",
 		);
-		expect(runsQuery({ tab: "all", status: "", skill: "", since: "", session: "s&1", scored: "" }, null)).toBe("/api/runs?session=s%261&limit=50");
-		expect(runsQuery({ tab: "all", status: "", skill: "", since: "", session: "", scored: "false" }, null)).toBe("/api/runs?oneShot=true&scored=false&limit=50");
+		expect(runsQuery({ tab: "all", status: "", skill: "", since: "", session: "s&1", scored: "" }, page)).toBe("/api/runs?session=s%261&limit=25");
+		expect(runsQuery({ tab: "all", status: "", skill: "", since: "", session: "", scored: "false" }, page)).toBe("/api/runs?oneShot=true&scored=false&limit=25");
 	});
 
 	it("shows the session filter with an escaped title and a link that clears it", () => {
@@ -514,9 +515,9 @@ describe("sessions view", () => {
 });
 
 describe("sessions page query", () => {
-	it("asks for a page of sessions, then the next one by cursor", () => {
-		expect(sessionsQuery(null)).toBe("/api/sessions?limit=50");
-		expect(sessionsQuery("c&d", 10)).toBe("/api/sessions?limit=10&cursor=c%26d");
+	it("asks for a page of sessions by offset", () => {
+		expect(sessionsQuery({ offset: 0, limit: 25 })).toBe("/api/sessions?limit=25");
+		expect(sessionsQuery({ offset: 50, limit: 25 })).toBe("/api/sessions?limit=25&offset=50");
 	});
 });
 

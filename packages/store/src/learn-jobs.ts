@@ -1,7 +1,7 @@
 import type { ErrorPayload } from "@nexo/telemetry";
 import type { Db } from "./db.ts";
 import { transaction } from "./db.ts";
-import { checkLimit, decodeCursor, pageOf } from "./cursor.ts";
+import { checkLimit, checkOffset, decodeCursor, pageOf } from "./cursor.ts";
 import { invalidRequest } from "./errors.ts";
 import { newId } from "./ids.ts";
 
@@ -152,7 +152,7 @@ export function listLearnJobs(db: Db, filter: { status?: string; runId?: string;
 }
 
 /** One page of `listLearnJobs`, newest first; `cursor` (from a previous page) continues after its last job. */
-export function queryLearnJobs(db: Db, filter: { status?: string; runId?: string; limit?: number; cursor?: string } = {}): { jobs: LearnJobRow[]; nextCursor: string | null } {
+export function queryLearnJobs(db: Db, filter: { status?: string; runId?: string; limit?: number; cursor?: string; offset?: number } = {}): { jobs: LearnJobRow[]; nextCursor: string | null; total: number } {
 	if (filter.status !== undefined && !(LEARN_JOB_STATUSES as readonly string[]).includes(filter.status)) {
 		throw invalidRequest(`status must be one of ${LEARN_JOB_STATUSES.join(", ")}`, { status: filter.status });
 	}
@@ -167,17 +167,19 @@ export function queryLearnJobs(db: Db, filter: { status?: string; runId?: string
 		where.push("run_id = ?");
 		args.push(filter.runId);
 	}
+	const offset = checkOffset(filter.offset);
+	const total = Number((db.prepare(`SELECT COUNT(*) AS n FROM learn_jobs ${where.length ? `WHERE ${where.join(" AND ")}` : ""}`).get(...args) as { n: number }).n);
 	if (filter.cursor !== undefined) {
 		const after = decodeCursor(filter.cursor);
 		where.push("(created_at < ? OR (created_at = ? AND id < ?))");
 		args.push(after.key, after.key, after.id);
 	}
 	const rows = db
-		.prepare(`SELECT * FROM learn_jobs ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC, id DESC LIMIT ?`)
-		.all(...args, limit + 1)
+		.prepare(`SELECT * FROM learn_jobs ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`)
+		.all(...args, limit + 1, offset)
 		.map(decode);
 	const { items, nextCursor } = pageOf(rows, limit, (j) => ({ key: j.createdAt, id: j.id }));
-	return { jobs: items, nextCursor };
+	return { jobs: items, nextCursor, total };
 }
 
 export function countLearnJobs(db: Db): Record<LearnJobStatus, number> {

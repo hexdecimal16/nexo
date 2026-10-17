@@ -2,7 +2,7 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 import { join } from "node:path";
 import type { SQLInputValue } from "node:sqlite";
 import { NexoError, type Redactor } from "@nexo/telemetry";
-import { checkLimit, decodeCursor, pageOf } from "./cursor.ts";
+import { checkLimit, checkOffset, decodeCursor, pageOf } from "./cursor.ts";
 import type { Db } from "./db.ts";
 import type { RunStatus } from "./runs.ts";
 import { insertRow } from "./sql.ts";
@@ -164,9 +164,11 @@ export function listSessionSummaries(db: Db, options: { limit?: number } = {}): 
 }
 
 /** One page of `listSessionSummaries`, newest update first; `cursor` (from a previous page) continues after its last session. */
-export function querySessionSummaries(db: Db, options: { limit?: number; cursor?: string } = {}): { sessions: SessionSummary[]; nextCursor: string | null } {
+export function querySessionSummaries(db: Db, options: { limit?: number; cursor?: string; offset?: number } = {}): { sessions: SessionSummary[]; nextCursor: string | null; total: number } {
 	const limit = checkLimit(options.limit ?? 50, 200);
+	const offset = checkOffset(options.offset);
 	const after = options.cursor === undefined ? null : decodeCursor(options.cursor);
+	const total = Number((db.prepare("SELECT COUNT(*) AS n FROM sessions s WHERE s.turns > 0 OR EXISTS (SELECT 1 FROM runs WHERE runs.session_id = s.id)").get() as { n: number }).n);
 	const rows = db
 		.prepare(
 			`WITH turns AS (
@@ -179,9 +181,9 @@ SELECT s.*, last.id AS last_id, last.status AS last_status, last.started_at AS l
 	(SELECT COUNT(*) FROM turns u WHERE u.session_id = s.id AND u.is_unreviewed) AS unreviewed
 FROM sessions s LEFT JOIN turns last ON last.session_id = s.id AND last.recency = 1
 WHERE (s.turns > 0 OR EXISTS (SELECT 1 FROM runs WHERE runs.session_id = s.id))${after ? " AND (s.updated_at < ? OR (s.updated_at = ? AND s.id < ?))" : ""}
-ORDER BY s.updated_at DESC, s.id DESC LIMIT ?`,
+ORDER BY s.updated_at DESC, s.id DESC LIMIT ? OFFSET ?`,
 		)
-		.all(...(after ? [after.key, after.key, after.id] : []), limit + 1);
+		.all(...(after ? [after.key, after.key, after.id] : []), limit + 1, offset);
 	const summaries = rows.map((row) => {
 		const session = decode(row);
 		return {
@@ -198,7 +200,7 @@ ORDER BY s.updated_at DESC, s.id DESC LIMIT ?`,
 		};
 	});
 	const { items, nextCursor } = pageOf(summaries, limit, (s) => ({ key: s.updatedAt, id: s.id }));
-	return { sessions: items, nextCursor };
+	return { sessions: items, nextCursor, total };
 }
 
 export function deleteSessionRow(db: Db, id: string): void {
