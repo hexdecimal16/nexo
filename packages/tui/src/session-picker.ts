@@ -56,6 +56,30 @@ class SessionPickerScreen implements Component {
 	invalidate(): void {}
 }
 
+export interface SessionPickerScreenOptions {
+	sessions: readonly SessionChoice[];
+	now: number;
+	/** Terminal height, read on every render. */
+	rows: () => number;
+	onPick: (id: string) => void;
+	onCancel: () => void;
+}
+
+/** The picker screen as a component, for `nexo --resume` and for `/resume` inside the chat. */
+export function createSessionPickerScreen(options: SessionPickerScreenOptions): Component {
+	const items = sessionPickerItems(options.sessions, options.now);
+	const picker = new PickerView({
+		title: "Resume a session",
+		items,
+		maxVisible: () => Math.max(3, Math.min(20, options.rows() - 9)),
+		onPick: options.onPick,
+		onCancel: options.onCancel,
+		hint: "type to filter · ↑↓ move · enter resume · esc cancel",
+		labelWidth: { min: 24, max: 48 },
+	});
+	return new SessionPickerScreen(picker, items.length, options.onCancel);
+}
+
 export interface SessionPickerOptions {
 	sessions: readonly SessionChoice[];
 	/** Defaults to a ProcessTerminal on stdin/stdout. */
@@ -77,17 +101,13 @@ export async function runSessionPicker(options: SessionPickerOptions): Promise<s
 	const done = new Promise<string | null>((resolve) => {
 		resolveDone = resolve;
 	});
-	const items = sessionPickerItems(options.sessions, (options.now ?? Date.now)());
-	const picker = new PickerView({
-		title: "Resume a session",
-		items,
-		maxVisible: () => Math.max(3, Math.min(20, terminal.rows - 9)),
+	const screen = createSessionPickerScreen({
+		sessions: options.sessions,
+		now: (options.now ?? Date.now)(),
+		rows: () => terminal.rows,
 		onPick: (id) => resolveDone(id),
 		onCancel: () => resolveDone(null),
-		hint: "type to filter · ↑↓ move · enter resume · esc cancel",
-		labelWidth: { min: 24, max: 48 },
 	});
-	const screen = new SessionPickerScreen(picker, items.length, () => resolveDone(null));
 	const root = new SafeContainer();
 	root.addChild(screen);
 	tui.addChild(root);

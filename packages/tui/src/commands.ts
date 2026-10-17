@@ -33,6 +33,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
 	{ name: "compact", description: "Summarize older turns at the start of the next turn" },
 	{ name: "clear", description: "Start a new conversation in this session" },
 	{ name: "sessions", description: "List recent sessions" },
+	{ name: "resume", description: "Switch to another session (a picker when no id is given)", argumentHint: "[id]" },
 	{ name: "settings", description: "Open settings (models, keys, budgets, tool policy)" },
 	{ name: "exit", description: "Leave nexo (the session can be resumed)" },
 ];

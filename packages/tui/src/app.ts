@@ -16,12 +16,13 @@ import {
 } from "@earendil-works/pi-tui";
 import { type EngineEvent, listSessions, type RunResult, type Session, type Settings } from "@nexo/core";
 import type { Effort } from "@nexo/router";
-import type { Db, ScoreStatus, TranscriptLine } from "@nexo/store";
+import { type Db, getSessionRow, type ScoreStatus, sessionNotFound, type TranscriptLine } from "@nexo/store";
 import { type ErrorPayload, toErrorPayload } from "@nexo/telemetry";
 import { describeSessionRule, type Prompter } from "@nexo/tools";
 import { createApprovalPrompter } from "./approvals.ts";
 import { helpText, parseSlashCommand, SLASH_COMMANDS } from "./commands.ts";
 import { Block, DynamicLine, SafeContainer, SafeMarkdown, SubagentLine, Ticker, ToolLine, ViewMode } from "./components.ts";
+import { createSessionPickerScreen, type SessionChoice } from "./session-picker.ts";
 import { SettingsScreen, type SettingsScreenMode } from "./settings-screen.ts";
 import { escapeControl, escapeControlKeepLines, formatError, oneLine, toolSummary, usd } from "./text.ts";
 import { editorTheme, markdownTheme, shellBorder, style } from "./theme.ts";
@@ -44,6 +45,8 @@ export interface InteractiveOptions {
 	 * be passed as `SessionDeps.prompter`.
 	 */
 	openSession: (prompter: Prompter) => Session;
+	/** Reopens another session for `/resume`, with the same prompter as `openSession`. Without it `/resume` reports that it is unavailable. */
+	resumeSession?: (id: string, prompter: Prompter) => Session;
 	settings: Settings;
 	/** For `/sessions`. */
 	db: Db;
@@ -99,7 +102,7 @@ export function restoreTerminal(): void {
 }
 const TICK_MS = 80;
 
-type Screen = "chat" | "approval" | "settings";
+type Screen = "chat" | "approval" | "settings" | "picker";
 
 function textOf(content: unknown): string {
 	if (typeof content === "string") return content;
@@ -718,6 +721,9 @@ class InteractiveApp {
 				case "sessions":
 					this.say(this.sessionsText(session));
 					break;
+				case "resume":
+					this.resume(session, args);
+					break;
 				case "settings":
 					void this.openSettings("settings").then(() => {
 						this.refreshDefaults();
@@ -740,6 +746,78 @@ class InteractiveApp {
 			this.sayError(toErrorPayload(error));
 		}
 		this.tui.requestRender();
+	}
+
+	/** `/resume <id>` switches directly; `/resume` shows a picker of the other recent sessions. */
+	private resume(current: Session, args: string): void {
+		if (!this.options.resumeSession) {
+			this.sayError({ code: "INVALID_REQUEST", message: "/resume is not available here", hint: "Start nexo with --resume <id>" });
+			return;
+		}
+		if (args) {
+			this.switchTo(current, args);
+			return;
+		}
+		const rows: SessionChoice[] = listSessions(this.options.db, { limit: 50 }).filter((r) => r.id !== current.id);
+		if (rows.length === 0) {
+			this.say("no other sessions to resume");
+			return;
+		}
+		this.screen = "picker";
+		const picker = createSessionPickerScreen({
+			sessions: rows,
+			now: this.now(),
+			rows: () => this.terminal.rows,
+			onPick: (id) => {
+				this.showEditor();
+				this.switchTo(current, id);
+			},
+			onCancel: () => this.showEditor(),
+		});
+		this.slot.clear();
+		this.slot.addChild(picker);
+		this.tui.setFocus(picker);
+		this.tui.requestRender();
+	}
+
+	/** Opens the target first and closes the current session only once that worked, so a failed resume changes nothing. */
+	private switchTo(current: Session, id: string): void {
+		const open = this.options.resumeSession;
+		if (!open) return;
+		if (id === current.id) {
+			this.say("already in that session");
+			return;
+		}
+		let next: Session;
+		try {
+			if (!getSessionRow(this.options.db, id)) throw sessionNotFound(id);
+			next = open(id, this.prompter);
+		} catch (error) {
+			this.sayError(toErrorPayload(error));
+			this.tui.requestRender();
+			return;
+		}
+		try {
+			current.close();
+		} catch (error) {
+			next.close();
+			this.sayError(toErrorPayload(error));
+			this.tui.requestRender();
+			return;
+		}
+		this.session = next;
+		this.turnCost = 0;
+		this.lastTurnCost = 0;
+		this.lastTurnApprovalCost = 0;
+		this.lastScore = null;
+		this.currentText = null;
+		this.liveModel = null;
+		this.tools.clear();
+		this.subagents.clear();
+		this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider([...SLASH_COMMANDS], next.cwd));
+		this.chat.clear();
+		this.renderHeader(next);
+		this.tui.requestRender(true);
 	}
 
 	private sessionsText(current: Session): string {

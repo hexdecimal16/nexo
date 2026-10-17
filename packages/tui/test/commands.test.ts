@@ -184,3 +184,35 @@ describe("slash commands", () => {
 		await h.done;
 	});
 });
+
+describe("/resume", () => {
+	it("switches to another session by id; a bad id leaves the current session alone", async () => {
+		const first = await startHarness();
+		first.faux.setResponses([fauxAssistantMessage("old-reply-text")]);
+		submit(first.terminal, "old question");
+		await until(() => !first.session().running && first.session().turns === 1);
+		const oldId = first.session().id;
+		first.terminal.send(KEY.ctrlD);
+		await first.done;
+
+		const h = await startHarness({ reuse: first });
+		const currentId = h.session().id;
+		expect(currentId).not.toBe(oldId);
+		submit(h.terminal, "/resume nope");
+		await until(() => expect(h.terminal.output()).toMatch(/error \[/));
+		expect(h.session().id).toBe(currentId);
+		submit(h.terminal, `/resume ${oldId}`);
+		await until(() => expect(h.terminal.output()).toContain("old-reply-text"));
+		expect(h.session().id).toBe(oldId);
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
+	it("/help lists /resume", async () => {
+		const h = await startHarness();
+		submit(h.terminal, "/help");
+		await until(() => expect(h.terminal.output()).toContain("/resume"));
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+});
