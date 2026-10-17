@@ -33,9 +33,24 @@ describe("read/write/edit", () => {
 		expect(text(await tool("read").execute("2", { path: "dir/a.txt", offset: 2, limit: 1 }))).toBe("l2");
 	});
 
-	it("rejects paths outside the workspace", async () => {
+	it("reads absolute paths outside the workspace but refuses key and credential files", async () => {
 		const { tool } = setup();
-		await expect(tool("read").execute("1", { path: "../x" })).rejects.toThrow(/outside the workspace/);
+		const other = mkdtempSync(join(tmpdir(), "nexo-other-"));
+		writeFileSync(join(other, "note.txt"), "outside");
+		mkdirSync(join(other, ".aws"));
+		writeFileSync(join(other, ".aws", "credentials"), "k");
+		expect(text(await tool("read").execute("1", { path: join(other, "note.txt") }))).toBe("outside");
+		await expect(tool("read").execute("2", { path: join(other, ".aws", "credentials") })).rejects.toMatchObject({ code: "TOOL_DENIED" });
+	});
+
+	it("reads several files in one call and reports each failure inline", async () => {
+		const { ws, tool } = setup();
+		writeFileSync(join(ws, "a.txt"), "l1\nl2\n");
+		writeFileSync(join(ws, "b.txt"), "bee");
+		const r = await tool("read").execute("1", { paths: [{ path: "a.txt", limit: 1 }, { path: "b.txt" }, { path: "missing.txt" }] });
+		expect(r.isError).toBeUndefined();
+		expect(text(r)).toBe("==> a.txt <==\nl1\n\n==> b.txt <==\nbee\n\n==> missing.txt <==\n[error] File not found: missing.txt");
+		await expect(tool("read").execute("2", { path: "a.txt", paths: [{ path: "b.txt" }] })).rejects.toThrow(/either path or paths/);
 	});
 
 	it("rejects writes to files leased by another run", async () => {

@@ -8,5 +8,6 @@ describe("renderSystemPrompt", () => {
 		expect(text).toContain("save files you create there unless the user names another location");
 		expect(text).toContain("run them by absolute path from the workspace instead of changing into their folder");
 		expect(text).not.toContain("{{workspace}}");
+		expect(text).toContain("Make independent tool calls in the same turn");
 	});
 });

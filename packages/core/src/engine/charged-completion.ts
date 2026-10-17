@@ -1,4 +1,4 @@
-import { type Api, type AssistantMessage, type Model, normalizeContext } from "@earendil-works/pi-ai";
+import { type Api, type AssistantMessage, type CacheRetention, type Model, normalizeContext } from "@earendil-works/pi-ai";
 import type { Effort } from "@nexo/router";
 import type { SpanKind } from "@nexo/store";
 import { NexoError, toErrorPayload } from "@nexo/telemetry";
@@ -37,6 +37,8 @@ export interface ChargedCompletionRequest {
 	outputTokens?: number;
 	/** Retries of retryable provider errors; defaults to providers.<name>.maxRetries. */
 	maxRetries?: number;
+	/** Prompt-cache retention for the call; "none" for a one-off prompt whose prefix is never reused. */
+	cacheRetention?: CacheRetention;
 	/** The span each attempt is recorded as. */
 	span: { kind: SpanKind; name: string; parentSpanId: string; tier: string; attrs: Record<string, unknown> };
 }
@@ -82,7 +84,7 @@ export async function runChargedCompletion(
 		let msg: AssistantMessage;
 		try {
 			const context = normalizeContext({ systemPrompt: request.system, messages: [{ role: "user", content: request.user, timestamp: env.now().getTime() }] });
-			const stream = await env.streamFn(model, context, { reasoning: request.effort === "off" ? undefined : request.effort, maxTokens, signal });
+			const stream = await env.streamFn(model, context, { reasoning: request.effort === "off" ? undefined : request.effort, maxTokens, signal, ...(request.cacheRetention ? { cacheRetention: request.cacheRetention } : {}) });
 			msg = await stream.result();
 		} catch (error) {
 			if (estimate > 0) budget.settleReservation(estimate, 0);

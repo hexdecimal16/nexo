@@ -152,6 +152,7 @@ export function createApprovalClassifier(deps: ApprovalClassifierDeps) {
 					effort,
 					outputTokens: OUTPUT_TOKENS,
 					maxRetries: 0,
+					cacheRetention: "none",
 					span: { kind: "approval_call", name: model.id, parentSpanId: span, tier: "approver", attrs: { tool: toolName } },
 				},
 				combined,

@@ -375,6 +375,18 @@ export function isPidAlive(pid: number): boolean {
 	}
 }
 
+/**
+ * Ends the spans a dead process left running at the run's last recorded activity (the latest span start or end), not when
+ * the crash was noticed, which can be hours later. Returns that time, or null when the run has no spans.
+ */
+function closeOpenSpans(db: Db, runId: string): string | null {
+	const row = db.prepare("SELECT MAX(COALESCE(ended_at, started_at)) AS t FROM spans WHERE run_id = ?").all(runId)[0];
+	const last = row && typeof row.t === "string" ? row.t : null;
+	if (last === null) return null;
+	db.prepare("UPDATE spans SET status = 'error', ended_at = ?, attrs_json = json_set(attrs_json, '$.interrupted', 1) WHERE run_id = ? AND status = 'running'").run(last, runId);
+	return last;
+}
+
 /** Rewrites `<dir>/run.json` as aborted. A missing or unreadable file is left alone; `nexo reindex` reports unreadable ones. */
 function markRunJsonAborted(dir: string, nowIso: string, error: ErrorPayload): void {
 	const file = join(dir, "run.json");
@@ -403,8 +415,9 @@ export function recoverCrashedRuns(db: Db, isAlive: (pid: number) => boolean, no
 			message: `The nexo process (pid ${pid}) exited while this run was running`,
 			retryable: false,
 		};
-		updateRun(db, String(row.id), { status: "aborted", endedAt: nowIso, error });
-		markRunJsonAborted(String(row.dir_path), nowIso, error);
+		const endedAt = closeOpenSpans(db, String(row.id)) ?? nowIso;
+		updateRun(db, String(row.id), { status: "aborted", endedAt, error });
+		markRunJsonAborted(String(row.dir_path), endedAt, error);
 		ids.push(String(row.id));
 	}
 	return ids;
