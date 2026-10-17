@@ -11,7 +11,7 @@ A wiki is a folder of interlinked markdown pages that you build and keep current
 
 The wikis directory is named in your system prompt. Each wiki is one folder in it, named for its topic in lowercase with hyphens: `<wikis>/<name>/`. Reach it with absolute paths in `read`, `write`, `edit` and `bash`. Never put wiki pages in the run workspace and never touch other nexo files.
 
-If the user does not name a wiki, list the wikis directory and pick the one that fits the topic. If none fits, say so and ask before creating one.
+If the user does not name a wiki, list the wikis directory and pick the one that fits the topic. If none fits and the task produced durable subject knowledge worth keeping, create a new wiki without asking and tell the user its name and why. Do not create a wiki for a one-off question or for knowledge about how you should behave (that belongs to memories and playbooks).
 
 The wiki holds knowledge about a subject. Lessons about how you should behave next time belong to nexo's memories and playbooks, which you do not edit. Do not copy the same fact into both.
 
@@ -41,7 +41,7 @@ The wiki holds knowledge about a subject. Lessons about how you should behave ne
 
 ## Create a wiki
 
-1. `mkdir -p` the folders above and run `git -C <wiki> init`.
+1. Create the wiki directory and initial files (`write` creates parent folders automatically, or use `mkdir -p` and `git -C <wiki> init`).
 2. Write `AGENTS.md` (topic, one-line purpose, the layout and page rules above, any extra folders), `index.md` (a title and an empty section per folder), `log.md` and `overview.md`.
 3. Log and commit (below).
 

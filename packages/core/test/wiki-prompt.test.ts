@@ -10,6 +10,7 @@ describe("wiki prompt", () => {
 		expect(out).toContain(wikiPrompt("/home/u/.nexo/wikis"));
 		expect(out).toContain("/home/u/.nexo/wikis");
 		expect(out).toContain("load_skill");
+		expect(out).toContain("durable subject knowledge");
 	});
 
 	it("adds nothing when no wikis directory is given", () => {
