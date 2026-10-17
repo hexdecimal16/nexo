@@ -1,6 +1,7 @@
 import type { SQLInputValue } from "node:sqlite";
 import { type ErrorPayload, NexoError } from "@nexo/telemetry";
 import { type ArtifactRow, getActiveArtifact, getArtifact } from "./artifacts.ts";
+import { checkLimit, decodeCursor, pageOf } from "./cursor.ts";
 import { type Db, transaction } from "./db.ts";
 import { RUNS_TO_REVIEW } from "./eval-cases.ts";
 import { agreementStats, confusionMatrix, judgeHumanPairs } from "./judge-calibration.ts";
@@ -211,7 +212,19 @@ export function getOptimRun(db: Db, id: string): OptimRunRow | undefined {
 
 /** Optimizations, newest first. */
 export function listOptimRuns(db: Db, options: { limit?: number } = {}): OptimRunRow[] {
-	return db.prepare("SELECT * FROM optim_runs ORDER BY created_at DESC, id DESC LIMIT ?").all(options.limit ?? 50).map(decodeRun);
+	return queryOptimRuns(db, options).runs;
+}
+
+/** One page of optimizations, newest first; `cursor` (from a previous page) continues after its last run. */
+export function queryOptimRuns(db: Db, options: { limit?: number; cursor?: string } = {}): { runs: OptimRunRow[]; nextCursor: string | null } {
+	const limit = checkLimit(options.limit ?? 50, 200);
+	const after = options.cursor === undefined ? null : decodeCursor(options.cursor);
+	const rows = db
+		.prepare(`SELECT * FROM optim_runs ${after ? "WHERE (created_at < ? OR (created_at = ? AND id < ?)) " : ""}ORDER BY created_at DESC, id DESC LIMIT ?`)
+		.all(...(after ? [after.key, after.key, after.id] : []), limit + 1)
+		.map(decodeRun);
+	const { items, nextCursor } = pageOf(rows, limit, (r) => ({ key: r.createdAt, id: r.id }));
+	return { runs: items, nextCursor };
 }
 
 export function insertOptimCandidate(db: Db, row: OptimCandidateRow): void {

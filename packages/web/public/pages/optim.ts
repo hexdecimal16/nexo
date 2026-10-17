@@ -1,21 +1,30 @@
-import type { EvalCasesResponse, MetaResponse, OptimDetailResponse, OptimListResponse } from "../lib/api-types.ts";
+import type { EvalCasesResponse, MetaResponse, OptimDetailResponse, OptimListResponse, OptimRunItem } from "../lib/api-types.ts";
 import { renderError } from "../lib/common-view.ts";
-import { renderOptimDetail, renderOptimList, renderProposedCases } from "../lib/optim-view.ts";
+import { optimQuery, renderOptimDetail, renderOptimList, renderProposedCases } from "../lib/optim-view.ts";
 import { asErrorBody, el, getJson, postJson } from "./api.ts";
 
 const errorBox = el<HTMLDivElement>("#error");
 const listBox = el<HTMLDivElement>("#optim-runs");
+const listMore = el<HTMLButtonElement>("#load-more");
 const proposedBox = el<HTMLDivElement>("#eval-proposed");
 const detailBox = el<HTMLDivElement>("#optim-detail");
 
 let readOnly = false;
+const loaded: OptimRunItem[] = [];
+let cursor: string | null = null;
 
 function showError(error: unknown): void {
 	errorBox.innerHTML = renderError(asErrorBody(error)).value;
 }
 
-async function loadList(): Promise<void> {
-	listBox.innerHTML = renderOptimList((await getJson<OptimListResponse>("/api/optim")).runs).value;
+/** Loads the first page of optimizations, or with `append` the page after the last one, and renders everything loaded so far. */
+async function loadList(append = false): Promise<void> {
+	const page = await getJson<OptimListResponse>(optimQuery(append ? cursor : null));
+	if (!append) loaded.length = 0;
+	loaded.push(...page.runs);
+	cursor = page.nextCursor ?? null;
+	listBox.innerHTML = renderOptimList(loaded).value;
+	listMore.hidden = cursor === null;
 }
 
 async function loadProposed(): Promise<void> {
@@ -41,7 +50,9 @@ document.addEventListener("click", (event) => {
 	const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>("button") : null;
 	if (!target) return;
 	const { optim, approve, accept, dismiss } = target.dataset;
-	if (optim) {
+	if (target === listMore) {
+		if (cursor !== null) loadList(true).catch(showError);
+	} else if (optim) {
 		errorBox.innerHTML = "";
 		loadDetail(optim).catch(showError);
 	} else if (approve) {

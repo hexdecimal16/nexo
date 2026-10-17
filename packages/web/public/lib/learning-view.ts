@@ -5,14 +5,25 @@ import { html, type SafeHtml } from "./html.ts";
 
 export const MEMORY_SCOPES_HINT = "user, global or skill:<name>";
 
-/** `/api/memories` with the filter form's values; empty values are left out. */
-export function memoriesQuery(scope: string, type: string, all: boolean): string {
+export const MEMORIES_PAGE_SIZE = 50;
+export const JOBS_PAGE_SIZE = 20;
+
+/** One page of `/api/memories` with the filter form's values (empty values left out); `cursor` asks for the page after a previous one. */
+export function memoriesQuery(scope: string, type: string, all: boolean, cursor: string | null = null, limit: number = MEMORIES_PAGE_SIZE): string {
 	const params = new URLSearchParams();
 	if (scope.trim()) params.set("scope", scope.trim());
 	if (type) params.set("type", type);
 	if (all) params.set("all", "1");
-	const query = params.toString();
-	return `/api/memories${query ? `?${query}` : ""}`;
+	params.set("limit", String(limit));
+	if (cursor) params.set("cursor", cursor);
+	return `/api/memories?${params.toString()}`;
+}
+
+/** One page of `/api/learn/jobs`, newest first. */
+export function jobsQuery(cursor: string | null, limit: number = JOBS_PAGE_SIZE): string {
+	const params = new URLSearchParams({ limit: String(limit) });
+	if (cursor) params.set("cursor", cursor);
+	return `/api/learn/jobs?${params.toString()}`;
 }
 
 function sourceBadge(source: string): SafeHtml {
@@ -42,10 +53,11 @@ export function renderMemories(memories: readonly Memory[], readOnly: boolean): 
 </table>`;
 }
 
-/** The replaced versions of a memory, newest first. */
-export function renderMemoryHistory(history: readonly Memory[]): SafeHtml {
-	if (history.length === 0) return html`<p class="muted">This memory has not replaced an earlier one.</p>`;
-	return html`<ol class="history">${history.map((m) => html`<li><span class="mono">${formatTime(m.createdAt)}</span> ${sourceBadge(m.source)} ${m.content}</li>`)}</ol>`;
+/** The replaced versions of a memory, newest first, under a heading that says which memory they belong to. */
+export function renderMemoryHistory(memory: Memory, history: readonly Memory[]): SafeHtml {
+	const heading = html`<h3>History of “${truncate(memory.content, 80)}”</h3>`;
+	if (history.length === 0) return html`${heading}<p class="muted">This memory has not replaced an earlier one.</p>`;
+	return html`${heading}<ol class="history">${history.map((m) => html`<li><span class="mono">${formatTime(m.createdAt)}</span> ${sourceBadge(m.source)} ${m.content}</li>`)}</ol>`;
 }
 
 /** Links to each skill's playbook (`data-playbook`). */

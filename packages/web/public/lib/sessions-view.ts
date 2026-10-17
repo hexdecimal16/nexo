@@ -21,7 +21,11 @@ export function renderSessionRows(sessions: readonly SessionListItem[]): SafeHtm
 	)}`;
 }
 
-/** A muted line when the list is cut at `limit`; empty otherwise. */
-export function renderSessionsLimitNote(count: number, limit: number): SafeHtml {
-	return count >= limit ? html`<p class="muted">Showing the ${limit} most recently updated sessions.</p>` : html``;
+export const SESSIONS_PAGE_SIZE = 50;
+
+/** API path for one page of sessions; `cursor` (from the previous page) asks for the next one. */
+export function sessionsQuery(cursor: string | null, limit: number = SESSIONS_PAGE_SIZE): string {
+	const params = new URLSearchParams({ limit: String(limit) });
+	if (cursor) params.set("cursor", cursor);
+	return `/api/sessions?${params.toString()}`;
 }

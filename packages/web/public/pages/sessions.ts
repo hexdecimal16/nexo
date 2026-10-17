@@ -1,22 +1,31 @@
-import type { SessionListResponse } from "../lib/api-types.ts";
+import type { SessionListItem, SessionListResponse } from "../lib/api-types.ts";
 import { renderError } from "../lib/common-view.ts";
-import { renderSessionRows, renderSessionsLimitNote } from "../lib/sessions-view.ts";
+import { renderSessionRows, sessionsQuery } from "../lib/sessions-view.ts";
 import { asErrorBody, el, getJson } from "./api.ts";
 
-const LIMIT = 200;
 const body = el<HTMLTableSectionElement>("#sessions-body");
-const noteBox = el<HTMLDivElement>("#limit-note");
+const more = el<HTMLButtonElement>("#load-more");
 const errorBox = el<HTMLDivElement>("#error");
 
-async function load(): Promise<void> {
+const loaded: SessionListItem[] = [];
+let cursor: string | null = null;
+
+/** Loads the first page, or with `append` the page after the last one, and renders everything loaded so far. */
+async function load(append: boolean): Promise<void> {
 	errorBox.innerHTML = "";
 	try {
-		const { sessions } = await getJson<SessionListResponse>(`/api/sessions?limit=${LIMIT}`);
-		body.innerHTML = renderSessionRows(sessions).value;
-		noteBox.innerHTML = renderSessionsLimitNote(sessions.length, LIMIT).value;
+		const page = await getJson<SessionListResponse>(sessionsQuery(append ? cursor : null));
+		if (!append) loaded.length = 0;
+		loaded.push(...page.sessions);
+		body.innerHTML = renderSessionRows(loaded).value;
+		cursor = page.nextCursor ?? null;
+		more.hidden = cursor === null;
 	} catch (error) {
 		errorBox.innerHTML = renderError(asErrorBody(error)).value;
 	}
 }
 
-void load();
+more.addEventListener("click", () => {
+	if (cursor !== null) void load(true);
+});
+void load(false);

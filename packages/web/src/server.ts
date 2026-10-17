@@ -265,7 +265,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 		}
 		if (ROUTES.optimList.test(path)) {
 			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
-			return sendJson(res, 200, optimListResponse(ctx));
+			return sendJson(res, 200, optimListResponse(ctx, url.searchParams));
 		}
 		if ((m = ROUTES.optim.exec(path))) {
 			if (method !== "GET") throw methodNotAllowed(method, path, "GET");

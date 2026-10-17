@@ -7,8 +7,8 @@ import { durationMs, formatDuration, formatUsd } from "../public/lib/format.ts";
 import { esc, html } from "../public/lib/html.ts";
 import { createPoller, MAX_POLL_BACKOFF_MS, POLL_MS, pollDelay } from "../public/lib/poller.ts";
 import { renderChildren, renderFeedbackForm, renderRunHeader, shouldPoll } from "../public/lib/run-view.ts";
-import { renderSessionRows, renderSessionsLimitNote } from "../public/lib/sessions-view.ts";
-import { renderRunRows, renderRunsNote, renderSessionFilter, renderStatusOptions, runsQuery } from "../public/lib/runs-view.ts";
+import { renderSessionRows, sessionsQuery } from "../public/lib/sessions-view.ts";
+import { readRunFilters, renderRunRows, renderRunsNote, renderSessionFilter, renderStatusOptions, runsPageSearch, runsQuery } from "../public/lib/runs-view.ts";
 import { findSpan, renderSpanDetail, renderSpanTree } from "../public/lib/span-view.ts";
 import { renderTimeline, timelineRows } from "../public/lib/timeline.ts";
 
@@ -513,9 +513,39 @@ describe("sessions view", () => {
 	});
 });
 
-describe("sessions limit note", () => {
-	it("appears only when the page is full", () => {
-		expect(renderSessionsLimitNote(199, 200).value).toBe("");
-		expect(renderSessionsLimitNote(200, 200).value).toContain("Showing the 200 most recently updated sessions");
+describe("sessions page query", () => {
+	it("asks for a page of sessions, then the next one by cursor", () => {
+		expect(sessionsQuery(null)).toBe("/api/sessions?limit=50");
+		expect(sessionsQuery("c&d", 10)).toBe("/api/sessions?limit=10&cursor=c%26d");
+	});
+});
+
+describe("runs page address", () => {
+	it("reads the tab and session from the search string and writes them back", () => {
+		expect(readRunFilters("?session=s%201&tab=review")).toMatchObject({ tab: "review", session: "s 1" });
+		expect(readRunFilters("?tab=bogus")).toMatchObject({ tab: "all", session: "" });
+		const f = { tab: "review" as const, status: "", skill: "", since: "", session: "s 1", scored: "" };
+		expect(runsPageSearch(f)).toBe("?session=s+1&tab=review");
+		expect(runsPageSearch({ ...f, tab: "all" })).toBe("?session=s+1");
+		expect(runsPageSearch({ ...f, tab: "all", session: "" })).toBe("");
+	});
+});
+
+describe("span selection", () => {
+	const tool = span({ id: "t", kind: "tool_call", name: "bash", parentSpanId: "s1", model: null });
+	const parent = span();
+
+	it("marks the selected span in the tree and nowhere else", () => {
+		const markup = renderSpanTree([node(parent, [node(tool)])], NOW, 2, "t").value;
+		expect(markup).toContain(`data-span-id="t" aria-current="true"`);
+		expect(markup.match(/aria-current/g)).toHaveLength(1);
+		expect(renderSpanTree([node(parent, [node(tool)])], NOW).value).not.toContain("aria-current");
+	});
+
+	it("marks the selected row in the timeline", () => {
+		const root = span({ id: "r", kind: "run", name: "run", startedAt: "2026-10-10T10:00:00.000Z", endedAt: "2026-10-10T10:00:10.000Z" });
+		const markup = renderTimeline(timelineRows([node(root)], NOW), "r").value;
+		expect(markup).toContain(`data-span-id="r" aria-current="true"`);
+		expect(renderTimeline(timelineRows([node(root)], NOW)).value).not.toContain("aria-current");
 	});
 });

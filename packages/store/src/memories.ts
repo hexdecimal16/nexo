@@ -1,6 +1,7 @@
 import { NexoError, type Redactor } from "@nexo/telemetry";
 import type { Db } from "./db.ts";
 import { transaction } from "./db.ts";
+import { checkLimit, decodeCursor, pageOf } from "./cursor.ts";
 import { invalidRequest } from "./errors.ts";
 import { newId } from "./ids.ts";
 
@@ -45,6 +46,8 @@ export interface MemoryFilter {
 	/** Include superseded and retired memories (history). */
 	includeInactive?: boolean;
 	limit?: number;
+	/** `nextCursor` of a previous page: the page continues after it. */
+	cursor?: string;
 }
 
 const SCOPE = /^(user|global|skill:[a-z0-9]+(-[a-z0-9]+)*)$/;
@@ -190,10 +193,14 @@ export function retireMemory(db: Db, id: string, actor: LearningActor, nowIso: s
 
 /** Memories by scope and type, newest first. Throws INVALID_REQUEST for a bad scope, type or limit. */
 export function listMemories(db: Db, filter: MemoryFilter = {}): MemoryRow[] {
+	return queryMemories(db, filter).memories;
+}
+
+/** One page of `listMemories`, newest first, with the cursor of the next page when there is one. */
+export function queryMemories(db: Db, filter: MemoryFilter = {}): { memories: MemoryRow[]; nextCursor: string | null } {
 	if (filter.scope !== undefined && !isMemoryScope(filter.scope)) throw invalidRequest("scope must be user, global or skill:<name>", { scope: filter.scope });
 	if (filter.type !== undefined && !isMemoryType(filter.type)) throw invalidRequest(`type must be one of ${MEMORY_TYPES.join(", ")}`, { type: filter.type });
-	const limit = filter.limit ?? 200;
-	if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw invalidRequest("limit must be an integer from 1 to 1000", { limit });
+	const limit = checkLimit(filter.limit ?? 200, 1000);
 	const where: string[] = [];
 	const args: (string | number)[] = [];
 	if (!filter.includeInactive) where.push("superseded_by IS NULL AND retired_at IS NULL");
@@ -205,8 +212,14 @@ export function listMemories(db: Db, filter: MemoryFilter = {}): MemoryRow[] {
 		where.push("type = ?");
 		args.push(filter.type);
 	}
+	if (filter.cursor !== undefined) {
+		const after = decodeCursor(filter.cursor);
+		where.push("(created_at < ? OR (created_at = ? AND id < ?))");
+		args.push(after.key, after.key, after.id);
+	}
 	const sql = `SELECT * FROM memories ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC, id DESC LIMIT ?`;
-	return db.prepare(sql).all(...args, limit).map(decode);
+	const { items, nextCursor } = pageOf(db.prepare(sql).all(...args, limit + 1).map(decode), limit, (m) => ({ key: m.createdAt, id: m.id }));
+	return { memories: items, nextCursor };
 }
 
 /** Live memories in any of `scopes` (retrieval candidates). */

@@ -1,6 +1,7 @@
 export * from "./artifacts.ts";
 export * from "./budget-ledger.ts";
 export * from "./cost-report.ts";
+export * from "./cursor.ts";
 export * from "./db.ts";
 export * from "./errors.ts";
 export * from "./eval-cases.ts";

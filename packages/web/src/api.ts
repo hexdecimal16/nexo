@@ -11,7 +11,7 @@ import {
 	getArtifact,
 	getOptimRun,
 	listOptimCandidates,
-	listOptimRuns,
+	queryOptimRuns,
 	type OptimRunRow,
 	confusionMatrix,
 	COST_DIMENSIONS,
@@ -31,7 +31,7 @@ import {
 	listDisagreements,
 	listFeedback,
 	listScores,
-	listSessionSummaries,
+	querySessionSummaries,
 	MAX_RUN_PAGE,
 	listSpans,
 	loadSpanTree,
@@ -48,8 +48,8 @@ import {
 	getPlaybookItem,
 	isSkillName,
 	listArtifactVersions,
-	listLearnJobs,
-	listMemories,
+	queryLearnJobs,
+	queryMemories,
 	listPlaybookItems,
 	listPlaybookSkills,
 	memoryHistory,
@@ -172,11 +172,11 @@ export function listRunsResponse(ctx: ApiContext, params: URLSearchParams): RunL
 	return queryRuns(ctx.db, query);
 }
 
-/** `GET /api/sessions?limit=`: chat sessions, most recently updated first, with their turn aggregates. */
+/** `GET /api/sessions?limit=&cursor=`: one page of chat sessions, most recently updated first, with their turn aggregates. */
 export function listSessionsResponse(ctx: ApiContext, params: URLSearchParams): SessionListResponse {
 	const limit = intParam(params, "limit", 50);
 	if (limit < 1 || limit > MAX_RUN_PAGE) throw invalidRequest(`limit must be an integer from 1 to ${MAX_RUN_PAGE}`, { limit });
-	return { sessions: listSessionSummaries(ctx.db, { limit }) };
+	return querySessionSummaries(ctx.db, { limit, cursor: optional(params, "cursor") });
 }
 
 export function runDetailResponse(ctx: ApiContext, id: string): RunDetailResponse {
@@ -492,16 +492,15 @@ function intParam(params: URLSearchParams, name: string, fallback: number): numb
 	return value;
 }
 
-/** `GET /api/memories?scope=&type=&all=1&limit=`: live memories (all with `all=1`), newest first. */
+/** `GET /api/memories?scope=&type=&all=1&limit=&cursor=`: one page of live memories (all with `all=1`), newest first. */
 export function memoriesResponse(ctx: ApiContext, params: URLSearchParams): MemoryListResponse {
-	return {
-		memories: listMemories(ctx.db, {
-			scope: optional(params, "scope"),
-			type: optional(params, "type"),
-			includeInactive: params.get("all") === "1",
-			limit: intParam(params, "limit", 200),
-		}),
-	};
+	return queryMemories(ctx.db, {
+		scope: optional(params, "scope"),
+		type: optional(params, "type"),
+		includeInactive: params.get("all") === "1",
+		limit: intParam(params, "limit", 200),
+		cursor: optional(params, "cursor"),
+	});
 }
 
 export function memoryDetailResponse(ctx: ApiContext, id: string): MemoryDetailResponse {
@@ -584,9 +583,10 @@ function readOptimReport(run: OptimRunRow): OptimReport | null {
 	}
 }
 
-/** `GET /api/optim`: optimizations, newest first. */
-export function optimListResponse(ctx: ApiContext): OptimListResponse {
-	return { runs: listOptimRuns(ctx.db, { limit: 100 }).map((run) => optimItem(ctx, run)) };
+/** `GET /api/optim?limit=&cursor=`: one page of optimizations, newest first. */
+export function optimListResponse(ctx: ApiContext, params: URLSearchParams): OptimListResponse {
+	const { runs, nextCursor } = queryOptimRuns(ctx.db, { limit: intParam(params, "limit", 50), cursor: optional(params, "cursor") });
+	return { runs: runs.map((run) => optimItem(ctx, run)), nextCursor };
 }
 
 /** `GET /api/optim/{id}`: the optimization, its candidates (lineage), its holdout report and whether it can be approved. */
@@ -610,12 +610,13 @@ export function approveOptimResponse(ctx: ApiContext, id: string): OptimApproveR
 	return { promoted: versionView(promoted), replaced: replaced ? versionView(replaced) : null, run: optimItem(ctx, requireOptimRun(ctx, id)) };
 }
 
-/** `GET /api/learn/jobs?status=&limit=`: job counts by status and the newest jobs. */
+/** `GET /api/learn/jobs?status=&limit=&cursor=`: job counts by status and one page of jobs, newest first. */
 export function learnJobsResponse(ctx: ApiContext, params: URLSearchParams): LearnJobsResponse {
-	const jobs = listLearnJobs(ctx.db, { status: optional(params, "status"), limit: intParam(params, "limit", 50) });
+	const { jobs, nextCursor } = queryLearnJobs(ctx.db, { status: optional(params, "status"), limit: intParam(params, "limit", 50), cursor: optional(params, "cursor") });
 	return {
 		counts: countLearnJobs(ctx.db),
 		jobs: jobs.map((j) => ({ id: j.id, runId: j.runId, kind: j.kind, trigger: j.trigger, status: j.status, attempts: j.attempts, lastError: j.lastError, createdAt: j.createdAt, updatedAt: j.updatedAt })),
+		nextCursor,
 	};
 }
 

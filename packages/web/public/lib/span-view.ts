@@ -26,14 +26,15 @@ export function spanLine(span: Span, nowMs: number): SafeHtml {
 	return html`<span class="kind kind-${span.kind}">${span.kind}</span> <span class="span-name">${span.name}</span>${subagentRun ? html` <span class="muted mono">${subagentRun}</span>` : ""} ${statusBadge(span.status)} <span class="muted mono">${formatDuration(durationMs(span.startedAt, span.endedAt, nowMs))}${span.costUsd > 0 || span.costUnknown ? ` · ${formatUsd(span.costUsd, span.costUnknown)}` : ""}${span.model ? ` · ${modelLabel(span)}` : ""}</span>`;
 }
 
-/** Nested <details> list; nodes deeper than `openDepth` start collapsed. Each summary carries data-span-id. */
-export function renderSpanTree(roots: SpanNode[], nowMs: number, openDepth: number = 2): SafeHtml {
+/** Nested <details> list; nodes deeper than `openDepth` start collapsed. Each summary carries data-span-id; the selected span gets aria-current. */
+export function renderSpanTree(roots: SpanNode[], nowMs: number, openDepth: number = 2, selectedId: string | null = null): SafeHtml {
+	const current = (id: string): SafeHtml | string => (id === selectedId ? html` aria-current="true"` : "");
 	const renderNode = (node: SpanNode, depth: number): SafeHtml => {
 		const line = spanLine(node.span, nowMs);
 		if (node.children.length === 0) {
-			return html`<li><button type="button" class="span-leaf" data-span-id="${node.span.id}">${line}</button></li>`;
+			return html`<li><button type="button" class="span-leaf" data-span-id="${node.span.id}"${current(node.span.id)}>${line}</button></li>`;
 		}
-		return html`<li><details${depth < openDepth || node.span.kind === "subagent" ? html` open` : ""}><summary data-span-id="${node.span.id}">${line}</summary><ul>${node.children.map((c) => renderNode(c, depth + 1))}</ul></details></li>`;
+		return html`<li><details${depth < openDepth || node.span.kind === "subagent" ? html` open` : ""}><summary data-span-id="${node.span.id}"${current(node.span.id)}>${line}</summary><ul>${node.children.map((c) => renderNode(c, depth + 1))}</ul></details></li>`;
 	};
 	if (roots.length === 0) return html`<p class="muted">No spans recorded.</p>`;
 	return html`<ul class="tree">${roots.map((r) => renderNode(r, 0))}</ul>`;

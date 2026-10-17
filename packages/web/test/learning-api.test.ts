@@ -122,3 +122,34 @@ describe("learning API", () => {
 		}
 	});
 });
+
+describe("learning API pagination", () => {
+	it("pages memories with a cursor until every memory was seen once", async () => {
+		const all = (await raw(server.port, "/api/memories?all=1&limit=200")).json() as MemoryListResponse;
+		expect(all.memories.length).toBeGreaterThanOrEqual(3);
+		const seen: string[] = [];
+		let cursor: string | null = null;
+		let pages = 0;
+		do {
+			const page = (await raw(server.port, `/api/memories?all=1&limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`)).json() as MemoryListResponse;
+			expect(page.memories.length).toBeLessThanOrEqual(2);
+			seen.push(...page.memories.map((m) => m.id));
+			cursor = page.nextCursor;
+			pages++;
+		} while (cursor);
+		expect(pages).toBeGreaterThan(1);
+		expect(seen).toEqual(all.memories.map((m) => m.id));
+		expect((await raw(server.port, "/api/memories?cursor=nope")).status).toBe(400);
+	});
+
+	it("pages learn jobs with a cursor", async () => {
+		enqueueLearnJob(db, { runId: "r-jobs-page", trigger: "run_end" }, NOW);
+		const first = (await raw(server.port, "/api/learn/jobs?limit=1")).json() as LearnJobsResponse;
+		expect(first.jobs).toHaveLength(1);
+		expect(first.nextCursor).toBeTruthy();
+		const second = (await raw(server.port, `/api/learn/jobs?limit=1&cursor=${encodeURIComponent(first.nextCursor ?? "")}`)).json() as LearnJobsResponse;
+		expect(second.jobs).toHaveLength(1);
+		expect(second.jobs[0]?.id).not.toBe(first.jobs[0]?.id);
+		expect(second.counts).toEqual(first.counts);
+	});
+});

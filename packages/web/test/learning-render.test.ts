@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LearnJobsResponse, Memory, PlaybookItem, PlaybookResponse } from "../public/lib/api-types.ts";
-import { memoriesQuery, renderJobs, renderMemories, renderMemoryHistory, renderPlaybook, renderPlaybookList } from "../public/lib/learning-view.ts";
+import { jobsQuery, memoriesQuery, renderJobs, renderMemories, renderMemoryHistory, renderPlaybook, renderPlaybookList } from "../public/lib/learning-view.ts";
 
 const XSS = `<img src=x onerror="alert(1)"><script>alert('x')</script>\``;
 
@@ -47,8 +47,11 @@ function item(overrides: Partial<PlaybookItem> = {}): PlaybookItem {
 
 describe("learning views", () => {
 	it("builds the memories query from the filter form", () => {
-		expect(memoriesQuery("", "", false)).toBe("/api/memories");
-		expect(memoriesQuery(" skill:ci ", "lesson", true)).toBe("/api/memories?scope=skill%3Aci&type=lesson&all=1");
+		expect(memoriesQuery("", "", false)).toBe("/api/memories?limit=50");
+		expect(memoriesQuery(" skill:ci ", "lesson", true)).toBe("/api/memories?scope=skill%3Aci&type=lesson&all=1&limit=50");
+		expect(memoriesQuery("", "", false, "c&d")).toBe("/api/memories?limit=50&cursor=c%26d");
+		expect(jobsQuery(null)).toBe("/api/learn/jobs?limit=20");
+		expect(jobsQuery("x y")).toBe("/api/learn/jobs?limit=20&cursor=x+y");
 	});
 
 	it("renders memories inert, with retire only for live memories and never read-only", () => {
@@ -59,7 +62,7 @@ describe("learning views", () => {
 		expect(markup).toContain('href="/run.html?id=01RUN"');
 		expect(renderMemories([memory()], true).value).not.toContain("data-retire-memory");
 		expect(renderMemories([], false).value).toContain("No memories match");
-		expectInert(renderMemoryHistory([memory()]).value);
+		expectInert(renderMemoryHistory(memory(), [memory()]).value);
 	});
 
 	it("renders playbooks inert with counters, history, retire buttons and versions", () => {
@@ -84,11 +87,21 @@ describe("learning views", () => {
 	it("renders job counts and errors inert", () => {
 		const data: LearnJobsResponse = {
 			counts: { pending: 1, running: 0, succeeded: 2, failed: 1 },
+			nextCursor: null,
 			jobs: [{ id: "j", runId: "01RUN", kind: "reflect", trigger: "run_end", status: "failed", attempts: 3, lastError: { code: "SCORER_FAILED", message: XSS, retryable: false }, createdAt: "2026-10-12T00:00:00.000Z", updatedAt: "2026-10-12T00:00:00.000Z" }],
 		};
 		const markup = renderJobs(data).value;
 		expectInert(markup);
 		expect(markup).toContain("1 failed");
 		expect(markup).toContain("nexo learn --retry");
+	});
+});
+
+describe("memory history", () => {
+	it("names the memory it belongs to and says when nothing was replaced", () => {
+		const markup = renderMemoryHistory(memory({ content: "Prefer tabs" }), []).value;
+		expect(markup).toContain("<h3>History of “Prefer tabs”</h3>");
+		expect(markup).toContain("has not replaced an earlier one");
+		expectInert(renderMemoryHistory(memory(), []).value);
 	});
 });

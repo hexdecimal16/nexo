@@ -11,7 +11,10 @@ function verdictMark(passed: boolean | null): { cls: string; mark: string; word:
 /** `0.82 ✓` / `0.40 ✗` / `0.50 –` for a run's latest scoring round; `–` when never scored, `failed` when no scorer answered. */
 export function renderScoreCell(score: RunScore | null): SafeHtml {
 	if (!score) return html`<span class="muted">–</span>`;
-	if (score.scorers === 0) return html`<span class="badge score-failed" title="every scorer failed">failed</span>`;
+	if (score.scorers === 0) {
+		const n = Math.max(1, score.failedScorers);
+		return html`<span class="badge warn" title="no scorer answered; the run itself may be fine">${n === 1 ? "scorer failed" : `${n} scorers failed`}</span>`;
+	}
 	const value = score.value === null ? "–" : score.value.toFixed(2);
 	const v = verdictMark(score.passed);
 	return html`<span class="badge ${v.cls}">${value} ${v.mark}</span>${score.failedScorers ? html` <span class="warn" title="scorers that failed">+${score.failedScorers} failed</span>` : ""}`;

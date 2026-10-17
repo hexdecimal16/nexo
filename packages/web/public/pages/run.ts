@@ -32,6 +32,7 @@ const fileView = el<HTMLElement>("#file-view");
 const errorBox = el<HTMLDivElement>("#error");
 
 let roots: SpanNode[] = [];
+let selectedSpanId: string | null = null;
 let filesLoaded = false;
 let readOnly: ReadOnlyInfo | null | undefined;
 
@@ -141,8 +142,8 @@ async function load(): Promise<boolean> {
 	setHtml(escalations, renderEscalations(run.escalations));
 	setHtml(children, renderChildren(run.children, now, readOnly ?? null, run.childFeedback));
 	roots = spans.roots;
-	setHtml(timeline, renderTimeline(timelineRows(roots, now)));
-	setHtml(tree, html`${spans.truncated ? html`<p class="warn">This run has ${spans.total} spans; only the earliest are shown.</p>` : ""}${renderSpanTree(roots, now)}`);
+	setHtml(timeline, renderTimeline(timelineRows(roots, now), selectedSpanId));
+	setHtml(tree, html`${spans.truncated ? html`<p class="warn">This run has ${spans.total} spans; only the earliest are shown.</p>` : ""}${renderSpanTree(roots, now, 2, selectedSpanId)}`);
 	restoreState(state);
 	if (!filesLoaded && !run.dirMissing) {
 		filesLoaded = true;
@@ -158,6 +159,15 @@ const poller = createPoller({
 	clearTimer: (handle) => window.clearTimeout(handle as number),
 });
 
+/** Marks one span as selected in the tree and the timeline without re-rendering them (a poll re-renders with the same mark). */
+function selectSpan(id: string): void {
+	selectedSpanId = id;
+	for (const marked of document.querySelectorAll<HTMLElement>("[data-span-id]")) {
+		if (marked.dataset.spanId === id) marked.setAttribute("aria-current", "true");
+		else marked.removeAttribute("aria-current");
+	}
+}
+
 // Dataset values are decoded raw strings: they only reach lookups, encodeURIComponent or filePath, never markup.
 document.addEventListener("click", (event) => {
 	const target = (event.target as HTMLElement).closest<HTMLElement>("[data-span-id],[data-full-span],[data-dir],[data-file],[data-file-path],[data-file-full]");
@@ -165,7 +175,11 @@ document.addEventListener("click", (event) => {
 	const d = target.dataset;
 	if (d.spanId !== undefined) {
 		const node = findSpan(roots, d.spanId);
-		if (node) detail.innerHTML = renderSpanDetail(node.span, node.attrsTruncated, Date.now()).value;
+		if (node) {
+			selectSpan(d.spanId);
+			detail.innerHTML = renderSpanDetail(node.span, node.attrsTruncated, Date.now()).value;
+			detail.scrollIntoView({ block: "nearest" });
+		}
 	} else if (d.fullSpan !== undefined) {
 		getJson<SpanResponse>(`/api/runs/${encodeURIComponent(runId)}/spans/${encodeURIComponent(d.fullSpan)}`)
 			.then((res) => (detail.innerHTML = renderSpanDetail(res.span, false, Date.now()).value))
@@ -191,9 +205,12 @@ document.addEventListener("submit", (event) => {
 		verdict: String(data.get("verdict") ?? ""),
 		comment: String(data.get("comment") ?? ""),
 	})
-		.then(() => {
+		.then(async () => {
 			form.reset();
-			return poller.refresh();
+			await poller.refresh();
+			// The refresh re-renders the form with its new latest-verdict line, so the status is looked up again.
+			const saved = document.querySelector<HTMLElement>(`form[data-feedback-run="${CSS.escape(form.dataset.feedbackRun ?? "")}"] .form-status`);
+			if (saved) saved.textContent = "Saved.";
 		})
 		.catch((error: unknown) => {
 			if (status) status.innerHTML = renderError(asErrorBody(error)).value;
