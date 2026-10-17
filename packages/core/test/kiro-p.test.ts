@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { createModels, Type, type Context } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { KIRO_P_PROVIDER, kiroPProvider, type KiroPRequest, nexoModels, parseReply } from "../src/index.ts";
@@ -99,6 +101,37 @@ describe("kiro-p provider", () => {
 		expect(msg.errorMessage).toBe('kiro-cli failed: stopped: agent "nexo" not found, using "default"');
 	});
 
+	it("writes a no-tools agent that denies every Kiro capability, so the model is offered no tools at all", async () => {
+		let agent: { tools?: unknown; permissions?: unknown } | undefined;
+		const { run } = fakeRun({ lines: [finished("hi")] });
+		const models = modelsWith((request) => {
+			agent = JSON.parse(readFileSync(join(request.cwd, ".kiro", "agents", "nexo.json"), "utf8"));
+			return run(request);
+		});
+		await models.completeSimple(models.getModel(KIRO_P_PROVIDER, "auto")!, { messages: [{ role: "user", content: "x", timestamp: 1 }] });
+
+		expect(agent?.tools).toEqual([]);
+		expect(agent?.permissions).toEqual({ rules: [{ capability: "all", effect: "deny" }] });
+	});
+
+	it("stops the run when the model calls a tool natively instead of listing it in tool_calls", async () => {
+		const native = (update: object) => ({ type: "sessionUpdate", data: { update } });
+		const { run, requests } = fakeRun({
+			lines: [
+				native({ sessionUpdate: "tool_call", toolCallId: "toolu_1", title: "bash", status: "in_progress" }),
+				native({ sessionUpdate: "tool_call_update", toolCallId: "toolu_1", status: "failed", rawOutput: 'Tool "bash" is not available.' }),
+				finished('{"text":"done","tool_calls":[]}'),
+			],
+		});
+		const models = modelsWith(run);
+		const msg = await models.completeSimple(models.getModel(KIRO_P_PROVIDER, "claude-sonnet-5.5")!, toolContext());
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0]!.signal?.aborted).toBe(true);
+		expect(msg.stopReason).toBe("error");
+		expect(msg.errorMessage).toBe('kiro-cli failed: stopped: native tool call "bash" (the nexo agent offers no tools)');
+	});
+
 	it("reports a runError event", async () => {
 		const { run } = fakeRun({ lines: [{ type: "runError", data: { stage: "prompt", message: "The model 'x' is not available." } }] });
 		const models = modelsWith(run);
@@ -120,6 +153,12 @@ describe("parseReply", () => {
 		expect(parseReply('{"text":"","tool_calls":[{"name":"rm","arguments":{}}]}', tools)).toBeUndefined();
 		expect(parseReply("no json here", tools)).toBeUndefined();
 		expect(parseReply('{"other":1}', tools)).toBeUndefined();
+	});
+	it("takes the last complete object when the reply repeats it after a self-correction", () => {
+		const first = '{"text":"first try","tool_calls":[{"name":"read","arguments":{"path":"a.ts"}}]}';
+		const second = '{"text":"second try","tool_calls":[{"name":"read","arguments":{"path":"b.ts"}}]}';
+		const raw = `Starting now.\n\n\`\`\`json\n${first}\n\`\`\`\n\nWait, the reply must be a single JSON object with no code fence.\n\n${second}`;
+		expect(parseReply(raw, tools)).toMatchObject({ text: "second try", calls: [{ name: "read", arguments: { path: "b.ts" } }] });
 	});
 	it("accepts a plain final answer", () => {
 		expect(parseReply('{"text":"done","tool_calls":[]}', tools)).toEqual({ text: "done", calls: [] });
