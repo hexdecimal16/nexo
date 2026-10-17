@@ -12,6 +12,7 @@ export interface NexoPaths {
 	skills: string;
 	config: string;
 	credentials: string;
+	wikis: string;
 }
 
 export function resolveNexoPaths(env: NodeJS.ProcessEnv = process.env): NexoPaths {
@@ -26,9 +27,10 @@ export function resolveNexoPaths(env: NodeJS.ProcessEnv = process.env): NexoPath
 		skills: join(home, "skills"),
 		config: join(home, "config.json"),
 		credentials: join(home, "credentials.json"),
+		wikis: join(home, "wikis"),
 	};
 }
 
 export function ensureNexoDirs(paths: NexoPaths): void {
-	for (const dir of [paths.home, paths.runs, paths.sessions, paths.optim, paths.logs, paths.skills]) mkdirSync(dir, { recursive: true });
+	for (const dir of [paths.home, paths.runs, paths.sessions, paths.optim, paths.logs, paths.skills, paths.wikis]) mkdirSync(dir, { recursive: true });
 }
