@@ -35,6 +35,7 @@ import {
 	liveJudgeKappa,
 	monthScope,
 	newId,
+	type MinibatchRecord,
 	type OptimRunRow,
 	type OptimStopReason,
 	type OptimTarget,
@@ -287,6 +288,7 @@ export async function startOptimization(baseEnv: EngineEnv, options: OptimizeOpt
 	const perCaseOf = (batch: readonly EvalCase[], result: DetailedEvaluation): Record<string, CaseScore> =>
 		Object.fromEntries(batch.map((c, i) => [c.id, result.scores[i] ?? { quality: 0, costUsd: 0 }]));
 	const artifactOfCandidate = new Map<string, string>([[seedRef.id, base.id]]);
+	const minibatches = new Map<string, MinibatchRecord>();
 	const finish = (patch: Partial<OptimRunRow>): OptimRunRow => {
 		updateOptimRun(db, optimRunId, { spentUsd: ctx.budget.spentUsd, rollouts: ctx.rollouts, endedAt: nowIso(), ...patch });
 		const run = getOptimRun(db, optimRunId) as OptimRunRow;
@@ -322,6 +324,8 @@ export async function startOptimization(baseEnv: EngineEnv, options: OptimizeOpt
 			feedback: cases.feedback,
 			pareto: cases.pareto,
 			patience: config.optimize.patience,
+			noveltySimilarity: config.optimize.noveltySimilarity,
+			offspringAlpha: config.optimize.offspringAlpha,
 			merge: options.merge ?? false,
 			rng: mulberry32(seed),
 			signal,
@@ -334,7 +338,16 @@ export async function startOptimization(baseEnv: EngineEnv, options: OptimizeOpt
 					insertOptimCandidate(db, { id, optimRunId, artifactId: artifact.id, parentIds: input.parentIds, iteration: input.iteration, origin: input.origin, component: input.component, minibatch: null, perCase: {}, meanScore: null, meanCostUsd: null, accepted: false, createdAt: nowIso() });
 					return { id, artifactId: artifact.id, texts: textsOf(target, artifact.content) };
 				},
-				recordMinibatch: (id, record, accepted) => updateOptimCandidate(db, id, { minibatch: record, accepted }),
+				recordMinibatch: (id, record, accepted) => {
+					minibatches.set(id, record);
+					updateOptimCandidate(db, id, { minibatch: record, accepted });
+				},
+				recordNotes: (id, notes) => {
+					const record = minibatches.get(id);
+					if (!record) return;
+					const saved = redact({ rationale: notes.rationale, prediction: notes.prediction });
+					updateOptimCandidate(db, id, { minibatch: { ...record, rationale: saved.rationale, ...(saved.prediction ? { prediction: saved.prediction } : {}) } });
+				},
 				recordPareto: (id, perCase, accepted) => {
 					const mean = meanOf(perCase, cases.pareto.map((c) => c.id));
 					updateOptimCandidate(db, id, { perCase, meanScore: mean.quality, meanCostUsd: mean.costUsd, accepted });

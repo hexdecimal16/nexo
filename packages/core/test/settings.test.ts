@@ -269,6 +269,8 @@ describe("config settings", () => {
 			"optimize.minCases",
 			"optimize.patience",
 			"optimize.minJudgeKappa",
+			"optimize.noveltySimilarity",
+			"optimize.offspringAlpha",
 		]);
 		for (const s of byKey.values()) expect(s.description.length).toBeGreaterThan(0);
 		expect(settings.getSetting("budgets.monthlyUsd").value).toBe(150);

@@ -5,13 +5,17 @@ import {
 	type EvalCase,
 	type EvaluationBatch,
 	type GepaAdapter,
+	type ProposalNotes,
 	type ReflectiveExample,
 	textsOf,
 } from "@nexo/optimize";
 import { type JudgeCaller, judgeScorer, renderTrajectory } from "@nexo/scorers";
-import { type ArtifactRow, type CaseScore, getArtifact, getRun, listSpans, type OptimTarget, readRunJson, type ScoreRow } from "@nexo/store";
+import { addSpend, type ArtifactRow, type CaseScore, dayScope, getArtifact, getRun, listSpans, monthScope, type OptimTarget, readRunJson, type ScoreRow } from "@nexo/store";
 import { NexoError } from "@nexo/telemetry";
+import { optimScope } from "../cost/admission.ts";
 import { RunBudget } from "../cost/budget.ts";
+import { embedCharged } from "../learn/caller.ts";
+import { embeddingEndpoint } from "../learn/embedder.ts";
 import { runChargedCompletion } from "../engine/charged-completion.ts";
 import { executeRun } from "../engine/run.ts";
 import { priceUsage } from "../cost/pricing.ts";
@@ -243,18 +247,54 @@ async function evaluateRubric(ctx: OptimContext, batch: readonly EvalCase[], can
 /** The GepaAdapter of an optimization (spec §8.2.8): rollouts, reflective datasets and reflection proposals. */
 export function createOptimAdapter(ctx: OptimContext): OptimAdapter {
 	const payer = optimPayer(ctx);
+	let notes: ProposalNotes | null = null;
 	return {
 		evaluate: (batch, candidate, captureTraces, signal) =>
 			ctx.target.kind === "judge_rubric" ? evaluateRubric(ctx, batch, candidate, captureTraces, signal) : evaluateAgent(ctx, batch, candidate, captureTraces, signal),
 		makeReflectiveDataset: (_candidate, evalBatch, components) => Object.fromEntries(components.map((c) => [c, evalBatch.traces ?? []])),
-		proposeNewTexts: async (candidate, dataset, components) => {
+		embed: async (texts, signal) => {
+			const endpoint = embeddingEndpoint(ctx.env.deps.config);
+			if (!endpoint || texts.length === 0) return null;
+			try {
+				return await embedCharged(
+					{
+						env: ctx.env,
+						recorder: ctx.recorder,
+						parentSpanId: ctx.parentSpanId,
+						budget: ctx.budget,
+						signal,
+						// embedCharged settles the optimization budget itself; this adds the ledgers and the optimizer's own totals.
+						charge: (usd, unknown) => {
+							const now = ctx.env.now();
+							addSpend(ctx.env.deps.db, [dayScope(now), monthScope(now), optimScope(ctx.optimRunId)], usd, now.toISOString());
+							ctx.addCost(usd, unknown);
+						},
+					},
+					endpoint,
+					texts,
+					"novelty",
+				);
+			} catch (error) {
+				if (signal.aborted) throw error;
+				ctx.env.deps.logger.warn("novelty embedding failed; near-duplicates are found by word overlap", { error });
+				return null;
+			}
+		},
+		takeProposalNotes: () => {
+			const taken = notes;
+			notes = null;
+			return taken;
+		},
+		proposeNewTexts: async (candidate, dataset, components, _signal, hints) => {
+			notes = null;
 			const texts: ComponentTexts = {};
 			for (const component of components) {
-				const proposal = await proposeText(payer, { target: ctx.target, component, currentText: candidate.texts[component] ?? "", examples: dataset[component] ?? [] });
+				const proposal = await proposeText(payer, { target: ctx.target, component, currentText: candidate.texts[component] ?? "", examples: dataset[component] ?? [], ...(hints ? { scratchpad: hints } : {}) });
 				const problem = "problem" in proposal ? proposal.problem : null;
 				ctx.onEvent?.({ type: "reflection", candidateId: candidate.id, component, problem });
 				if ("problem" in proposal) return null;
 				texts[component] = proposal.text;
+				notes = { rationale: proposal.rationale, prediction: proposal.prediction ?? null };
 			}
 			return texts;
 		},
