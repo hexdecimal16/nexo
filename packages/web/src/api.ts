@@ -59,6 +59,7 @@ import {
 	retireMemory,
 	retirePlaybookItem,
 	transaction,
+	resolveNexoPaths,
 } from "@nexo/store";
 import { NexoError, type Redactor } from "@nexo/telemetry";
 import { resolveConfined } from "@nexo/tools";
@@ -94,6 +95,11 @@ import type {
 	SessionListResponse,
 	SpanResponse,
 	SpanTreeResponse,
+	WikiItem,
+	WikiListResponse,
+	WikiPageItem,
+	WikiPagesResponse,
+	WikiPageResponse,
 } from "../public/lib/api-types.ts";
 import { SECURITY_HEADERS } from "./http-errors.ts";
 
@@ -112,6 +118,7 @@ export interface ApiContext {
 	learning: { enabled: boolean };
 	/** `optimize.minJudgeKappa` of the loaded config, for the approval gate. */
 	optimize: { minJudgeKappa: number };
+	wikisDir?: string;
 }
 
 function requireRun(db: Db, id: string): RunRow {
@@ -628,4 +635,148 @@ export function evalCasesResponse(ctx: ApiContext, params: URLSearchParams): Eva
 /** `POST /api/eval-cases/{id}/accept|dismiss`: a user decision on a proposed case; 404 unknown, 409 not proposed. */
 export function reviewEvalCaseResponse(ctx: ApiContext, id: string, decision: "accept" | "dismiss"): EvalCaseResponse {
 	return { case: evalCaseItem(reviewProposedCase(ctx.db, id, decision, { redact: ctx.redact, nowIso: ctx.now().toISOString() })) };
+}
+
+function parseSummary(content: string): string | undefined {
+	const head = content.slice(0, 2048);
+	const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(head);
+	if (!match || !match[1]) return undefined;
+	const lines = match[1].split("\n");
+	for (const line of lines) {
+		const m = /^summary:\s*(.*)$/i.exec(line.trim());
+		if (m && m[1]) return m[1].trim().replace(/^["']|["']$/g, "");
+	}
+	return undefined;
+}
+
+/** `GET /api/wikis`: lists all wiki directories under the wikis path. */
+export function listWikisResponse(ctx: ApiContext): WikiListResponse {
+	const dir = ctx.wikisDir ?? resolveNexoPaths().wikis;
+	if (!existsSync(dir)) return { wikis: [] };
+	const wikis: WikiItem[] = [];
+	for (const entry of readdirSync(dir)) {
+		const full = join(dir, entry);
+		try {
+			const st = statSync(full);
+			if (!st.isDirectory() || entry.startsWith(".")) continue;
+			let pageCount = 0;
+			let maxModified = st.mtime;
+			const scan = (d: string) => {
+				for (const f of readdirSync(d)) {
+					const fp = join(d, f);
+					try {
+						const fst = statSync(fp);
+						if (fst.isDirectory()) {
+							if (!f.startsWith(".") && f !== ".git") scan(fp);
+						} else if (f.endsWith(".md")) {
+							pageCount++;
+							if (fst.mtime > maxModified) maxModified = fst.mtime;
+						}
+					} catch {
+						// ignore
+					}
+				}
+			};
+			scan(full);
+			wikis.push({
+				name: entry,
+				pageCount,
+				modifiedAt: maxModified.toISOString(),
+			});
+		} catch {
+			// ignore
+		}
+	}
+	wikis.sort((a, b) => a.name.localeCompare(b.name));
+	return { wikis };
+}
+
+/** `GET /api/wikis/{name}/pages`: lists all markdown pages in a wiki with summary metadata. */
+export function listWikiPagesResponse(ctx: ApiContext, wikiName: string): WikiPagesResponse {
+	const root = ctx.wikisDir ?? resolveNexoPaths().wikis;
+	let wikiDir: string;
+	try {
+		wikiDir = resolveConfined(root, wikiName);
+	} catch (error) {
+		if (error instanceof NexoError && error.code === "TOOL_DENIED") {
+			throw new NexoError({ code: "FORBIDDEN", message: `Wiki "${wikiName}" is outside the wikis directory`, context: { wiki: wikiName } });
+		}
+		throw error;
+	}
+	if (!existsSync(wikiDir) || !statSync(wikiDir).isDirectory()) {
+		throw new NexoError({ code: "NOT_FOUND", message: `Wiki "${wikiName}" does not exist`, context: { wiki: wikiName } });
+	}
+	const pages: WikiPageItem[] = [];
+	const walk = (d: string) => {
+		for (const f of readdirSync(d)) {
+			if (f.startsWith(".") || f === ".git") continue;
+			const fp = join(d, f);
+			try {
+				const st = statSync(fp);
+				if (st.isDirectory()) {
+					walk(fp);
+				} else if (f.endsWith(".md")) {
+					const rel = relative(wikiDir, fp).split(sep).join("/");
+					const slug = rel.slice(0, -3);
+					const folder = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : undefined;
+					const content = readFileSync(fp, "utf8");
+					const summary = parseSummary(content);
+					pages.push({
+						path: rel,
+						slug,
+						summary,
+						folder,
+						size: st.size,
+						modifiedAt: st.mtime.toISOString(),
+					});
+				}
+			} catch {
+				// ignore
+			}
+		}
+	};
+	walk(wikiDir);
+	pages.sort((a, b) => a.path.localeCompare(b.path));
+	return { wiki: wikiName, pages };
+}
+
+/** `GET /api/wikis/{name}/page?path=`: returns the text and summary of a single wiki page. */
+export function wikiPageResponse(ctx: ApiContext, wikiName: string, relPath: string): WikiPageResponse {
+	if (relPath.includes("\0")) throw invalidRequest("Path contains a NUL byte");
+	const root = ctx.wikisDir ?? resolveNexoPaths().wikis;
+	let wikiDir: string;
+	try {
+		wikiDir = resolveConfined(root, wikiName);
+	} catch (error) {
+		if (error instanceof NexoError && error.code === "TOOL_DENIED") {
+			throw new NexoError({ code: "FORBIDDEN", message: `Wiki "${wikiName}" is outside the wikis directory`, context: { wiki: wikiName } });
+		}
+		throw error;
+	}
+	if (!existsSync(wikiDir) || !statSync(wikiDir).isDirectory()) {
+		throw new NexoError({ code: "NOT_FOUND", message: `Wiki "${wikiName}" does not exist`, context: { wiki: wikiName } });
+	}
+	let target: string;
+	try {
+		target = resolveConfined(wikiDir, relPath);
+	} catch (error) {
+		if (error instanceof NexoError && error.code === "TOOL_DENIED") {
+			throw new NexoError({ code: "FORBIDDEN", message: `Path "${relPath}" is outside the wiki directory`, context: { wiki: wikiName, path: relPath } });
+		}
+		throw error;
+	}
+	if (!existsSync(target) || !statSync(target).isFile()) {
+		throw new NexoError({ code: "NOT_FOUND", message: `No page "${relPath}" in wiki "${wikiName}"`, context: { wiki: wikiName, path: relPath } });
+	}
+	const content = ctx.redact(readFileSync(target, "utf8"));
+	const st = statSync(target);
+	const summary = parseSummary(content);
+	return {
+		wiki: wikiName,
+		path: relPath,
+		content,
+		summary,
+		size: st.size,
+		modifiedAt: st.mtime.toISOString(),
+	};
 }
