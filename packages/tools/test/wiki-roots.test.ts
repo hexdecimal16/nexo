@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -48,13 +48,19 @@ describe("wiki roots", () => {
 		expect(readFileSync(join(workspace, "a.txt"), "utf8")).toBe("ok");
 	});
 
-	it("denies other nexo home files and paths outside every root", async () => {
+	it("denies other nexo home files", async () => {
 		const { home, tool } = setup();
 		await expect(tool("write").execute("1", { path: join(home, "config.json"), content: "x" })).rejects.toThrow();
 		await expect(tool("write").execute("2", { path: join(home, "runs", "r2", "x.txt"), content: "x" })).rejects.toThrow();
-		await expect(tool("write").execute("3", { path: join(tmpdir(), "nexo-escape.txt"), content: "x" })).rejects.toThrow();
 		expect(readFileSync(join(home, "config.json"), "utf8")).toBe("{}");
-		expect(existsSync(join(tmpdir(), "nexo-escape.txt"))).toBe(false);
+	});
+
+	it("writes and edits files outside the workspace", async () => {
+		const { tool } = setup();
+		const outside = join(mkdtempSync(join(tmpdir(), "nexo-outside-")), "a.txt");
+		await tool("write").execute("1", { path: outside, content: "one" });
+		await tool("edit").execute("2", { path: outside, oldText: "one", newText: "two" });
+		expect(readFileSync(outside, "utf8")).toBe("two");
 	});
 
 	it("denies a dot-dot path that leaves the wikis directory", async () => {

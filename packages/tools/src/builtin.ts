@@ -6,7 +6,7 @@ import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { NexoError } from "@nexo/telemetry";
 import { Type } from "typebox";
 import type { ChangeTracker } from "./change-tracker.ts";
-import { canonicalPath, nexoHomeGuard, resolveConfined, resolveConfinedOrIn, SECRET_PATH } from "./confine.ts";
+import { canonicalPath, nexoHomeGuard, resolveConfined, SECRET_PATH } from "./confine.ts";
 import type { FileLeases } from "./leases.ts";
 
 export const MAX_BASH_OUTPUT_BYTES = 1_000_000;
@@ -170,8 +170,8 @@ const FetchParams = Type.Object({ url: Type.String({ description: "http(s) URL" 
 export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 	const root = realpathSync(ctx.workspaceRoot);
 	const guard = ctx.nexoHome === undefined ? null : nexoHomeGuard(ctx.nexoHome, root, ctx.runWorkspace, ctx.wikiRoots);
-	/** A tool path argument made absolute: inside the workspace, or inside a wiki root when given absolutely. */
-	const resolvePath = (target: string): string => resolveConfinedOrIn(root, target, ctx.wikiRoots ?? []);
+	/** A tool path argument made absolute (relative paths start at the workspace) and resolved through realpath. Not confined to the workspace. */
+	const resolvePath = (target: string): string => canonicalPath(target, root);
 
 	/** Reads are not confined to the workspace. Outside it, key, token and credential files are refused: bash reads them through approval. */
 	const resolveReadPath = (target: string): string => {
@@ -240,7 +240,7 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 	const write: AgentTool<typeof WriteParams> = {
 		name: "write",
 		label: "Write file",
-		description: "Create or overwrite a file in the workspace.",
+		description: "Create or overwrite a file. Relative paths start at the workspace; absolute paths are written where they are.",
 		parameters: WriteParams,
 		execute: async (_id, params) => {
 			const abs = resolvePath(params.path);
