@@ -26,7 +26,7 @@ export interface SystemPromptParts {
 
 /** The line that points the agent at the wikis directory; the wiki skill holds the rules for using it. */
 export function wikiPrompt(wikisDir: string): string {
-	return `Wikis: the user keeps persistent knowledge bases as markdown folders under ${wikisDir}. Leave them alone unless the task is about one; then load the wiki skill with load_skill first.`;
+	return `Wikis: the user keeps persistent knowledge bases as markdown folders under ${wikisDir}. When a task produces durable subject knowledge worth keeping (research findings, a source you read, a topic the user keeps returning to), load the wiki skill with load_skill and file it in the wiki that fits, creating a new wiki when none fits. Do not create or edit wikis for one-off questions, small talk or routine code changes. Load the wiki skill first whenever the task is about a wiki.`;
 }
 
 export function renderSystemPrompt(parts: SystemPromptParts): string {
