@@ -93,6 +93,8 @@ export interface GepaOptions {
 	noveltySimilarity?: number;
 	/** Weight of a parent's child count when sampling parents; OFFSPRING_ALPHA by default, 0 turns the penalty off. */
 	offspringAlpha?: number;
+	/** What earlier optimizations of this target learned; the loop starts from a copy and extends it. */
+	scratchpad?: Scratchpad;
 	merge: boolean;
 	rng: Rng;
 	signal: AbortSignal;
@@ -105,6 +107,8 @@ export interface GepaResult {
 	stopReason: OptimStopReason;
 	iterations: number;
 	merges: number;
+	/** The scratchpad at the end of the loop: the given one plus what this loop learned. */
+	scratchpad: Scratchpad;
 }
 
 const EPS = 1e-9;
@@ -141,6 +145,10 @@ export async function runGepa(options: GepaOptions): Promise<GepaResult> {
 	let merges = 0;
 	let componentIndex = 0;
 	const scratchpad = emptyScratchpad();
+	if (options.scratchpad) {
+		scratchpad.patterns.push(...options.scratchpad.patterns);
+		scratchpad.antiPatterns.push(...options.scratchpad.antiPatterns);
+	}
 	const noveltyLimit = options.noveltySimilarity ?? NOVELTY_MAX_SIMILARITY;
 	const vectors = new Map<string, number[]>();
 	const joined = (t: ComponentTexts) => options.components.map((c) => t[c] ?? "").join(" ");
@@ -265,7 +273,7 @@ export async function runGepa(options: GepaOptions): Promise<GepaResult> {
 		else if (signal.aborted) stopReason = "aborted";
 		else throw error;
 	}
-	return { table, bestId: bestCandidate(table, caseIds), stopReason: stopReason ?? "patience", iterations, merges };
+	return { table, bestId: bestCandidate(table, caseIds), stopReason: stopReason ?? "patience", iterations, merges, scratchpad };
 }
 
 /** Children per candidate, counted from the lineage (rejected children count too). */

@@ -142,6 +142,7 @@ export const EDITABLE_SETTINGS: readonly SettingDefinition[] = [
 		description: "Model that decides approvals in auto mode: s1, s2 or provider/model-id (effort defaults to low)",
 		type: { kind: "modelOrRef" },
 	},
+	{ key: "models.embedding", label: "Model embedding", description: "Embedding model for memory, eval mining and optimization novelty checks (provider/model-id); its price goes in pricingOverrides in config.json", type: { kind: "model" } },
 	{ key: "learning.enabled", label: "Learning", description: "Learn lessons from judged runs (on/off)", type: { kind: "boolean" } },
 	{ key: "learning.perJobUsd", label: "Learning budget per job", description: "Spending cap for one learn job, in USD", type: USD },
 	{ key: "memory.enabled", label: "Memory", description: "Retrieve stored memories into the prompt (on/off)", type: { kind: "boolean" } },
