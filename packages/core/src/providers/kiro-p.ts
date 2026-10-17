@@ -148,18 +148,56 @@ function toolCallId(): string {
 	return `kiro_p_${Date.now().toString(36)}_${callSeq}`;
 }
 
-/** Parses a tools-turn reply: the JSON object, tolerating a code fence or stray prose around it. Undefined when there is none. */
-export function parseReply(raw: string, tools: readonly Tool[]): { text: string; calls: ToolCall[] } | undefined {
-	const start = raw.indexOf("{");
-	const end = raw.lastIndexOf("}");
-	if (start < 0 || end < start) return undefined;
-	let obj: { text?: unknown; tool_calls?: unknown };
-	try {
-		obj = JSON.parse(raw.slice(start, end + 1));
-	} catch {
-		return undefined;
+/** Spans of the top-level `{...}` groups in `raw`, braces inside JSON strings ignored. */
+function objectSpans(raw: string): [start: number, end: number][] {
+	const spans: [number, number][] = [];
+	let depth = 0;
+	let start = -1;
+	let inString = false;
+	let escaped = false;
+	for (let i = 0; i < raw.length; i++) {
+		const ch = raw[i];
+		if (inString) {
+			if (escaped) escaped = false;
+			else if (ch === "\\") escaped = true;
+			else if (ch === '"') inString = false;
+		} else if (ch === '"' && depth > 0) inString = true;
+		else if (ch === "{") {
+			if (depth === 0) start = i;
+			depth++;
+		} else if (ch === "}" && depth > 0) {
+			depth--;
+			if (depth === 0) spans.push([start, i]);
+		}
 	}
-	if (typeof obj !== "object" || obj === null || !("text" in obj || "tool_calls" in obj)) return undefined;
+	return spans;
+}
+
+type Reply = { text?: unknown; tool_calls?: unknown };
+
+function isReply(value: unknown): value is Reply {
+	return typeof value === "object" && value !== null && ("text" in value || "tool_calls" in value);
+}
+
+/**
+ * Parses a tools-turn reply: the JSON object, tolerating a code fence or stray prose around it. The model sometimes
+ * writes the object, corrects itself ("no code fence") and writes it again, so the last object that parses wins.
+ * Undefined when there is none.
+ */
+export function parseReply(raw: string, tools: readonly Tool[]): { text: string; calls: ToolCall[] } | undefined {
+	let obj: Reply | undefined;
+	for (const [start, end] of objectSpans(raw).reverse()) {
+		try {
+			const candidate: unknown = JSON.parse(raw.slice(start, end + 1));
+			if (isReply(candidate)) {
+				obj = candidate;
+				break;
+			}
+		} catch {
+			// Not JSON (a brace in prose, or a fenced block the model abandoned): try the previous span.
+		}
+	}
+	if (!obj) return undefined;
 	const known = new Set(tools.map((t) => t.name));
 	const calls: ToolCall[] = [];
 	if (Array.isArray(obj.tool_calls)) {
@@ -231,7 +269,19 @@ function streamKiroP(run: KiroPRunner, model: Model<string>, context: Transcript
 			// The agent lives in a throwaway workspace: Kiro finds it under ./.kiro/agents, and no project files are in reach.
 			dir = await mkdtemp(join(tmpdir(), "nexo-kiro-p-"));
 			await mkdir(join(dir, ".kiro", "agents"), { recursive: true });
-			const agent = { name: AGENT_NAME, description: "nexo model turn", prompt: systemPrompt || "You are a helpful assistant.", tools: [], mcpServers: {}, includeMcpJson: false, includePowers: false };
+			const agent = {
+				name: AGENT_NAME,
+				description: "nexo model turn",
+				prompt: systemPrompt || "You are a helpful assistant.",
+				tools: [],
+				// `tools: []` alone still leaves Kiro's skill tool in the request, which keeps the model in tool-calling mode and
+				// makes it call the actions below natively ("Tool X is not available"). Denying every capability empties the
+				// request's tool list, so the model cannot emit a tool call at all.
+				permissions: { rules: [{ capability: "all", effect: "deny" }] },
+				mcpServers: {},
+				includeMcpJson: false,
+				includePowers: false,
+			};
 			await writeFile(join(dir, ".kiro", "agents", `${AGENT_NAME}.json`), JSON.stringify(agent), "utf8");
 			const args = ["chat", "--v3", "--no-interactive", "--agent", AGENT_NAME, "--trust-tools=", "--output-format", "stream-json", "--model", model.id];
 			const effort = effortFlag(options?.reasoning);
@@ -246,6 +296,8 @@ function streamKiroP(run: KiroPRunner, model: Model<string>, context: Transcript
 				// A missing or rejected agent makes Kiro fall back to its default agent, which has tools: stop the run.
 				const kill = new AbortController();
 				let fellBack: string | undefined;
+				// A native tool call means the model was offered tools after all; Kiro would answer "not available" and loop.
+				let nativeCall: string | undefined;
 				const onAbort = () => kill.abort();
 				signal?.addEventListener("abort", onAbort, { once: true });
 				const proc = run({
@@ -273,7 +325,7 @@ function streamKiroP(run: KiroPRunner, model: Model<string>, context: Transcript
 				try {
 					for await (const line of proc.lines) {
 						if (!line.trim()) continue;
-						let event: { type?: string; data?: { status?: string; stopReason?: string; finalText?: string; message?: string; update?: { sessionUpdate?: string; content?: { type?: string; text?: string } } } };
+						let event: { type?: string; data?: { status?: string; stopReason?: string; finalText?: string; message?: string; update?: { sessionUpdate?: string; title?: string; content?: { type?: string; text?: string } } } };
 						try {
 							event = JSON.parse(line);
 						} catch {
@@ -285,7 +337,12 @@ function streamKiroP(run: KiroPRunner, model: Model<string>, context: Transcript
 							outcome.stopReason = data.stopReason;
 							if (data.status !== "success") outcome.error = `run ${data.status ?? "failed"}${data.stopReason ? ` (${data.stopReason})` : ""}`;
 						} else if (event.type === "runError") outcome.error = data.message ?? "run failed";
-						else if (event.type === "sessionUpdate" && !useTools) {
+						else if (event.type === "sessionUpdate" && data.update?.sessionUpdate === "tool_call") {
+							if (!nativeCall) {
+								nativeCall = data.update.title ?? "tool";
+								kill.abort();
+							}
+						} else if (event.type === "sessionUpdate" && !useTools) {
 							const kind = data.update?.sessionUpdate === "agent_message_chunk" ? "text" : data.update?.sessionUpdate === "agent_thought_chunk" ? "thinking" : undefined;
 							const delta = data.update?.content?.type === "text" ? data.update.content.text : undefined;
 							if (!kind || !delta) continue;
@@ -304,6 +361,7 @@ function streamKiroP(run: KiroPRunner, model: Model<string>, context: Transcript
 					close();
 					const exit = await proc.exit;
 					if (fellBack) outcome.error = `stopped: ${fellBack}`;
+					else if (nativeCall) outcome.error = `stopped: native tool call "${nativeCall}" (the nexo agent offers no tools)`;
 					else if (!outcome.error && outcome.stopReason === undefined) outcome.error = exit.stderr.trim().split("\n").at(-1) || `exited with code ${exit.code ?? "null"} without a result`;
 				} finally {
 					signal?.removeEventListener("abort", onAbort);
@@ -354,8 +412,9 @@ function streamKiroP(run: KiroPRunner, model: Model<string>, context: Transcript
 
 /**
  * Runs models through the local Kiro CLI's v3 engine (`kiro-cli chat --v3 --no-interactive`), authenticated by the
- * CLI's own login. Each turn gets a throwaway agent carrying the system prompt and no tools, plus `--trust-tools=` so
- * nothing Kiro might still offer can run. Nexo tools are described in the prompt and the reply parsed as
+ * CLI's own login. Each turn gets a throwaway agent carrying the system prompt, no tools and a policy denying every
+ * capability (so Kiro's request carries no tool at all), plus `--trust-tools=` so nothing Kiro might still offer can
+ * run; a native tool call stops the run. Nexo tools are described in the prompt and the reply parsed as
  * `{ text, tool_calls }` (one retry when it does not parse), so tool turns arrive whole rather than streamed. Kiro bills
  * in credits and reports no token counts, so usage is empty.
  */
