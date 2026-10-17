@@ -113,6 +113,27 @@ export async function interactiveCommand(args: string[], io: CliIO, options: Cli
 	const dispose = installCrashHandlers({ proc: options.proc ?? process, restore: restoreTerminal, redact: settings.redact, stderr: io.stderr, exit: options.exit ?? ((code) => process.exit(code)) });
 	// Started with the first session and kept for the next ones, so a browser connection survives across turns and sessions.
 	let mcp: McpHub | null | undefined;
+	const buildDeps = (prompter: SessionDeps["prompter"]): SessionDeps => {
+		const { config, hash } = settings.loadConfig();
+		const logger = openLogger(settings, paths, "tui");
+		const skills = loadSkills([BUNDLED_SKILLS_DIR, ...config.skills.dirs]);
+		for (const d of skills.diagnostics) logger.warn("invalid skill skipped", { path: d.path, error: d.error });
+		if (mcp === undefined) mcp = createConfiguredMcpHub(config, { cwd, logger });
+		return {
+			config,
+			configHash: hash,
+			paths,
+			db,
+			models,
+			logger,
+			redact: settings.redact,
+			prompter,
+			skills,
+			resolveApiKey: settings.resolveApiKey,
+			reloadConfig: () => settings.reloadConfig(),
+			...(mcp ? { mcp } : {}),
+		};
+	};
 	try {
 		const code = await runInteractive({
 			settings,
@@ -120,27 +141,10 @@ export async function interactiveCommand(args: string[], io: CliIO, options: Cli
 			terminal: options.terminal,
 			signal: options.signal,
 			openSession: (prompter) => {
-				const { config, hash } = settings.loadConfig();
-				const logger = openLogger(settings, paths, "tui");
-				const skills = loadSkills([BUNDLED_SKILLS_DIR, ...config.skills.dirs]);
-				for (const d of skills.diagnostics) logger.warn("invalid skill skipped", { path: d.path, error: d.error });
-				if (mcp === undefined) mcp = createConfiguredMcpHub(config, { cwd, logger });
-				const deps: SessionDeps = {
-					config,
-					configHash: hash,
-					paths,
-					db,
-					models,
-					logger,
-					redact: settings.redact,
-					prompter,
-					skills,
-					resolveApiKey: settings.resolveApiKey,
-					reloadConfig: () => settings.reloadConfig(),
-					...(mcp ? { mcp } : {}),
-				};
+				const deps = buildDeps(prompter);
 				return resumeId ? resumeSession(deps, resumeId) : createSession(deps, { cwd, workspace: parsed.workspace, model: parsed.model, effort: parsed.effort });
 			},
+			resumeSession: (id, prompter) => resumeSession(buildDeps(prompter), id),
 		});
 		await mcp?.close();
 		return finish(options.signal?.aborted && code === 0 ? EXIT_SIGINT : code);

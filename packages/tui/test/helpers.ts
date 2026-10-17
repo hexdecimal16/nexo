@@ -68,11 +68,11 @@ export function makeHarness(options: HarnessOptions = {}): Omit<Harness, "done">
 	const terminal = new FakeTerminal(options.columns ?? 100);
 	let opened: Session | null = null;
 
-	const openSession = (prompter: Prompter): Session => {
+	const depsFor = (prompter: Prompter): SessionDeps => {
 		const { config, hash } = settings.loadConfig();
 		const logger = createLogger({ dir: paths.logs, component: "tui-test", redact: settings.redact });
 		settings.attachLogger(logger);
-		const deps: SessionDeps = {
+		return {
 			config,
 			configHash: hash,
 			paths,
@@ -85,6 +85,10 @@ export function makeHarness(options: HarnessOptions = {}): Omit<Harness, "done">
 			resolveApiKey: settings.resolveApiKey,
 			reloadConfig: () => settings.reloadConfig(),
 		};
+	};
+
+	const openSession = (prompter: Prompter): Session => {
+		const deps = depsFor(prompter);
 		opened = options.resume ? resumeSession(deps, options.resume) : createSession(deps, { cwd, ...(options.workspace !== undefined ? { workspace: options.workspace } : {}) });
 		return opened;
 	};
@@ -102,7 +106,7 @@ export function makeHarness(options: HarnessOptions = {}): Omit<Harness, "done">
 			if (!opened) throw new Error("session not opened yet");
 			return opened;
 		},
-		start: (extra = {}) => runInteractive({ openSession, settings, db, terminal, ...options.interactive, ...extra }),
+		start: (extra = {}) => runInteractive({ openSession, resumeSession: (id, prompter) => { opened = resumeSession(depsFor(prompter), id); return opened; }, settings, db, terminal, ...options.interactive, ...extra }),
 	};
 }
 
