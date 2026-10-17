@@ -557,3 +557,36 @@ export interface EvalCasesResponse {
 export interface EvalCaseResponse {
 	case: EvalCaseItem;
 }
+
+export interface WikiItem {
+	name: string;
+	pageCount: number;
+	modifiedAt: string;
+}
+
+export interface WikiListResponse {
+	wikis: WikiItem[];
+}
+
+export interface WikiPageItem {
+	path: string;
+	slug: string;
+	summary?: string;
+	folder?: string;
+	size: number;
+	modifiedAt: string;
+}
+
+export interface WikiPagesResponse {
+	wiki: string;
+	pages: WikiPageItem[];
+}
+
+export interface WikiPageResponse {
+	wiki: string;
+	path: string;
+	content: string;
+	summary?: string;
+	size: number;
+	modifiedAt: string;
+}

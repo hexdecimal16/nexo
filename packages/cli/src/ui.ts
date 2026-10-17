@@ -89,6 +89,7 @@ export async function runUi(options: { env: NodeJS.ProcessEnv; cwd: string; port
 			judge,
 			learning: { enabled: config?.learning.enabled ?? false },
 			optimize: { minJudgeKappa: config?.optimize.minJudgeKappa ?? 0.6 },
+			wikisDir: paths.wikis,
 		});
 	} catch (error) {
 		db.close();

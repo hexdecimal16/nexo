@@ -29,6 +29,9 @@ import {
 	serveRunFile,
 	spanResponse,
 	spanTreeResponse,
+	listWikisResponse,
+	listWikiPagesResponse,
+	wikiPageResponse,
 } from "./api.ts";
 import { sendError, sendJson } from "./http-errors.ts";
 import { createStaticServer } from "./static.ts";
@@ -58,6 +61,7 @@ export interface WebServerOptions {
 	learning?: { enabled: boolean };
 	/** `optimize.minJudgeKappa` of the loaded config (default 0.6), for the approval gate. */
 	optimize?: { minJudgeKappa: number };
+	wikisDir?: string;
 }
 
 export interface WebServer {
@@ -91,6 +95,9 @@ const ROUTES = {
 	evalCases: /^\/api\/eval-cases$/,
 	evalCaseReview: new RegExp(`^/api/eval-cases/${RUN_ID}/(accept|dismiss)$`),
 	meta: /^\/api\/meta$/,
+	wikis: /^\/api\/wikis$/,
+	wikiPages: /^\/api\/wikis\/([^/]{1,64})\/pages$/,
+	wikiPage: /^\/api\/wikis\/([^/]{1,64})\/page$/,
 };
 
 function methodNotAllowed(method: string, path: string, allowed: string): NexoError {
@@ -154,6 +161,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 		judge: options.judge ?? { key: null, warnings: [] },
 		learning: options.learning ?? { enabled: false },
 		optimize: options.optimize ?? { minJudgeKappa: 0.6 },
+		wikisDir: options.wikisDir,
 	};
 	const assertWritable = (): void => {
 		if (!ctx.readOnly) return;
@@ -276,6 +284,19 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 			if (method !== "POST") throw methodNotAllowed(method, path, "POST");
 			assertWritable();
 			return sendJson(res, 200, reviewEvalCaseResponse(ctx, m[1] as string, m[2] as "accept" | "dismiss"));
+		}
+		
+		if (ROUTES.wikis.test(path)) {
+			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
+			return sendJson(res, 200, listWikisResponse(ctx));
+		}
+		if ((m = ROUTES.wikiPages.exec(path))) {
+			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
+			return sendJson(res, 200, listWikiPagesResponse(ctx, decodePath(m[1] as string)));
+		}
+		if ((m = ROUTES.wikiPage.exec(path))) {
+			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
+			return sendJson(res, 200, wikiPageResponse(ctx, decodePath(m[1] as string), decodePath(url.searchParams.get("path") ?? "index.md")));
 		}
 		throw new NexoError({ code: "NOT_FOUND", message: `No API route ${path}`, context: { path } });
 	};
