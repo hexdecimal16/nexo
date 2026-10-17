@@ -1,11 +1,11 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, relative } from "node:path";
+import { dirname, relative, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { ChangeTracker } from "./change-tracker.ts";
-import { nexoHomeGuard, resolveConfined } from "./confine.ts";
+import { nexoHomeGuard, resolveConfined, resolveConfinedOrIn } from "./confine.ts";
 import type { FileLeases } from "./leases.ts";
 
 export const MAX_BASH_OUTPUT_BYTES = 1_000_000;
@@ -130,6 +130,8 @@ export interface ToolContext {
 	nexoHome?: string;
 	/** The run's own `workspace/` folder, the one place inside the nexo home that write and edit may change. */
 	runWorkspace?: string;
+	/** Absolute directories outside the workspace (the wikis) that read, write and edit may reach by absolute path; write and edit are allowed there even inside the nexo home. */
+	wikiRoots?: readonly string[];
 }
 
 function textResult(text: string, isError = false): AgentToolResult<undefined> {
@@ -155,10 +157,12 @@ const FetchParams = Type.Object({ url: Type.String({ description: "http(s) URL" 
 
 export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 	const root = realpathSync(ctx.workspaceRoot);
-	const guard = ctx.nexoHome === undefined ? null : nexoHomeGuard(ctx.nexoHome, root, ctx.runWorkspace);
+	const guard = ctx.nexoHome === undefined ? null : nexoHomeGuard(ctx.nexoHome, root, ctx.runWorkspace, ctx.wikiRoots);
+	/** A tool path argument made absolute: inside the workspace, or inside a wiki root when given absolutely. */
+	const resolvePath = (target: string): string => resolveConfinedOrIn(root, target, ctx.wikiRoots ?? []);
 	const writeFile = (abs: string, content: string): void => {
 		ctx.leases.acquire(abs, ctx.holder);
-		ctx.changeTracker?.beforeWrite(abs);
+		if (abs === root || abs.startsWith(root + sep)) ctx.changeTracker?.beforeWrite(abs);
 		mkdirSync(dirname(abs), { recursive: true });
 		writeFileSync(abs, content);
 	};
@@ -182,7 +186,7 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 		execute: async (_id, params) => {
 			const outputs = ctx.toolOutputsDir;
 			const savedOutput = outputs !== undefined && params.path.startsWith(TOOL_OUTPUT_PREFIX);
-			const abs = savedOutput ? resolveSavedOutput(outputs, params.path) : resolveConfined(root, params.path);
+			const abs = savedOutput ? resolveSavedOutput(outputs, params.path) : resolvePath(params.path);
 			guard?.checkRead(abs);
 			if (!existsSync(abs)) throw new Error(`File not found: ${params.path}`);
 			const lines = readFileSync(abs, "utf8").split("\n");
@@ -197,7 +201,7 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 		description: "Create or overwrite a file in the workspace.",
 		parameters: WriteParams,
 		execute: async (_id, params) => {
-			const abs = resolveConfined(root, params.path);
+			const abs = resolvePath(params.path);
 			guard?.checkWrite(abs);
 			writeFile(abs, params.content);
 			return textResult(`Wrote ${Buffer.byteLength(params.content)} bytes to ${relative(root, abs) || params.path}`);
@@ -211,7 +215,7 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 		parameters: EditParams,
 		execute: async (_id, params) => {
 			if (params.oldText === "") throw new Error("oldText must not be empty");
-			const abs = resolveConfined(root, params.path);
+			const abs = resolvePath(params.path);
 			guard?.checkWrite(abs);
 			if (!existsSync(abs)) throw new Error(`File not found: ${params.path}`);
 			const content = readFileSync(abs, "utf8");

@@ -16,15 +16,23 @@ export interface SystemPromptParts {
 	systemPrompt: string;
 	plannerPrompt: string | null;
 	workspace: string;
+	/** The directory holding the user wikis; a line naming it is added when set. */
+	wikisDir?: string;
 	skillIndex: string;
 	activeSkill?: { name: string; body: string };
 	/** The retrieved-memory data block (`memoryBlock`), last so the rules above it win. */
 	memories?: string;
 }
 
+/** The line that points the agent at the wikis directory; the wiki skill holds the rules for using it. */
+export function wikiPrompt(wikisDir: string): string {
+	return `Wikis: the user keeps persistent knowledge bases as markdown folders under ${wikisDir}. Leave them alone unless the task is about one; then load the wiki skill with load_skill first.`;
+}
+
 export function renderSystemPrompt(parts: SystemPromptParts): string {
 	const sections = [parts.systemPrompt.replaceAll("{{workspace}}", parts.workspace)];
 	if (parts.plannerPrompt) sections.push(parts.plannerPrompt);
+	if (parts.wikisDir) sections.push(wikiPrompt(parts.wikisDir));
 	if (parts.skillIndex) sections.push(parts.skillIndex);
 	if (parts.activeSkill) sections.push(`# Active skill: ${parts.activeSkill.name}\n${parts.activeSkill.body}`);
 	if (parts.memories) sections.push(parts.memories);

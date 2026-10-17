@@ -61,6 +61,27 @@ export function resolveConfined(root: string, target: string): string {
 	return full;
 }
 
+/**
+ * Like `resolveConfined`, but an absolute `target` inside one of `extraRoots` is allowed too. Both are resolved through
+ * realpath, so a symlink inside an extra root cannot lead out of it.
+ */
+export function resolveConfinedOrIn(root: string, target: string, extraRoots: readonly string[]): string {
+	if (isAbsolute(target)) {
+		for (const extra of extraRoots) {
+			let extraReal: string;
+			try {
+				extraReal = realpathSync(extra);
+			} catch (error) {
+				if (isMissing(error)) continue;
+				throw error;
+			}
+			const full = canonicalPath(target, extraReal);
+			if (isWithin(full, extraReal)) return full;
+		}
+	}
+	return resolveConfined(root, target);
+}
+
 function isWithin(path: string, dir: string): boolean {
 	return path === dir || path.startsWith(dir + sep);
 }
@@ -69,12 +90,13 @@ function isWithin(path: string, dir: string): boolean {
  * Guards the nexo home (config, credentials, skills, runs, sessions, the database) against the agent's file tools,
  * whatever the workspace. Paths are compared through the native realpath, which also settles letter case on
  * case-insensitive file systems. Only `runWorkspace`, the run's own `workspace/` folder, stays writable inside it;
- * other runs' folders and everything else under the nexo home are refused.
+ * other runs' folders and everything else under the nexo home are refused, except the `wikiRoots` (the user's wikis).
  */
 export function nexoHomeGuard(
 	nexoHome: string,
 	workspaceRoot: string,
 	runWorkspace?: string,
+	wikiRoots: readonly string[] = [],
 ): { checkWrite(path: string): void; checkRead(path: string): void } {
 	const native = realpathSync.native;
 	const home = canonicalPath(nexoHome, process.cwd(), native);
@@ -82,6 +104,7 @@ export function nexoHomeGuard(
 	const credentials = join(home, "credentials.json");
 	const own = runWorkspace === undefined ? null : canonicalPath(runWorkspace, process.cwd(), native);
 	const exempt = own !== null && isWithin(own, home) && own !== home ? own : null;
+	const wikis = wikiRoots.map((wikiRoot) => canonicalPath(wikiRoot, process.cwd(), native));
 	const deny = (target: string, message: string) =>
 		new NexoError({
 			code: "TOOL_DENIED",
@@ -92,7 +115,7 @@ export function nexoHomeGuard(
 	return {
 		checkWrite(path) {
 			const full = canonicalPath(path, workspace, native);
-			if (isWithin(full, home) && !(exempt !== null && isWithin(full, exempt))) throw deny(path, `Path "${path}" is inside the nexo home ${home}`);
+			if (isWithin(full, home) && !(exempt !== null && isWithin(full, exempt)) && !wikis.some((wiki) => isWithin(full, wiki))) throw deny(path, `Path "${path}" is inside the nexo home ${home}`);
 		},
 		checkRead(path) {
 			if (canonicalPath(path, workspace, native) === credentials) throw deny(path, `Path "${path}" is the nexo credentials file`);
