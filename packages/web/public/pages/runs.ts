@@ -38,7 +38,11 @@ async function loadStatuses(): Promise<void> {
 }
 
 function showTab(): void {
-	for (const t of document.querySelectorAll<HTMLButtonElement>("[data-tab]")) t.setAttribute("aria-selected", String((t.dataset.tab === "review" ? "review" : "all") === filters.tab));
+	for (const t of document.querySelectorAll<HTMLButtonElement>("[data-tab]")) {
+	const selected = (t.dataset.tab === "review" ? "review" : "all") === filters.tab;
+	t.setAttribute("aria-selected", String(selected));
+	t.tabIndex = selected ? 0 : -1;
+}
 	const search = runsPageSearch(filters);
 	if (location.search !== search) history.replaceState(null, "", `${location.pathname}${search}`);
 }
@@ -49,6 +53,19 @@ for (const tab of document.querySelectorAll<HTMLButtonElement>("[data-tab]")) {
 		page.offset = 0;
 		showTab();
 		void load();
+	});
+}
+
+// Arrow keys move between tabs (roving tabindex), as the tab role promises.
+const tabButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-tab]")];
+for (const tab of tabButtons) {
+	tab.addEventListener("keydown", (event) => {
+		const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+		if (step === 0) return;
+		event.preventDefault();
+		const next = tabButtons[(tabButtons.indexOf(tab) + step + tabButtons.length) % tabButtons.length];
+		next?.focus();
+		next?.click();
 	});
 }
 
