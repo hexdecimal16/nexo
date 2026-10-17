@@ -56,6 +56,7 @@ import { DEFAULT_PLANNER_PROMPT, DEFAULT_SYSTEM_PROMPT } from "../engine/prompts
 import { createEngineEnv, type EngineEnv } from "../engine/run.ts";
 import { judgeKey, judgeModels, loadJudgeRubric } from "../scoring/sources.ts";
 import { mineQuietly } from "./mine.ts";
+import { readScratchpad, writeScratchpad } from "./scratchpad-wiki.ts";
 import { assertReflectionFits } from "./reflect.ts";
 import { createOptimAdapter, type DetailedEvaluation, type OptimContext, type OptimEvent } from "./adapter.ts";
 import { closeOptimizerRun, openOptimizerRun } from "./optimizer-run.ts";
@@ -316,6 +317,8 @@ export async function startOptimization(baseEnv: EngineEnv, options: OptimizeOpt
 		ctx.reserveUsd = cases.holdout.length * Math.min(config.budgets.perRunUsd, 2 * dearest);
 		ctx.phase = "loop";
 		options.onEvent?.({ type: "phase", phase: "loop" });
+		const wikisDir = env.deps.paths?.wikis;
+		const seededPad = wikisDir ? readScratchpad(wikisDir, target.key) : undefined;
 		const result = await runGepa({
 			adapter,
 			seed: seedRef,
@@ -325,6 +328,7 @@ export async function startOptimization(baseEnv: EngineEnv, options: OptimizeOpt
 			pareto: cases.pareto,
 			patience: config.optimize.patience,
 			noveltySimilarity: config.optimize.noveltySimilarity,
+			...(seededPad ? { scratchpad: seededPad } : {}),
 			offspringAlpha: config.optimize.offspringAlpha,
 			merge: options.merge ?? false,
 			rng: mulberry32(seed),
@@ -409,6 +413,14 @@ export async function startOptimization(baseEnv: EngineEnv, options: OptimizeOpt
 			createdAt: nowIso(),
 		});
 		writeFileSync(join(optimizer.runDir.root, "report.json"), `${JSON.stringify(redact(report), null, 2)}\n`);
+		// Lessons are kept only from an optimization whose best candidate beat the base, so one lucky minibatch does not harden into guidance.
+		if (wikisDir && report.improved && result.scratchpad.patterns.length + result.scratchpad.antiPatterns.length > 0) {
+			try {
+				writeScratchpad(wikisDir, target.key, result.scratchpad, { optimRunId, baseVersion: base.version, today: nowIso().slice(0, 10), redact: (text) => String(redact(text)) });
+			} catch (error) {
+				logger.warn("could not write the optimization scratchpad to the wiki", { error });
+			}
+		}
 		retireOptimCandidates(db, optimRunId, bestArtifactId === base.id ? null : bestArtifactId);
 		closeOptimizerRun(env, optimizer, { status: "succeeded", costUsd: ownCost, costUnknown: ownUnknown, error: null, output: `best ${bestArtifactId === base.id ? "is the base version" : `v${best.version}`}` });
 		const run = finish({

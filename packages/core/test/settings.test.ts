@@ -262,6 +262,7 @@ describe("config settings", () => {
 			"scoring.judge",
 			"models.reflector",
 			"models.approver",
+			"models.embedding",
 			"learning.enabled",
 			"learning.perJobUsd",
 			"memory.enabled",
