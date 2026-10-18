@@ -63,6 +63,8 @@ export interface InteractiveOptions {
 }
 
 const DOUBLE_CTRL_C_MS = 1000;
+/** Two Esc presses within this window on an idle prompt clear the draft (and keep it in history). */
+const DOUBLE_ESC_MS = 800;
 /** Last lines of a `!` command's output shown in the chat (the model gets more). */
 const SHELL_SCREEN_LINES = 200;
 /** Time given to paint the "opening…" footer before the synchronous session open blocks the loop (one render interval and a margin). */
@@ -170,6 +172,7 @@ class InteractiveApp {
 	private tickTimer: NodeJS.Timeout | null = null;
 	private loader: Loader | null = null;
 	private lastCtrlC = Number.NEGATIVE_INFINITY;
+	private lastEscape = Number.NEGATIVE_INFINITY;
 	private defaultModel = "";
 	/** Model and effort of the running turn's root run, from its run_start and escalation events; null between turns. */
 	private liveModel: { model: string; effort: string } | null = null;
@@ -407,6 +410,20 @@ class InteractiveApp {
 			this.restoreQueueToEditor();
 			this.turnAbort?.abort();
 			return { consume: true };
+		}
+		if (matchesKey(data, "escape") && !this.running && this.screen === "chat" && this.session && !this.editor.isShowingAutocomplete()) {
+			// Idle prompt, like Claude Code: a second Esc clears the draft but saves it to history, so Up brings it back.
+			const text = this.editor.getText();
+			const now = this.now();
+			if (text.trim() !== "" && now - this.lastEscape <= DOUBLE_ESC_MS) {
+				this.editor.addToHistory(text.trim());
+				this.editor.setText("");
+				this.lastEscape = Number.NEGATIVE_INFINITY;
+				this.tui.requestRender();
+				return { consume: true };
+			}
+			this.lastEscape = text.trim() !== "" ? now : Number.NEGATIVE_INFINITY;
+			return undefined;
 		}
 		if (matchesKey(data, "ctrl+o") && this.screen === "chat") {
 			if (isKeyRepeat(data)) return { consume: true };
