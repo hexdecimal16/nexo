@@ -102,6 +102,10 @@ if (!cli || !cliBin || !cliMain) throw new Error("packages/cli must define bin.n
 const bin = `./cli/${toPosix(toJs(cliBin)).replace(/^\.\//, "")}`;
 const main = `./cli/${toPosix(toJs(cliMain)).replace(/^\.\//, "")}`;
 
+const sdkMain = manifests.get("sdk")?.exports?.["."];
+if (!sdkMain) throw new Error("packages/sdk must define exports['.']");
+const sdkEntry = `./sdk/${toPosix(toJs(sdkMain)).replace(/^\.\//, "")}`;
+
 const rootManifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as PackageJson;
 const release = {
 	name: releaseName,
@@ -110,7 +114,7 @@ const release = {
 	type: "module",
 	bin: { nexo: bin },
 	main,
-	exports: { ".": main },
+	exports: { ".": main, "./sdk": sdkEntry },
 	files: dirs,
 	engines: rootManifest.engines,
 	dependencies: sortedDeps,
