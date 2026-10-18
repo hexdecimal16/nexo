@@ -1,6 +1,6 @@
 {
   "name": "@nexo/core",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "exports": { ".": "./src/index.ts" },
@@ -8,15 +8,15 @@
     "@earendil-works/pi-agent-core": "1.1.0",
     "@earendil-works/pi-ai": "1.1.0",
     "@google/genai": "2.21.0",
-    "@nexo/mcp": "0.2.0",
-    "@nexo/memory": "0.2.0",
-    "@nexo/optimize": "0.2.0",
-    "@nexo/router": "0.2.0",
-    "@nexo/scorers": "0.2.0",
-    "@nexo/skills": "0.2.0",
-    "@nexo/store": "0.2.0",
-    "@nexo/telemetry": "0.2.0",
-    "@nexo/tools": "0.2.0",
+    "@nexo/mcp": "0.2.1",
+    "@nexo/memory": "0.2.1",
+    "@nexo/optimize": "0.2.1",
+    "@nexo/router": "0.2.1",
+    "@nexo/scorers": "0.2.1",
+    "@nexo/skills": "0.2.1",
+    "@nexo/store": "0.2.1",
+    "@nexo/telemetry": "0.2.1",
+    "@nexo/tools": "0.2.1",
     "typebox": "1.3.27"
   }
 }
