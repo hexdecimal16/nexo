@@ -72,6 +72,7 @@ export const USAGE = `Usage:
   nexo playbook show <skill> [--all]
   nexo playbook add <skill> <text...>
   nexo playbook retire <skill> <key>
+  nexo doctor [--json]                     check Node, config, keys and the data directory (exit 1 on a failure)
   nexo ui [--port <n>]
 `;
 
