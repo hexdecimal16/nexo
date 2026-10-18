@@ -315,6 +315,24 @@ export class Session {
 		return this.lines;
 	}
 
+	/** Messages steered before the run's agent exists; handed to it once it does. */
+	private steerPending: string[] = [];
+	private steerCtl: { steer(text: string): void; clear(): void } | null = null;
+
+	/** Sends a message into the running turn, injected before the agent's next model call. False when no turn runs. */
+	steer(text: string): boolean {
+		if (!this.busy || !text.trim()) return false;
+		if (this.steerCtl) this.steerCtl.steer(text);
+		else this.steerPending.push(text);
+		return true;
+	}
+
+	/** Drops steered messages the running turn has not taken yet. */
+	clearSteering(): void {
+		this.steerPending = [];
+		this.steerCtl?.clear();
+	}
+
 	/**
 	 * Runs one turn. Refusals (session cap, daily or monthly cap) return a `budget_exceeded` result without a run.
 	 * Throws INVALID_REQUEST for an empty instruction, a closed session or while another turn is running, and STORE_IO
@@ -365,6 +383,10 @@ export class Session {
 					sessionRules: () => this.state.sessionRules ?? [],
 					addSessionRule: (rule) => this.addSessionRule(rule),
 					autoApprove: this.autoApprove,
+					onSteeringReady: (control) => {
+						this.steerCtl = control;
+						for (const text of this.steerPending.splice(0)) control.steer(text);
+					},
 				},
 				budget: new RunBudget(limit.usd),
 				budgetLimit: limit.by,
@@ -383,6 +405,8 @@ export class Session {
 		} finally {
 			this.latestWorkspace = undefined;
 			this.onEvent = undefined;
+			this.steerCtl = null;
+			this.steerPending = [];
 			this.busy = false;
 		}
 	}

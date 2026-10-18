@@ -155,8 +155,8 @@ class InteractiveApp {
 	/** The running work is a `!` command, not a turn. */
 	private runningShell = false;
 	/** Messages typed while a turn or command runs; sent one at a time once it ends, moved back to the editor on abort or failure. */
-	private queued: string[] = [];
-	private readonly queueView = new QueuedList(() => this.queued);
+	private queued: { text: string; steered: boolean }[] = [];
+	private readonly queueView = new QueuedList(() => this.queued.map((q) => q.text));
 	private turnCost = 0;
 	private lastTurnCost = 0;
 	/** The last turn's approver spend: shown by /cost, never counted against a budget. */
@@ -441,8 +441,10 @@ class InteractiveApp {
 			return;
 		}
 		if (this.running) {
-			this.queued.push(text);
-			this.say(`queued (${this.queued.length}) · sent when the ${this.runningShell ? "command" : "turn"} ends`);
+			// Plain text goes into the running turn at its next step; `!` commands and anything typed during a command wait.
+			const steered = !this.runningShell && !text.startsWith("!") && this.session.steer(text);
+			this.queued.push({ text, steered });
+			this.say(`queued (${this.queued.length}) · ${steered ? "sent to the agent at its next step" : `sent when the ${this.runningShell ? "command" : "turn"} ends`}`);
 			return;
 		}
 		this.dispatch(text);
@@ -472,7 +474,8 @@ class InteractiveApp {
 	private restoreQueueToEditor(): void {
 		if (this.queued.length === 0) return;
 		const draft = this.editor.getText();
-		this.editor.setText([...this.queued, draft].filter(Boolean).join("\n\n"));
+		this.session?.clearSteering();
+		this.editor.setText([...this.queued.map((q) => q.text), draft].filter(Boolean).join("\n\n"));
 		this.queued = [];
 		this.tui.requestRender();
 	}
@@ -480,8 +483,10 @@ class InteractiveApp {
 	/** After a turn or command ends: sends the next queued message if it went fine, otherwise hands the queue back to the editor. */
 	private drainQueue(ok: boolean): void {
 		if (this.exiting || this.running || this.queued.length === 0) return;
+		// Steered messages the turn never took (it stopped first) run as later turns instead.
+		for (const q of this.queued) q.steered = false;
 		if (ok) {
-			this.dispatch(this.queued.shift() as string);
+			this.dispatch((this.queued.shift() as { text: string }).text);
 		} else {
 			const count = this.queued.length;
 			this.restoreQueueToEditor();
@@ -560,6 +565,15 @@ class InteractiveApp {
 
 	private onEvent(event: EngineEvent): void {
 		switch (event.type) {
+			case "steer_injected": {
+				if (event.depth !== 0) return;
+				const i = this.queued.findIndex((q) => q.steered);
+				if (i >= 0) this.queued.splice(i, 1);
+				// The reply to it streams into a new block below the message.
+				this.currentText = null;
+				this.chat.addChild(new Block(escapeControlKeepLines(event.text), style.dim, "› "));
+				break;
+			}
 			case "text_delta": {
 				if (event.depth !== 0) return;
 				if (!this.currentText) {
