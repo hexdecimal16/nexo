@@ -8,6 +8,7 @@
     "test": "vitest --run",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p packages/web/public/tsconfig.json",
     "build": "node scripts/build-release.ts",
+    "bump": "node scripts/bump-version.ts",
     "nexo": "node packages/cli/src/bin.ts"
   },
   "devDependencies": {
