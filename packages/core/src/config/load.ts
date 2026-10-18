@@ -239,6 +239,15 @@ function userToolPolicy(homeLayer: unknown, overrides: unknown, homeFile: string
 	return { policy: tools.policy, rules: tools.rules, nonInteractiveAsk: tools.nonInteractiveAsk };
 }
 
+/** Real path when the file exists, otherwise the resolved path; used to tell whether two config paths are one file. */
+function realOrResolved(file: string): string {
+	try {
+		return realpathSync(file);
+	} catch {
+		return resolve(file);
+	}
+}
+
 /** The project config file of a working directory. */
 export function projectConfigPath(cwd: string): string {
 	return join(cwd, ".nexo", "config.json");
@@ -247,7 +256,9 @@ export function projectConfigPath(cwd: string): string {
 /** Loads `~/.nexo/config.json`, then `./.nexo/config.json`, then overrides, on top of DEFAULT_CONFIG, and validates the result. */
 export function loadConfig(options: LoadConfigOptions): LoadedConfig {
 	const projectFile = projectConfigPath(options.cwd);
-	const sources = [options.paths.config, projectFile].filter((f) => existsSync(f));
+	// Run from the home directory, ./.nexo/config.json is ~/.nexo/config.json itself: that is the user config, not a project config.
+	const projectIsUserFile = realOrResolved(projectFile) === realOrResolved(options.paths.config);
+	const sources = [options.paths.config, ...(projectIsUserFile ? [] : [projectFile])].filter((f) => existsSync(f));
 	const layers = sources.map(readConfigFile);
 	const merged = structuredClone(deepMerge(DEFAULT_CONFIG, ...layers, options.overrides));
 
@@ -273,7 +284,7 @@ export function loadConfig(options: LoadConfigOptions): LoadedConfig {
 	parseScorerSpecs(config.scoring.scorers, "/scoring/scorers");
 	assertJudgeConfigured(config);
 	// Values from ./.nexo/config.json come from a file in the working directory (a cloned repo), so they are marked or confined.
-	const projectLayer = sources.includes(projectFile) ? layers[sources.indexOf(projectFile)] : undefined;
+	const projectLayer = !projectIsUserFile && sources.includes(projectFile) ? layers[sources.indexOf(projectFile)] : undefined;
 	assertEmbeddingConfigured(config, projectLayer, options.overrides, options.paths.config);
 	assertKappaFromUser(projectLayer, options.overrides, options.paths.config);
 	config.scoring.scorersOrigin = fromProject(projectLayer, options.overrides, "scoring", "scorers") ? "project" : "user";
