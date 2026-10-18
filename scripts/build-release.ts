@@ -99,7 +99,7 @@ const cli = manifests.get("cli");
 const cliBin = cli?.bin?.nexo;
 const cliMain = cli?.exports?.["."];
 if (!cli || !cliBin || !cliMain) throw new Error("packages/cli must define bin.nexo and exports['.']");
-const bin = `./cli/${toPosix(toJs(cliBin)).replace(/^\.\//, "")}`;
+const bin = `cli/${toPosix(toJs(cliBin)).replace(/^\.\//, "")}`;
 const main = `./cli/${toPosix(toJs(cliMain)).replace(/^\.\//, "")}`;
 
 const sdkMain = manifests.get("sdk")?.exports?.["."];

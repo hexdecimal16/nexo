@@ -6,6 +6,12 @@ Requires Node 22.19 or newer.
 
 ## Install
 
+From npm:
+
+```sh
+npm install -g @hexdecimal16/nexo
+```
+
 From source:
 
 ```sh
@@ -39,7 +45,7 @@ Data lives in `~/.nexo` (set `NEXO_HOME` to change it).
 ## Use it from Node
 
 ```ts
-import { createNexo } from "nexo/sdk";
+import { createNexo } from "@hexdecimal16/nexo/sdk";
 
 const nexo = createNexo();
 try {
