@@ -65,8 +65,6 @@ npm run build        # release build into dist/
 npm run bump -- minor
 ```
 
-Design docs are in `docs/superpowers/specs`.
-
 ## License
 
 [PolyForm Noncommercial 1.0.0](LICENSE). Free for any noncommercial use. Commercial use needs separate permission from the author.
