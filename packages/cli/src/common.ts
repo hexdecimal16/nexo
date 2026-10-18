@@ -75,6 +75,7 @@ export const USAGE = `Usage:
   nexo playbook retire <skill> <key>
   nexo init [--yes] [--s1 <provider/id>] [--s2 <provider/id>] [--skip-test]   guided first-time setup with a test call
   nexo doctor [--json]                     check Node, config, keys and the data directory (exit 1 on a failure)
+  nexo update                              check npm for a newer version and print the install command
   nexo ui [--port <n>]
 `;
 
