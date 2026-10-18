@@ -42,7 +42,7 @@ function readPipedKey(stdin: CliStdio["stdin"], signal: AbortSignal | undefined)
  * Reads a line from the terminal in raw mode, so nothing is echoed. Resolves null on Ctrl-C, Ctrl-D at an empty
  * prompt, end of input, an input error or an abort; raw mode is always switched off again.
  */
-function readHiddenKey(stdin: CliStdio["stdin"], stderr: CliIO["stderr"], provider: string, signal: AbortSignal | undefined): Promise<string | null> {
+export function readHiddenKey(stdin: CliStdio["stdin"], stderr: CliIO["stderr"], provider: string, signal: AbortSignal | undefined): Promise<string | null> {
 	return new Promise((resolve) => {
 		let value = "";
 		let settled = false;

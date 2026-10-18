@@ -14,6 +14,7 @@ import { createRuntime } from "./runtime.ts";
 import { interactiveCommand, settingsScreenCommand } from "./interactive.ts";
 import { sessionsCommand } from "./sessions.ts";
 import { doctorCommand } from "./doctor.ts";
+import { initCommand } from "./init.ts";
 import { settingsCommand } from "./settings.ts";
 import { escapeControl } from "@nexo/tui";
 import { runUi } from "./ui.ts";
@@ -229,6 +230,8 @@ export async function runCli(argv: string[], io: CliIO, options: CliOptions = {}
 				return playbookCommand(rest, io, options);
 			case "doctor":
 				return doctorCommand(rest, io, options);
+			case "init":
+				return await initCommand(rest, io, options, stdio);
 			case "sessions":
 				return sessionsCommand(rest, io, options);
 			case "settings":
