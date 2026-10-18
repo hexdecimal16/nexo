@@ -44,6 +44,7 @@ export const USAGE = `Usage:
                                            without --workspace each turn works in its own run folder (files carried over
                                            from the previous turn); --workspace . works in the current folder
   nexo sessions [--limit <n>]
+  nexo --version                           print the installed version
   nexo settings                            open the settings screen (needs a terminal)
   nexo settings get <key>
   nexo settings set <key> <value>          keys: models.s1|s2|judge|reflector|embedding, budgets.*, tools.policy.*, tools.autoApprove, tools.nonInteractiveAsk, models.approver, scoring.judge, learning.*, memory.*, optimize.minCases|patience|minJudgeKappa|noveltySimilarity|offspringAlpha

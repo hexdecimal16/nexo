@@ -15,6 +15,7 @@ import { interactiveCommand, settingsScreenCommand } from "./interactive.ts";
 import { sessionsCommand } from "./sessions.ts";
 import { doctorCommand } from "./doctor.ts";
 import { initCommand } from "./init.ts";
+import { nexoVersion } from "./version.ts";
 import { settingsCommand } from "./settings.ts";
 import { escapeControl } from "@nexo/tui";
 import { runUi } from "./ui.ts";
@@ -208,7 +209,7 @@ export async function runCli(argv: string[], io: CliIO, options: CliOptions = {}
 	const [command, ...rest] = argv;
 	const stdio = options.stdio ?? process;
 	try {
-		if (command === undefined || (command.startsWith("-") && command !== "--help" && command !== "-h")) {
+		if (command === undefined || (command.startsWith("-") && command !== "--help" && command !== "-h" && command !== "--version" && command !== "-v")) {
 			return await interactiveCommand(argv, io, options, stdio);
 		}
 		switch (command) {
@@ -244,6 +245,10 @@ export async function runCli(argv: string[], io: CliIO, options: CliOptions = {}
 			case "--help":
 			case "-h":
 				io.stdout.write(USAGE);
+				return 0;
+			case "--version":
+			case "-v":
+				io.stdout.write(`${nexoVersion()}\n`);
 				return 0;
 			default:
 				throw usageError(`Unknown command "${command}"`);
