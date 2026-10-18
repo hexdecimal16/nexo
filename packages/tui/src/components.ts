@@ -1,5 +1,5 @@
 import { type Component, Container, CURSOR_MARKER, type Focusable, Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { duration, previewLines, resultLines, usd } from "./text.ts";
+import { duration, escapeControl, oneLine, previewLines, resultLines, usd } from "./text.ts";
 import { style } from "./theme.ts";
 
 export const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -39,6 +39,28 @@ export class DynamicLine implements Component {
 	}
 	render(width: number): string[] {
 		return [truncateToWidth(this.text(), width)];
+	}
+	invalidate(): void {}
+}
+
+/** Most queued messages listed before the rest collapse into `+N more`. */
+export const QUEUE_SHOWN = 3;
+
+/** Messages waiting for the running turn to end, one dim line each; renders nothing when empty. */
+export class QueuedList implements Component {
+	private readonly items: () => readonly string[];
+	constructor(items: () => readonly string[]) {
+		this.items = items;
+	}
+	render(width: number): string[] {
+		const items = this.items();
+		if (items.length === 0) return [];
+		const lines = [""];
+		items.slice(0, QUEUE_SHOWN).forEach((item, i) => {
+			lines.push(truncateToWidth(style.dim(`  ⏵ ${i + 1} ${escapeControl(oneLine(item, 200))}`), width));
+		});
+		if (items.length > QUEUE_SHOWN) lines.push(truncateToWidth(style.gray(`  … +${items.length - QUEUE_SHOWN} more`), width));
+		return lines;
 	}
 	invalidate(): void {}
 }

@@ -21,7 +21,7 @@ import { type ErrorPayload, toErrorPayload } from "@nexo/telemetry";
 import { describeSessionRule, type Prompter } from "@nexo/tools";
 import { createApprovalPrompter } from "./approvals.ts";
 import { helpText, parseSlashCommand, SLASH_COMMANDS } from "./commands.ts";
-import { Block, DynamicLine, SafeContainer, SafeMarkdown, SubagentLine, Ticker, ToolLine, ViewMode } from "./components.ts";
+import { Block, DynamicLine, QueuedList, SafeContainer, SafeMarkdown, SubagentLine, Ticker, ToolLine, ViewMode } from "./components.ts";
 import { createSessionPickerScreen, type SessionChoice } from "./session-picker.ts";
 import { SettingsScreen, type SettingsScreenMode } from "./settings-screen.ts";
 import { escapeControl, escapeControlKeepLines, formatError, oneLine, toolSummary, usd } from "./text.ts";
@@ -154,6 +154,9 @@ class InteractiveApp {
 	private turnPromise: Promise<void> | null = null;
 	/** The running work is a `!` command, not a turn. */
 	private runningShell = false;
+	/** Messages typed while a turn or command runs; sent one at a time once it ends, moved back to the editor on abort or failure. */
+	private queued: string[] = [];
+	private readonly queueView = new QueuedList(() => this.queued);
 	private turnCost = 0;
 	private lastTurnCost = 0;
 	/** The last turn's approver spend: shown by /cost, never counted against a budget. */
@@ -195,6 +198,7 @@ class InteractiveApp {
 		const root = new SafeContainer();
 		root.addChild(this.chat);
 		root.addChild(this.status);
+		root.addChild(this.queueView);
 		root.addChild(this.slot);
 		root.addChild(new DynamicLine(() => this.footerText()));
 		this.tui.addChild(root);
@@ -384,6 +388,7 @@ class InteractiveApp {
 		}
 		if (matchesKey(data, "ctrl+c")) {
 			if (this.running) {
+				this.restoreQueueToEditor();
 				this.turnAbort?.abort();
 				return { consume: true };
 			}
@@ -399,6 +404,7 @@ class InteractiveApp {
 			return { consume: true };
 		}
 		if (matchesKey(data, "escape") && this.running && this.screen === "chat" && !this.editor.isShowingAutocomplete()) {
+			this.restoreQueueToEditor();
 			this.turnAbort?.abort();
 			return { consume: true };
 		}
@@ -430,26 +436,58 @@ class InteractiveApp {
 			this.runCommand(command.name, command.args);
 			return;
 		}
-		if (this.running) {
-			this.say(`A ${this.runningShell ? "command" : "turn"} is running — press esc to stop it, or wait for it to finish`);
+		if (text.startsWith("!") && !text.slice(1).trim()) {
+			this.say("Type a command after !, e.g. !git status");
 			return;
 		}
+		if (this.running) {
+			this.queued.push(text);
+			this.say(`queued (${this.queued.length}) · sent when the ${this.runningShell ? "command" : "turn"} ends`);
+			return;
+		}
+		this.dispatch(text);
+	}
+
+	/** Starts a `!` command or a turn for one message, whether typed just now or taken from the queue. */
+	private dispatch(text: string): void {
+		const session = this.session;
+		if (!session) return;
+		let work: Promise<void>;
 		if (text.startsWith("!")) {
 			const shell = text.slice(1).trim();
-			if (!shell) {
-				this.say("Type a command after !, e.g. !git status");
-				return;
-			}
 			this.add(new Block(escapeControlKeepLines(shell), style.dim, "! "));
-			this.turnPromise = this.runShell(this.session, shell).finally(() => {
-				this.turnPromise = null;
-			});
-			return;
+			work = this.runShell(session, shell);
+		} else {
+			this.add(new Block(escapeControlKeepLines(text), style.dim, "› "));
+			work = this.runTurn(session, text);
 		}
-		this.add(new Block(escapeControlKeepLines(text), style.dim, "› "));
-		this.turnPromise = this.runTurn(this.session, text).finally(() => {
-			this.turnPromise = null;
+		// A queued follow-up starts from inside the previous work, so only clear the promise if it is still ours.
+		const tracked = work.finally(() => {
+			if (this.turnPromise === tracked) this.turnPromise = null;
 		});
+		this.turnPromise = tracked;
+	}
+
+	/** Puts the queued messages back in the editor, ahead of any draft, so an interrupt never starts another turn on its own. */
+	private restoreQueueToEditor(): void {
+		if (this.queued.length === 0) return;
+		const draft = this.editor.getText();
+		this.editor.setText([...this.queued, draft].filter(Boolean).join("\n\n"));
+		this.queued = [];
+		this.tui.requestRender();
+	}
+
+	/** After a turn or command ends: sends the next queued message if it went fine, otherwise hands the queue back to the editor. */
+	private drainQueue(ok: boolean): void {
+		if (this.exiting || this.running || this.queued.length === 0) return;
+		if (ok) {
+			this.dispatch(this.queued.shift() as string);
+		} else {
+			const count = this.queued.length;
+			this.restoreQueueToEditor();
+			this.say(`${count} queued ${count === 1 ? "message" : "messages"} moved back to the editor`);
+		}
+		this.tui.requestRender();
 	}
 
 	// Turns
@@ -488,6 +526,7 @@ class InteractiveApp {
 			else if (result.status !== "succeeded") this.say(`turn ended: ${result.status}`);
 		}
 		this.tui.requestRender();
+		this.drainQueue(result !== null && result.status === "succeeded" && !result.error);
 	}
 
 	/** Runs a `!` command like a turn (esc and ctrl-c stop it), then shows its output and how it ended. */
@@ -497,6 +536,7 @@ class InteractiveApp {
 		this.running = true;
 		this.runningShell = true;
 		this.startTicker();
+		let ok = false;
 		try {
 			const result = await session.shell(command, { signal: abort.signal });
 			const lines = result.output.replace(/\n$/, "").split("\n");
@@ -505,6 +545,7 @@ class InteractiveApp {
 			if (result.output) this.add(new Block(escapeControlKeepLines(shown.join("\n")), (t) => t, "  "));
 			const ending = { exited: `exit code ${result.exitCode}`, timeout: "timed out", aborted: "stopped", failed: "failed to start" }[result.ended];
 			this.say(`${ending}${result.truncated ? " · output truncated" : ""}`);
+			ok = result.ended === "exited";
 		} catch (error) {
 			this.sayError(toErrorPayload(error));
 		} finally {
@@ -514,6 +555,7 @@ class InteractiveApp {
 			this.stopTicker();
 		}
 		this.tui.requestRender();
+		this.drainQueue(ok);
 	}
 
 	private onEvent(event: EngineEvent): void {
