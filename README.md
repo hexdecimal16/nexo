@@ -1,6 +1,7 @@
 # nexo
 
 [![npm version](https://img.shields.io/npm/v/@hexdecimal16/nexo)](https://www.npmjs.com/package/@hexdecimal16/nexo)
+[![test](https://github.com/hexdecimal16/nexo/actions/workflows/test.yml/badge.svg?event=push)](https://github.com/hexdecimal16/nexo/actions/workflows/test.yml)
 
 An AI agent engine that runs on your machine. It tracks what each run costs, scores the results, and keeps every run inspectable. Use it from the terminal, from a web run inspector, or from Node code.
 
