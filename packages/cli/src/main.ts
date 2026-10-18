@@ -15,6 +15,7 @@ import { interactiveCommand, settingsScreenCommand } from "./interactive.ts";
 import { sessionsCommand } from "./sessions.ts";
 import { doctorCommand } from "./doctor.ts";
 import { initCommand } from "./init.ts";
+import { updateCommand } from "./update.ts";
 import { nexoVersion } from "./version.ts";
 import { settingsCommand } from "./settings.ts";
 import { escapeControl } from "@nexo/tui";
@@ -233,6 +234,8 @@ export async function runCli(argv: string[], io: CliIO, options: CliOptions = {}
 				return doctorCommand(rest, io, options);
 			case "init":
 				return await initCommand(rest, io, options, stdio);
+			case "update":
+				return await updateCommand(io, options);
 			case "sessions":
 				return sessionsCommand(rest, io, options);
 			case "settings":
