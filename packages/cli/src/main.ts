@@ -13,6 +13,7 @@ import { createTtyLineAsker, isInteractiveTerminal, type LineAsker, promptReview
 import { createRuntime } from "./runtime.ts";
 import { interactiveCommand, settingsScreenCommand } from "./interactive.ts";
 import { sessionsCommand } from "./sessions.ts";
+import { doctorCommand } from "./doctor.ts";
 import { settingsCommand } from "./settings.ts";
 import { escapeControl } from "@nexo/tui";
 import { runUi } from "./ui.ts";
@@ -226,6 +227,8 @@ export async function runCli(argv: string[], io: CliIO, options: CliOptions = {}
 				return memoryCommand(rest, io, options);
 			case "playbook":
 				return playbookCommand(rest, io, options);
+			case "doctor":
+				return doctorCommand(rest, io, options);
 			case "sessions":
 				return sessionsCommand(rest, io, options);
 			case "settings":

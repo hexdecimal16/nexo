@@ -28,5 +28,6 @@ export * from "./session/session.ts";
 export * from "./session/transcript.ts";
 export * from "./settings/config-edit.ts";
 export * from "./settings/credentials.ts";
+export * from "./settings/doctor.ts";
 export * from "./settings/settings.ts";
 import "./engine/spawn-tool.ts";
