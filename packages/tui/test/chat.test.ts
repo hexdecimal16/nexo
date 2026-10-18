@@ -531,11 +531,14 @@ describe("! shell commands", () => {
 		submit(h.terminal, "!sleep 5");
 		await until(() => h.session().running && h.terminal.output().includes("running"));
 		submit(h.terminal, "!echo overlap");
-		await until(() => expect(h.terminal.output()).toContain("A command is running"));
+		await until(() => expect(h.terminal.output()).toContain("queued (1) · sent when the command ends"));
 		h.terminal.send(KEY.escape);
 		await until(() => !h.session().running);
 		await until(() => expect(h.terminal.output()).toContain("stopped"));
-		expect(h.terminal.output()).not.toContain("overlap\n");
+		// The queued command went back to the editor instead of running after the stop.
+		expect(h.terminal.output()).not.toContain("exit code 0");
+		// It is now a draft in the editor, and Ctrl-D only quits on an empty one: clear it first.
+		h.terminal.send(KEY.ctrlC);
 		h.terminal.send(KEY.ctrlD);
 		expect(await h.done).toBe(0);
 	});
