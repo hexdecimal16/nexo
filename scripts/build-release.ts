@@ -111,6 +111,8 @@ const release = {
 	name: releaseName,
 	version: cli.version,
 	description: "nexo agent engine",
+	license: "PolyForm-Noncommercial-1.0.0",
+	repository: { type: "git", url: "git+https://github.com/hexdecimal16/nexo.git" },
 	type: "module",
 	bin: { nexo: bin },
 	main,
@@ -121,5 +123,6 @@ const release = {
 };
 writeFileSync(join(dist, "package.json"), `${JSON.stringify(release, null, 2)}\n`);
 chmodSync(join(dist, bin), 0o755);
+for (const name of ["LICENSE", "README.md"]) cpSync(join(root, name), join(dist, name));
 
 console.log(`Built ${releaseName}@${cli.version} in dist/ (${jsFiles.length} js files, ${Object.keys(sortedDeps).length} dependencies, ${workerUrls} worker URL rewritten)`);
