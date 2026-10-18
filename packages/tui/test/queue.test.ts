@@ -24,11 +24,12 @@ describe("queued messages", () => {
 			fauxAssistantMessage("reply three"),
 		]);
 		submit(h.terminal, "first");
-		await until(() => h.session().running);
+		// Wait for the gated model call, so the next messages are injected after it rather than before it.
+		await until(() => h.faux.state.callCount === 1);
 		submit(h.terminal, "second");
-		await until(() => expect(h.terminal.output()).toContain("queued (1) · sent when the turn ends"));
+		await until(() => expect(h.terminal.output()).toContain("queued (1) · sent to the agent at its next step"));
 		submit(h.terminal, "third");
-		await until(() => expect(h.terminal.output()).toContain("queued (2) · sent when the turn ends"));
+		await until(() => expect(h.terminal.output()).toContain("queued (2) · sent to the agent at its next step"));
 		await until(() => expect(h.terminal.output()).toContain("⏵ 1 second"));
 		expect(h.terminal.output()).toContain("⏵ 2 third");
 		// Queued messages enter the chat only when they are sent.
@@ -39,6 +40,8 @@ describe("queued messages", () => {
 		expect(out.indexOf("› second")).toBeGreaterThan(-1);
 		expect(out.indexOf("› second")).toBeLessThan(out.indexOf("› third"));
 		await until(() => !h.session().running);
+		// Both were injected into the running turn, not run as turns of their own.
+		expect(h.session().turns).toBe(1);
 		h.terminal.send(KEY.ctrlD);
 		expect(await h.done).toBe(0);
 	});
@@ -53,7 +56,7 @@ describe("queued messages", () => {
 			},
 		]);
 		submit(h.terminal, "go");
-		await until(() => h.session().running);
+		await until(() => h.faux.state.callCount === 1);
 		for (const text of ["q1", "q2", "q3", "q4", "q5"]) submit(h.terminal, text);
 		await until(() => expect(h.terminal.output()).toContain("… +2 more"));
 		// Esc hands the queue back, so nothing else runs.
@@ -76,7 +79,7 @@ describe("queued messages", () => {
 			fauxAssistantMessage("should not run"),
 		]);
 		submit(h.terminal, "first");
-		await until(() => h.session().running);
+		await until(() => h.faux.state.callCount === 1);
 		submit(h.terminal, "later");
 		await until(() => expect(h.terminal.output()).toContain("⏵ 1 later"));
 		h.terminal.send(KEY.escape);

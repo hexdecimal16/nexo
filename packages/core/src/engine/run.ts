@@ -132,6 +132,8 @@ export type EngineEvent =
 			effort: Effort;
 	  }
 	| { type: "text_delta"; runId: string; depth: number; delta: string }
+	/** A message steered into the running turn reached the model's context. */
+	| { type: "steer_injected"; runId: string; depth: number; text: string }
 	| { type: "tool_start"; runId: string; depth: number; toolName: string; toolCallId: string; args: unknown }
 	| { type: "tool_end"; runId: string; depth: number; toolName: string; toolCallId: string; isError: boolean; durationMs: number; preview: string; output: string }
 	| { type: "llm_end"; runId: string; depth: number; costUsd: number; costUnknown: boolean; tokensIn: number; tokensOut: number }
@@ -225,6 +227,14 @@ export interface RunRequest {
 	 * chose the model, for subagents, and when the run's skill does not allow S2.
 	 */
 	startOnS2?: boolean;
+	/** Called once the root agent exists, with a handle that injects user messages before its next model call (mid-turn steering). */
+	onSteeringReady?: (control: SteeringControl) => void;
+}
+
+/** Injects user messages into a running agent; `clear` drops the ones it has not taken yet. */
+export interface SteeringControl {
+	steer(text: string): void;
+	clear(): void;
 }
 
 export interface RunModelInfo {
@@ -1093,6 +1103,20 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		agent = runAgent;
 		seededCount = runAgent.state.messages.length;
 
+		// Steered texts in the order they were queued; the agent takes them one at a time between steps.
+		const pendingSteer: string[] = [];
+		let sawPrompt = false;
+		request.onSteeringReady?.({
+			steer: (text) => {
+				pendingSteer.push(text);
+				runAgent.steer({ role: "user", content: [{ type: "text", text }], timestamp: Date.now() } as AgentMessage);
+			},
+			clear: () => {
+				pendingSteer.length = 0;
+				runAgent.clearSteeringQueue();
+			},
+		});
+
 		let turnIndex = 0;
 		runAgent.subscribe((event: AgentEvent) => {
 			switch (event.type) {
@@ -1100,6 +1124,14 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 					turnSpan = recorder.start({ kind: "turn", name: `turn ${++turnIndex}`, parentSpanId: rootSpan });
 					break;
 				case "message_start":
+					// The first user message is the instruction; later ones are steered messages being injected.
+					if (event.message.role === "user") {
+						if (!sawPrompt) sawPrompt = true;
+						else {
+							const text = pendingSteer.shift();
+							if (text !== undefined) deps.onEvent?.({ type: "steer_injected", runId, depth, text: deps.redact(text) });
+						}
+					}
 					if (event.message.role === "assistant") {
 						if (llmSpan) recorder.finish(llmSpan, { status: "error", attrs: { reason: "superseded by a new assistant message" } });
 						llmSpan = recorder.start({
