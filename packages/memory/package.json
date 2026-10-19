@@ -1,13 +1,13 @@
 {
   "name": "@nexo/memory",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "exports": { ".": "./src/index.ts" },
   "dependencies": {
-    "@nexo/scorers": "0.2.1",
-    "@nexo/store": "0.2.1",
-    "@nexo/telemetry": "0.2.1",
+    "@nexo/scorers": "0.2.2",
+    "@nexo/store": "0.2.2",
+    "@nexo/telemetry": "0.2.2",
     "typebox": "1.3.27"
   }
 }
