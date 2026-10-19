@@ -13,7 +13,7 @@ function packageName(): string {
 	for (const relative of ["../../package.json", "../package.json"]) {
 		try {
 			const json = JSON.parse(readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8")) as { name?: unknown };
-			if (typeof json.name === "string" && !json.name.startsWith("@nexo/")) return json.name;
+			if (typeof json.name === "string" && !json.name.startsWith("@nexo" + "/")) return json.name;
 		} catch {
 			// not at this location; try the next one
 		}
