@@ -58,6 +58,7 @@ import {
 import { type ErrorPayload, type Logger, NexoError, type Redactor, toErrorPayload } from "@nexo/telemetry";
 import {
 	type ChangeTracker,
+	builtinToolDescriptions,
 	createBuiltinTools,
 	createChangeTracker,
 	createPolicy,
@@ -586,6 +587,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	};
 	let systemPromptText = DEFAULT_SYSTEM_PROMPT;
 	let plannerPromptText = DEFAULT_PLANNER_PROMPT;
+	/** Descriptions that replace a built-in tool's own: the rollout's candidate, else a promoted version. Empty for a normal run. */
+	const toolDescriptionOverrides = new Map<string, string>();
 	/** The `--skill` skill with the body this run uses. */
 	let runSkill: Skill | undefined = skill;
 
@@ -651,6 +654,14 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			const effective = effectiveSkill(skill, nowIso);
 			runSkill = effective.skill;
 			snapshot(effective.artifact, effective.skill.content, `skills/${skill.name}/SKILL.md`);
+		}
+		for (const toolName of Object.keys(builtinToolDescriptions())) {
+			const candidate = rolloutCandidate && rolloutCandidate.kind === "tool_description" && rolloutCandidate.name === toolName ? rolloutCandidate : undefined;
+			const version = candidate ?? getActiveArtifact(db, "tool_description", toolName);
+			// A manual version mirrors the built-in text, so only a promoted or candidate version changes what the agent sees.
+			if (!version || (version.origin === "manual" && !candidate)) continue;
+			snapshot(version, version.content, `tools/${toolName}.md`);
+			if (version.origin !== "manual") toolDescriptionOverrides.set(toolName, version.content);
 		}
 		if (skill && startPlaybook?.content.trim()) {
 			members.push({ kind: "playbook", name: skill.name, artifactId: startPlaybook.id, version: startPlaybook.version });
@@ -893,7 +904,9 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		};
 		for (const factory of extraToolFactories) baseTools.push(...factory(toolCtx));
 		if (deps.mcp) baseTools.push(...(await deps.mcp.tools()));
-		const tools = baseTools.map(withToolErrorCodes);
+		const tools = baseTools
+			.map((t) => (toolDescriptionOverrides.has(t.name) ? { ...t, description: toolDescriptionOverrides.get(t.name) as string } : t))
+			.map(withToolErrorCodes);
 
 		// Retrieval at run start (spec §8.3); the query embedding is charged to this run like any of its calls.
 		memoryDeps = {

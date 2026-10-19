@@ -60,8 +60,8 @@ export const USAGE = `Usage:
   nexo eval accept <case-id> [--expected <text>]
   nexo eval dismiss <case-id>
   nexo eval golden revert <case-id>
-  nexo optimize --target skill:<name>|system_prompt|planner_prompt|judge_rubric [--budget-usd <n>] [--max-rollouts <n>] [--merge] [--seed <n>]
-  nexo optimize climb --target skill:<name>|system_prompt|planner_prompt [--case <id>] [--guards <0-10>] [--budget-usd <n>] [--seed <n>]
+  nexo optimize --target skill:<name>|tool:<name>|system_prompt|planner_prompt|judge_rubric [--budget-usd <n>] [--max-rollouts <n>] [--merge] [--seed <n>]
+  nexo optimize climb --target skill:<name>|tool:<name>|system_prompt|planner_prompt [--case <id>] [--guards <0-10>] [--budget-usd <n>] [--seed <n>]
   nexo optimize list
   nexo optimize show <id> [--diff]
   nexo optimize approve <id>               promote the best candidate (refused on weak evidence)

@@ -13,6 +13,8 @@ export function targetComponents(target: OptimTarget): string[] {
 			return ["system_prompt"];
 		case "planner_prompt":
 			return ["planner_prompt"];
+		case "tool_description":
+			return ["description"];
 		case "judge_rubric":
 			return ["rubric"];
 	}

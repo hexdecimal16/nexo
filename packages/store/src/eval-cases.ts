@@ -16,7 +16,7 @@ export const MAX_EVAL_INPUT_CHARS = 20_000;
 /** Most runs listed when an eval set is too small or a promotion needs more human verdicts. */
 export const RUNS_TO_REVIEW = 10;
 
-export type OptimTargetKind = "skill" | "system_prompt" | "planner_prompt" | "judge_rubric";
+export type OptimTargetKind = "skill" | "system_prompt" | "planner_prompt" | "judge_rubric" | "tool_description";
 
 /** What an optimization changes: one artifact (kind and name), written as `key` (`skill:<name>`, `system_prompt`, …). */
 export interface OptimTarget {
@@ -27,6 +27,7 @@ export interface OptimTarget {
 }
 
 const SKILL_TARGET = /^skill:([a-z0-9]+(-[a-z0-9]+)*)$/;
+const TOOL_TARGET = /^tool:([a-z][a-z0-9_]{0,63})$/;
 
 /**
  * Parses an optimization target. `router_policy` is refused: it is a JSON policy of numeric thresholds, not prose.
@@ -35,15 +36,17 @@ const SKILL_TARGET = /^skill:([a-z0-9]+(-[a-z0-9]+)*)$/;
 export function parseOptimTarget(text: string): OptimTarget {
 	const skill = SKILL_TARGET.exec(text);
 	if (skill && (skill[1] as string).length <= 64) return { key: text, kind: "skill", name: skill[1] as string };
+	const tool = TOOL_TARGET.exec(text);
+	if (tool) return { key: text, kind: "tool_description", name: tool[1] as string };
 	if (text === "system_prompt" || text === "planner_prompt" || text === "judge_rubric") return { key: text, kind: text, name: "default" };
 	if (text === "router_policy") {
 		throw invalidRequest(
 			"router_policy is not an optimization target yet: it is a JSON policy of numeric thresholds, not prose, and evaluating one needs S2 escalation rollouts on every case",
 			{ target: text },
-			"Optimize skill:<name>, system_prompt, planner_prompt or judge_rubric; edit router thresholds with router.policy = file:<path>",
+			"Optimize skill:<name>, tool:<name>, system_prompt, planner_prompt or judge_rubric; edit router thresholds with router.policy = file:<path>",
 		);
 	}
-	throw invalidRequest(`Unknown optimization target "${text}"`, { target: text }, "Use skill:<name>, system_prompt, planner_prompt or judge_rubric");
+	throw invalidRequest(`Unknown optimization target "${text}"`, { target: text }, "Use skill:<name>, tool:<name>, system_prompt, planner_prompt or judge_rubric");
 }
 
 /** The text a case's split is derived from: trimmed, whitespace collapsed, lower-cased. */

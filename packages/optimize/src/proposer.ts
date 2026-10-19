@@ -43,6 +43,8 @@ function describe(target: OptimTarget): string {
 			return "the agent's system prompt ({{workspace}} is replaced by the workspace path; keep that placeholder)";
 		case "planner_prompt":
 			return "the planner prompt that tells the agent when and how to split work into parallel subagents";
+		case "tool_description":
+			return `the description of the tool "${target.name}", which the agent reads when it decides whether and how to call the tool (the tool's name and parameters are fixed; describe only what it does, when to use it and its limits)`;
 		case "judge_rubric":
 			return "the rubric an LLM judge grades the agent's work against; each example shows the judge's verdict next to the human's done / not done verdict, which is the ground truth";
 	}
