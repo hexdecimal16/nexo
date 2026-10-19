@@ -8,6 +8,9 @@ export type Db = DatabaseSync;
 
 const MIGRATIONS_DIR = fileURLToPath(new URL("./migrations/", import.meta.url));
 
+/** A migration whose first line is this marker rebuilds a table that others reference: it runs with foreign keys off and is checked with foreign_key_check before it commits. */
+const FK_OFF_MARKER = "-- nexo:foreign-keys-off";
+
 export function openDb(path: string): Db {
 	try {
 		if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
@@ -44,10 +47,19 @@ export function migrate(db: Db): number[] {
 	for (const file of files) {
 		const version = Number(file.slice(0, 3));
 		const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
-		const ran = transaction(db, () => {
+		const fkOff = sql.startsWith(FK_OFF_MARKER);
+		// PRAGMA foreign_keys is a no-op inside a transaction, so it is switched outside it.
+		if (fkOff) db.exec("PRAGMA foreign_keys = OFF");
+		let ran: boolean;
+		try {
+		ran = transaction(db, () => {
 			const current = Number(db.prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_migrations").get()?.v ?? 0);
 			if (version <= current) return false;
 			db.exec(sql);
+			if (fkOff) {
+				const broken = db.prepare("PRAGMA foreign_key_check").all();
+				if (broken.length > 0) throw new Error(`Migration ${file} left ${broken.length} foreign key violations`);
+			}
 			db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)").run(
 				version,
 				file,
@@ -55,6 +67,9 @@ export function migrate(db: Db): number[] {
 			);
 			return true;
 		});
+		} finally {
+			if (fkOff) db.exec("PRAGMA foreign_keys = ON");
+		}
 		if (ran) applied.push(version);
 	}
 	return applied;

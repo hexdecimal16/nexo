@@ -135,7 +135,7 @@ async function runOptimize(args: string[], io: CliIO, options: CliOptions): Prom
 		args,
 		options: { target: { type: "string" }, "budget-usd": { type: "string" }, "max-rollouts": { type: "string" }, merge: { type: "boolean" }, seed: { type: "string" } },
 	});
-	if (!values.target) throw usageError("nexo optimize needs --target skill:<name>|system_prompt|planner_prompt|judge_rubric");
+	if (!values.target) throw usageError("nexo optimize needs --target skill:<name>|tool:<name>|system_prompt|planner_prompt|judge_rubric");
 	const seed = values.seed === undefined ? undefined : Number(values.seed);
 	if (seed !== undefined && !(Number.isInteger(seed) && seed >= 0)) throw usageError("--seed must be a non-negative integer");
 	const runtime = createRuntime({ env: options.env ?? process.env, cwd: options.cwd ?? process.cwd(), prompter: nonInteractivePrompter, models: options.models });
@@ -172,7 +172,7 @@ export function climbEventLine(event: ClimbEvent): string | null {
 /** `nexo optimize climb --target … [--case] [--guards] [--budget-usd] [--seed]`: one climb in the foreground. */
 async function runClimb(args: string[], io: CliIO, options: CliOptions): Promise<number> {
 	const { values } = parseArgs({ args, options: { target: { type: "string" }, case: { type: "string" }, guards: { type: "string" }, "budget-usd": { type: "string" }, seed: { type: "string" } } });
-	if (!values.target) throw usageError("nexo optimize climb needs --target skill:<name>|system_prompt|planner_prompt");
+	if (!values.target) throw usageError("nexo optimize climb needs --target skill:<name>|tool:<name>|system_prompt|planner_prompt");
 	const guards = values.guards === undefined ? undefined : Number(values.guards);
 	if (guards !== undefined && !(Number.isInteger(guards) && guards >= 0 && guards <= 10)) throw usageError("--guards must be an integer from 0 to 10");
 	const seed = values.seed === undefined ? undefined : Number(values.seed);

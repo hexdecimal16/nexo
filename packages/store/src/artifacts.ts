@@ -3,7 +3,7 @@ import type { Db } from "./db.ts";
 import { transaction } from "./db.ts";
 import { newId } from "./ids.ts";
 
-export type ArtifactKind = "system_prompt" | "skill" | "playbook" | "router_policy" | "judge_rubric" | "planner_prompt";
+export type ArtifactKind = "system_prompt" | "skill" | "playbook" | "router_policy" | "judge_rubric" | "planner_prompt" | "tool_description";
 
 export interface ArtifactRow {
 	id: string;

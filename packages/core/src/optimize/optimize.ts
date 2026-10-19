@@ -57,6 +57,7 @@ import { createEngineEnv, type EngineEnv } from "../engine/run.ts";
 import { judgeKey, judgeModels, loadJudgeRubric } from "../scoring/sources.ts";
 import { mineQuietly } from "./mine.ts";
 import { readScratchpad, writeScratchpad } from "./scratchpad-wiki.ts";
+import { builtinToolDescriptions } from "@nexo/tools";
 import { assertReflectionFits } from "./reflect.ts";
 import { createOptimAdapter, type DetailedEvaluation, type OptimContext, type OptimEvent } from "./adapter.ts";
 import { closeOptimizerRun, openOptimizerRun } from "./optimizer-run.ts";
@@ -107,6 +108,13 @@ export function baseVersion(env: EngineEnv, target: OptimTarget, nowIso: string)
 			return resolveSourcedArtifact(db, "system_prompt", "default", redact(DEFAULT_SYSTEM_PROMPT), nowIso);
 		case "planner_prompt":
 			return resolveSourcedArtifact(db, "planner_prompt", "default", redact(DEFAULT_PLANNER_PROMPT), nowIso);
+		case "tool_description": {
+			const description = builtinToolDescriptions()[target.name];
+			if (description === undefined) {
+				throw new NexoError({ code: "INVALID_REQUEST", message: `Unknown built-in tool "${target.name}"`, hint: `Available: ${Object.keys(builtinToolDescriptions()).join(", ")}` });
+			}
+			return resolveSourcedArtifact(db, "tool_description", target.name, redact(description), nowIso);
+		}
 		case "judge_rubric":
 			return loadJudgeRubric(db, config, nowIso, redact).artifact;
 	}
