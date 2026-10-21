@@ -1,8 +1,6 @@
-import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
 import {
 	type AssistantMessage,
 	type AssistantMessageEventStream,
@@ -23,6 +21,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { renderTranscript } from "./claude-p.ts";
+import { spawnGroup } from "./process-runner.ts";
 
 /** Provider id: models are referenced as `kiro-p/<kiro model id>`, e.g. `kiro-p/claude-sonnet-5.5` or `kiro-p/auto`. */
 export const KIRO_P_PROVIDER = "kiro-p";
@@ -59,22 +58,7 @@ export interface KiroPProviderOptions {
 }
 
 function spawnRunner(command: string): KiroPRunner {
-	return ({ args, stdin, cwd, signal, onStderr }) => {
-		const child = spawn(command, args, { cwd, stdio: ["pipe", "pipe", "pipe"], ...(signal ? { signal } : {}) });
-		let stderr = "";
-		child.stderr.setEncoding("utf8");
-		child.stderr.on("data", (chunk: string) => {
-			if (stderr.length < 16_384) stderr += chunk;
-			onStderr?.(chunk);
-		});
-		const exit = new Promise<{ code: number | null; stderr: string }>((resolve) => {
-			child.on("error", (error) => resolve({ code: null, stderr: stderr || error.message }));
-			child.on("close", (code) => resolve({ code, stderr }));
-		});
-		child.stdin.on("error", () => {});
-		child.stdin.end(stdin);
-		return { lines: createInterface({ input: child.stdout, crlfDelay: Infinity }), exit };
-	};
+	return (request) => spawnGroup(command, request);
 }
 
 /** Kiro's model ids (`kiro-cli chat --list-models`) with their context windows. Kiro bills in credits, so cost stays zero. */

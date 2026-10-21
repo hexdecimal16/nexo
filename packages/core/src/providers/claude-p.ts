@@ -1,8 +1,6 @@
-import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
 import {
 	type AssistantMessage,
 	type AssistantMessageEventStream,
@@ -24,6 +22,7 @@ import {
 	type Usage,
 } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
+import { spawnGroup } from "./process-runner.ts";
 
 /** Provider id: models are referenced as `claude-p/<model>`, e.g. `claude-p/opus` or `claude-p/claude-sonnet-5-5`. */
 export const CLAUDE_P_PROVIDER = "claude-p";
@@ -60,21 +59,7 @@ export interface ClaudePProviderOptions {
 }
 
 function spawnRunner(command: string): ClaudePRunner {
-	return ({ args, stdin, cwd, signal }) => {
-		const child = spawn(command, args, { cwd, stdio: ["pipe", "pipe", "pipe"], ...(signal ? { signal } : {}) });
-		let stderr = "";
-		child.stderr.setEncoding("utf8");
-		child.stderr.on("data", (chunk: string) => {
-			if (stderr.length < 16_384) stderr += chunk;
-		});
-		const exit = new Promise<{ code: number | null; stderr: string }>((resolve) => {
-			child.on("error", (error) => resolve({ code: null, stderr: stderr || error.message }));
-			child.on("close", (code) => resolve({ code, stderr }));
-		});
-		child.stdin.on("error", () => {});
-		child.stdin.end(stdin);
-		return { lines: createInterface({ input: child.stdout, crlfDelay: Infinity }), exit };
-	};
+	return (request) => spawnGroup(command, request);
 }
 
 /** The Claude models from pi-ai's Anthropic catalog, re-homed under `claude-p`, plus the CLI's family aliases. */
