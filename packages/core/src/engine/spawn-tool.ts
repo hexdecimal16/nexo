@@ -1,4 +1,5 @@
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import { toErrorPayload } from "@nexo/telemetry";
 import { Type } from "typebox";
 import { EffortSchema } from "../config/schema.ts";
 import { RunBudget } from "../cost/budget.ts";
@@ -56,20 +57,22 @@ async function runSpawn(
 			}
 			const subSpan = recorder.start({ kind: "subagent", name: task.id, parentSpanId: spawnSpanId, queuedMs: input.queuedMs, attrs: { task, budgetUsd: input.budgetUsd } });
 			const startedAt = env.now().toISOString();
-			const result = await executeRun(env, {
+			const runChild = (childBudgetUsd: number) =>
+				executeRun(env, {
 				request: {
 					instruction: withDependencyOutputs(task.instruction, input.dependencyOutputs),
 					skill: task.skill,
 					model: task.model,
 					effort: task.effort,
 				},
-				budget: new RunBudget(input.budgetUsd),
+				budget: new RunBudget(childBudgetUsd),
 				signal,
 				parent: {
 					runId: ctx.runId,
 					rootRunId: ctx.rootRunId,
 					runDir: ctx.runDir,
 					spanId: subSpan,
+					taskId: task.id,
 					depth: ctx.depth + 1,
 					leases: ctx.leases,
 					sharedWorkspace: ctx.sharedWorkspace,
@@ -81,6 +84,28 @@ async function runSpawn(
 					approvals: ctx.approvals,
 				},
 			});
+			let result: Awaited<ReturnType<typeof runChild>>;
+			let priorCostUsd = 0;
+			try {
+				result = await runChild(input.budgetUsd);
+				// A retryable provider failure (e.g. a stalled CLI) gets one more attempt with whatever is left of the
+				// task's reservation; the first attempt's spend still counts.
+				const remainingUsd = input.budgetUsd - result.costUsd;
+				if (result.status === "failed" && result.error?.retryable && !signal?.aborted && remainingUsd > 1e-9) {
+					ctx.addChildCost(result.costUsd, result.costUnknown, result.approvalCostUsd);
+					priorCostUsd = result.costUsd;
+					env.deps.logger.warn("retrying subagent after retryable failure", { run_id: ctx.runId, task_id: task.id, error: result.error });
+					result = await runChild(remainingUsd);
+				}
+			} catch (caught) {
+				// Always close the span, otherwise it stays 'running' forever.
+				try {
+					recorder.finish(subSpan, { status: "error", attrs: { error: toErrorPayload(caught) } });
+				} catch (finishError) {
+					env.deps.logger.error("finishing subagent span failed", { run_id: ctx.runId, task_id: task.id, error: finishError });
+				}
+				throw caught;
+			}
 			ctx.addChildCost(result.costUsd, result.costUnknown, result.approvalCostUsd);
 			try {
 				recorder.finish(subSpan, {
@@ -95,7 +120,7 @@ async function runSpawn(
 				trajectoryId: result.trajectoryId,
 				status: result.status,
 				output: result.output,
-				costUsd: result.costUsd,
+				costUsd: priorCostUsd + result.costUsd,
 				startedAt,
 				endedAt: env.now().toISOString(),
 				...(result.error ? { error: result.error } : {}),
