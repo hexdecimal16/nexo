@@ -7,12 +7,22 @@ import { NexoError } from "@nexo/telemetry";
 import { Type } from "typebox";
 import type { ChangeTracker } from "./change-tracker.ts";
 import { canonicalPath, nexoHomeGuard, resolveConfined, SECRET_PATH } from "./confine.ts";
+import { htmlToText, looksLikeHtml } from "./html-text.ts";
 import type { FileLeases } from "./leases.ts";
 
 export const MAX_BASH_OUTPUT_BYTES = 1_000_000;
 const MAX_READ_LINES = 2000;
 const MAX_FETCH_CHARS = 100_000;
 const FETCH_TIMEOUT_MS = 30_000;
+/** Most of a response body read before conversion; the converted text is then capped at MAX_FETCH_CHARS. */
+const MAX_FETCH_RAW_CHARS = 2_000_000;
+const FETCH_USER_AGENT = "Mozilla/5.0 (compatible; nexo)";
+const FETCH_ACCEPT = "text/markdown;q=1.0, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1";
+
+/** True for content types whose body is text an agent can read. */
+function isTextualMime(mime: string): boolean {
+	return mime.startsWith("text/") || /json|xml|javascript|yaml|markdown/.test(mime);
+}
 const MAX_READ_BATCH = 20;
 
 /** Paths with this prefix open the run's saved large tool outputs (`tool_outputs/` in the run directory) with `read`. */
@@ -294,15 +304,32 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 	const webFetch: AgentTool<typeof FetchParams> = {
 		name: "web_fetch",
 		label: "Fetch URL",
-		description: "Fetch an http(s) URL and return the response body as text.",
+		description: `Fetch an http(s) URL and return readable text. HTML pages are converted to plain text with links kept as [text](url); scripts, styles, navigation and footers are dropped. Markdown is requested first, so sites that serve it return it unchanged. Output is capped at ${MAX_FETCH_CHARS} characters. Binary files are refused. If a site blocks the fetch (for example a Cloudflare challenge), load the browser skill and read the page there.`,
 		parameters: FetchParams,
 		execute: async (_id, params, signal) => {
 			const url = new URL(params.url);
 			if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error(`Only http and https URLs are allowed: ${params.url}`);
 			const signals = [AbortSignal.timeout(FETCH_TIMEOUT_MS), ...(signal ? [signal] : [])];
-			const response = await (ctx.fetch ?? fetch)(url.toString(), { signal: AbortSignal.any(signals) });
-			const body = (await response.text()).slice(0, MAX_FETCH_CHARS);
-			if (!response.ok) return textResult(`HTTP ${response.status} for ${params.url}\n${body}`, true);
+			const combined = AbortSignal.any(signals);
+			const get = (userAgent: string) =>
+				(ctx.fetch ?? fetch)(url.toString(), {
+					signal: combined,
+					headers: { "User-Agent": userAgent, Accept: FETCH_ACCEPT, "Accept-Language": "en-US,en;q=0.9" },
+				});
+			const challenged = (r: Response) => r.status === 403 && r.headers.get("cf-mitigated") === "challenge";
+			let response = await get(FETCH_USER_AGENT);
+			// Some challenges let a plain client through when it does not pose as a browser.
+			if (challenged(response)) response = await get("nexo");
+			const mime = (response.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
+			if (mime && !isTextualMime(mime)) return textResult(`Unsupported content type ${mime} for ${params.url}; fetch only reads text.`, true);
+			const raw = (await response.text()).slice(0, MAX_FETCH_RAW_CHARS);
+			const isHtml = mime === "text/html" || mime === "application/xhtml+xml" || (mime === "" && looksLikeHtml(raw));
+			let body = isHtml ? htmlToText(raw) : raw;
+			if (body.length > MAX_FETCH_CHARS) body = `${body.slice(0, MAX_FETCH_CHARS)}\n[truncated at ${MAX_FETCH_CHARS} characters]`;
+			if (!response.ok) {
+				const hint = challenged(response) ? "\nThe site served a bot challenge. Load the browser skill and open the page there." : "";
+				return textResult(`HTTP ${response.status} for ${params.url}\n${body}${hint}`, true);
+			}
 			return textResult(body);
 		},
 	};
