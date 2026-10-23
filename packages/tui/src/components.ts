@@ -151,35 +151,59 @@ export class ToolLine implements Component {
 	invalidate(): void {}
 }
 
-/** One line per spawned subagent: status and cost. */
+/** One entry per spawned subagent: task id, model, elapsed time, current tool and, on failure, the error. */
 export class SubagentLine implements Component {
 	private state: LineState = "running";
 	private costUsd = 0;
 	private status = "";
+	private error = "";
+	private tool = "";
+	private toolCalls = 0;
+	private endedAt: number | null = null;
+	private readonly startedAt = Date.now();
 	private readonly summary: string;
 	private readonly ticker: Ticker;
 	private readonly depth: number;
-	constructor(summary: string, depth: number, ticker: Ticker) {
+	private readonly label: string;
+	constructor(summary: string, depth: number, ticker: Ticker, label: string) {
 		this.summary = summary;
 		this.depth = depth;
 		this.ticker = ticker;
+		this.label = label;
 	}
-	finish(status: string, costUsd: number): void {
+	toolStarted(summary: string): void {
+		this.tool = summary;
+		this.toolCalls++;
+	}
+	toolEnded(): void {
+		this.tool = "";
+	}
+	finish(status: string, costUsd: number, error = ""): void {
 		this.state = status === "succeeded" ? "ok" : "error";
 		this.status = status;
 		this.costUsd = costUsd;
+		this.error = error;
+		this.tool = "";
+		this.endedAt = Date.now();
 	}
 	interrupt(): void {
 		if (this.state === "running") {
 			this.state = "error";
 			this.status = "interrupted";
+			this.tool = "";
+			this.endedAt = Date.now();
 		}
 	}
 	render(width: number): string[] {
 		const indent = "  ".repeat(Math.max(0, this.depth - 1));
 		const mark = this.state === "running" ? style.cyan(this.ticker.spinner) : this.state === "ok" ? style.green("✓") : style.red("✗");
-		const tail = this.state === "running" ? style.gray(" running") : style.gray(` ${this.status} · ${usd(this.costUsd)}`);
-		return [truncateToWidth(`${indent}  ↳ ${mark} subagent ${this.summary}${tail}`, width)];
+		const elapsed = duration((this.endedAt ?? Date.now()) - this.startedAt);
+		const calls = this.toolCalls > 0 ? ` · ${this.toolCalls} tool${this.toolCalls === 1 ? "" : "s"}` : "";
+		const tail = this.state === "running" ? style.gray(` ${elapsed}${calls}`) : style.gray(` ${this.status} · ${elapsed}${calls} · ${usd(this.costUsd)}`);
+		const lines = [truncateToWidth(`${indent}  ↳ ${mark} ${style.bold(this.label)} ${this.summary}${tail}`, width)];
+		if (this.state === "running" && this.tool) lines.push(truncateToWidth(style.gray(`${indent}      ${this.tool}`), width));
+		if (this.state === "error" && this.error) lines.push(truncateToWidth(style.red(`${indent}      ${this.error}`), width));
+		return lines;
 	}
 	invalidate(): void {}
 }

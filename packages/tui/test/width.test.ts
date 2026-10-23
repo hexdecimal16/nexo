@@ -24,7 +24,7 @@ describe("narrow terminals", () => {
 		fits(tool.render(40), 40);
 		view.verbose = true;
 		fits(tool.render(40), 40);
-		fits(new SubagentLine(LONG, 3, ticker).render(40), 40);
+		fits(new SubagentLine(LONG, 3, ticker, `${LONG} · faux/fast`).render(40), 40);
 		fits(new Block(`${LONG}\n${LONG}`, (s) => s, "› ").render(40), 40);
 		fits(new DynamicLine(() => `faux/${LONG} · high · turn $0.00`).render(40), 40);
 		fits(new SafeMarkdown(`# ${LONG}\n\n\`\`\`\n${LONG}\n\`\`\`\n\n| a | ${LONG} |\n|---|---|\n| 1 | 2 |`, 0, 1, markdownTheme).render(40), 40);
