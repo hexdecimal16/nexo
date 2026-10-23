@@ -61,3 +61,23 @@ describe("page context", () => {
 		expect(pageContext("/unknown.html", "").page).toBe("runs");
 	});
 });
+
+describe("companion costs tool", () => {
+	it("passes the by argument through to the cost report", async () => {
+		const observed: string[] = [];
+		const model: CompanionModel = {
+			async complete({ user }) {
+				observed.push(user);
+				return user.includes("Observation") ? '{"answer":"ok","links":[]}' : '{"tool":"costs","args":{"by":"model"}}';
+			},
+		};
+		const s = await startWebServer({ db: openDb(":memory:"), redact: createRedactor(), port: 0, companion: model });
+		try {
+			const res = await ask(s, { page: "cost", question: "Which models cost most?" });
+			expect(res.status).toBe(200);
+			expect(observed.at(-1)).toContain('"by":"model"');
+		} finally {
+			await s.close();
+		}
+	});
+});

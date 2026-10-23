@@ -77,7 +77,7 @@ const TOOLS: Record<string, Tool> = {
 			return runDetailResponse(ctx, a.id as string);
 		},
 	},
-	costs: { about: "spend grouped by model, skill or day. args: since, groupBy", run: (ctx, a) => costResponse(ctx, query(a, ["since", "groupBy"])) },
+	costs: { about: "spend grouped by model, skill or day. args: by (model, skill or day; default day), since (YYYY-MM-DD)", run: (ctx, a) => costResponse(ctx, query(a, ["since", "by"])) },
 	list_sessions: { about: "recent chat sessions. args: limit (max 25)", run: (ctx, a) => listSessionsResponse(ctx, query(a, ["limit"])) },
 	list_memories: { about: "what nexo has learned. args: limit (max 25)", run: (ctx, a) => memoriesResponse(ctx, query(a, ["limit"])) },
 	judge_calibration: { about: "judge agreement with human verdicts. no args", run: (ctx) => judgeCalibrationResponse(ctx) },
