@@ -5,6 +5,7 @@ import { type Db, ensureNexoDirs, isPidAlive, type NexoPaths, openDb, recoverCra
 import { createRedactor, NexoError } from "@nexo/telemetry";
 import { nonInteractivePrompter } from "@nexo/tools";
 import { type ReadOnlyInfo, startWebServer } from "@nexo/web";
+import { companionModel } from "./companion.ts";
 import { openLogger } from "./runtime.ts";
 
 /** How often `nexo ui` looks for pending learn jobs (new runs and verdicts from the UI or other processes). */
@@ -90,6 +91,7 @@ export async function runUi(options: { env: NodeJS.ProcessEnv; cwd: string; port
 			learning: { enabled: config?.learning.enabled ?? false },
 			optimize: { minJudgeKappa: config?.optimize.minJudgeKappa ?? 0.6 },
 			wikisDir: paths.wikis,
+			companion: config ? companionModel(options, paths) : null,
 		});
 	} catch (error) {
 		db.close();

@@ -4,3 +4,4 @@ export * from "./http-errors.ts";
 export * from "./server.ts";
 export * from "./static.ts";
 export * from "./strip.ts";
+export type { CompanionModel } from "./companion.ts";
