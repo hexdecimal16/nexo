@@ -603,7 +603,10 @@ class InteractiveApp {
 				break;
 			}
 			case "tool_start": {
-				if (event.depth !== 0) return;
+				if (event.depth !== 0) {
+					this.subagents.get(event.runId)?.toolStarted(toolSummary(event.toolName, event.args, 50));
+					return;
+				}
 				this.currentText = null;
 				const line = new ToolLine(toolSummary(event.toolName, event.args), toolSummary(event.toolName, event.args, Number.POSITIVE_INFINITY), this.ticker, this.view);
 				this.tools.set(event.toolCallId, line);
@@ -611,7 +614,10 @@ class InteractiveApp {
 				break;
 			}
 			case "tool_end": {
-				if (event.depth !== 0) return;
+				if (event.depth !== 0) {
+					this.subagents.get(event.runId)?.toolEnded();
+					return;
+				}
 				this.tools.get(event.toolCallId)?.finish(event.isError, event.durationMs, event.output);
 				this.tools.delete(event.toolCallId);
 				break;
@@ -621,14 +627,14 @@ class InteractiveApp {
 					this.liveModel = { model: event.model, effort: event.effort };
 					return;
 				}
-				const line = new SubagentLine(escapeControl(oneLine(event.instruction, 70)), event.depth, this.ticker);
+				const line = new SubagentLine(escapeControl(oneLine(event.instruction, 60)), event.depth, this.ticker, escapeControl(`${event.taskId ?? event.runId.slice(-6)} · ${event.model}`));
 				this.subagents.set(event.runId, line);
 				this.chat.addChild(line);
 				break;
 			}
 			case "run_end": {
 				if (event.depth === 0) return;
-				this.subagents.get(event.runId)?.finish(event.status, event.costUsd);
+				this.subagents.get(event.runId)?.finish(event.status, event.costUsd, event.error ? escapeControl(`${event.error.code}: ${oneLine(event.error.message, 120)}`) : "");
 				this.subagents.delete(event.runId);
 				break;
 			}
