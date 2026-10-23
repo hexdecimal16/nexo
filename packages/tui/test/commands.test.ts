@@ -1,3 +1,6 @@
+import { mkdtempSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { latestFeedback } from "@nexo/store";
 import { describe, expect, it } from "vitest";
@@ -204,6 +207,36 @@ describe("/resume", () => {
 		submit(h.terminal, `/resume ${oldId}`);
 		await until(() => expect(h.terminal.output()).toContain("old-reply-text"));
 		expect(h.session().id).toBe(oldId);
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
+	it("/resume lists this project's sessions only, and /resume --all lists every project", async () => {
+		const a = await startHarness();
+		a.faux.setResponses([fauxAssistantMessage("alpha-reply")]);
+		submit(a.terminal, "alpha question");
+		await until(() => !a.session().running && a.session().turns === 1);
+		a.terminal.send(KEY.ctrlD);
+		await a.done;
+
+		const otherCwd = realpathSync(mkdtempSync(join(tmpdir(), "nexo-tui-other-")));
+		const b = await startHarness({ reuse: { paths: a.paths, cwd: otherCwd } });
+		b.faux.setResponses([fauxAssistantMessage("beta-reply")]);
+		submit(b.terminal, "beta question");
+		await until(() => !b.session().running && b.session().turns === 1);
+		b.terminal.send(KEY.ctrlD);
+		await b.done;
+
+		const h = await startHarness({ reuse: a });
+		submit(h.terminal, "/resume");
+		await until(() => expect(h.terminal.output()).toContain("Resume a session"));
+		expect(h.terminal.output()).toContain("alpha question");
+		expect(h.terminal.output()).not.toContain("beta question");
+		h.terminal.send(KEY.escape);
+
+		submit(h.terminal, "/resume --all");
+		await until(() => expect(h.terminal.output()).toContain("beta question"));
+		h.terminal.send(KEY.escape);
 		h.terminal.send(KEY.ctrlD);
 		await h.done;
 	});

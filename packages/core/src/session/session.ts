@@ -376,6 +376,7 @@ export class Session {
 					sessionId: this.id,
 					turnIndex,
 					...(workspace !== null ? { workspace } : {}),
+					projectDir: this.state.cwd,
 					...(previous ? { workspaceFrom: previous } : {}),
 					...(this.state.model ? { model: this.state.model } : {}),
 					...(this.continuesOnS2 ? { startOnS2: true } : {}),
@@ -719,8 +720,8 @@ export function resumeSession(deps: SessionDeps, id: string): Session {
 }
 
 /** Indexed sessions that ran at least one turn, most recently updated first. Throws INVALID_REQUEST for a limit outside 1..1000. */
-export function listSessions(db: Db, options: { limit?: number } = {}): SessionSummary[] {
+export function listSessions(db: Db, options: { limit?: number; underDir?: string | readonly string[] } = {}): SessionSummary[] {
 	const limit = options.limit ?? 20;
 	if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw invalid(`limit must be an integer from 1 to 1000, got ${limit}`);
-	return listSessionRows(db, { limit, withTurns: true });
+	return listSessionRows(db, { limit, withTurns: true, ...(options.underDir !== undefined ? { underDir: options.underDir } : {}) });
 }

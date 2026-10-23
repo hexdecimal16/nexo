@@ -78,6 +78,8 @@ import { estimateCallCostUsd, priceUsage } from "../cost/pricing.ts";
 import { classifyProviderError, contextOverflowError, providerRetryDelayMs, toolErrorText, withToolErrorCodes } from "./errors.ts";
 import { assistantText, contentText, estimatePromptChars, foreignToolCallsAsText, lastAssistant, recordedContent, withBudgetLine } from "./messages.ts";
 import { DEFAULT_PLANNER_PROMPT, DEFAULT_SYSTEM_PROMPT, renderSystemPrompt } from "./prompts.ts";
+import { loadProjectInstructions } from "../session/project-instructions.ts";
+import { projectScope } from "../session/project-root.ts";
 import { type ApiKeyResolver, createGatedStreamFn } from "./provider-gate.ts";
 import { Recorder } from "./recorder.ts";
 import type { ChargedCallDeps } from "../learn/caller.ts";
@@ -212,6 +214,8 @@ export interface RunRequest {
 	model?: string;
 	effort?: Effort;
 	workspace?: string;
+	/** Directory nexo was started in: its AGENTS.md / CLAUDE.md go into the prompt and its repo keys the project memory scope. */
+	projectDir?: string;
 	budgetUsd?: number;
 	/** Conversation so far, seeded into the agent before the instruction. System messages are dropped. */
 	history?: Message[];
@@ -930,7 +934,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			// load_skill adds to `ids`, so the run works on its own copy.
 			memoryContext = { ...input.memoryContext, ids: new Set(input.memoryContext.ids) };
 		} else if (!input.signal?.aborted) {
-			memoryContext = await retrieveRunMemories(memoryDeps, request.instruction, ["user", "global", ...(skill ? [`skill:${skill.name}`] : [])]);
+			memoryContext = await retrieveRunMemories(memoryDeps, request.instruction, ["user", "global", ...(request.projectDir ? [projectScope(request.projectDir)] : []), ...(skill ? [`skill:${skill.name}`] : [])]);
 			input.onMemoryContext?.({ ...memoryContext, ids: new Set(memoryContext.ids) });
 		}
 		// The run directory keeps the memories the run started with (spec §5.1 `context/`).
@@ -942,6 +946,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			workspace,
 			...(rollout ? {} : { wikisDir: deps.paths.wikis }),
 			skillIndex: formatSkillIndex(deps.skills),
+			...(request.projectDir && !rollout ? { projectInstructions: loadProjectInstructions(request.projectDir, config.instructions).block } : {}),
 			activeSkill: runSkill
 				? { name: runSkill.name, body: startPlaybookSection ? `${runSkill.body}\n\n${startPlaybookSection}` : runSkill.body }
 				: undefined,

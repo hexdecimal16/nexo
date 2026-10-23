@@ -33,6 +33,8 @@ import {
 import { NexoError, toErrorPayload } from "@nexo/telemetry";
 import { Recorder } from "../engine/recorder.ts";
 import type { EngineEnv } from "../engine/run.ts";
+import { projectScope } from "../session/project-root.ts";
+import { getSessionRow } from "@nexo/store";
 import { summarizeSpans } from "../scoring/runner.ts";
 import { type ChargedCallDeps, embedCharged, ensureLearnBudget, estimateLearnCallUsd, learnBudget, ledgerCharge, structuredLearnCall } from "./caller.ts";
 import { embeddingEndpoint, type FetchLike } from "./embedder.ts";
@@ -154,7 +156,9 @@ export async function runLearnJob(env: EngineEnv, job: LearnJobRow, options: { w
 			return { lessons: 0, curation: null, costUsd, costUnknown };
 		}
 
-		const scopes = ["user", "global", ...skills.map((s) => `skill:${s}`)];
+		const sessionCwd = run.sessionId ? getSessionRow(db, run.sessionId)?.cwd : undefined;
+		const project = sessionCwd ? projectScope(sessionCwd) : null;
+		const scopes = ["user", "global", ...(project ? [project] : []), ...skills.map((s) => `skill:${s}`)];
 		const candidates = liveMemories(db, scopes);
 		const relevance = relevanceScores(candidates, ftsScores(db, reflection.lessons.map((l) => l.content).join("\n"), scopes), null);
 		const related = [...candidates]
@@ -194,6 +198,7 @@ export async function runLearnJob(env: EngineEnv, job: LearnJobRow, options: { w
 					delta,
 					tags: reflection.playbookTags,
 					skills,
+					projectScope: project,
 					maxPlaybookItems: config.learning.maxPlaybookItems,
 					vectors,
 					embeddingModel: endpoint?.model ?? null,

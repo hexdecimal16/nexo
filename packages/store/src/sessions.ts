@@ -131,11 +131,25 @@ export function getSessionRow(db: Db, id: string): SessionRow | undefined {
 }
 
 /** Sessions, most recently updated first; `withTurns` leaves out sessions that never ran a turn (no recorded turn and no linked run). */
-export function listSessionRows(db: Db, options: { limit?: number; withTurns?: boolean } = {}): SessionRow[] {
-	const where = options.withTurns ? "WHERE turns > 0 OR EXISTS (SELECT 1 FROM runs WHERE runs.session_id = sessions.id) " : "";
+export function listSessionRows(db: Db, options: { limit?: number; withTurns?: boolean; underDir?: string | readonly string[] } = {}): SessionRow[] {
+	const clauses: string[] = [];
+	const params: SQLInputValue[] = [];
+	if (options.withTurns) clauses.push("(turns > 0 OR EXISTS (SELECT 1 FROM runs WHERE runs.session_id = sessions.id))");
+	// Sessions started in any of the `underDir` directories or below them (a project's roots, e.g. all its git worktrees).
+	if (options.underDir !== undefined) {
+		const dirs = typeof options.underDir === "string" ? [options.underDir] : options.underDir;
+		const parts = dirs.map((raw) => {
+			const dir = raw.replace(/\/+$/, "") || "/";
+			const prefix = dir === "/" ? "/" : `${dir}/`;
+			params.push(dir, prefix.length, prefix);
+			return "(cwd = ? OR substr(cwd, 1, ?) = ?)";
+		});
+		clauses.push(parts.length > 0 ? `(${parts.join(" OR ")})` : "0");
+	}
+	const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")} ` : "";
 	return db
 		.prepare(`SELECT * FROM sessions ${where}ORDER BY updated_at DESC, id DESC LIMIT ?`)
-		.all(options.limit ?? 20)
+		.all(...params, options.limit ?? 20)
 		.map(decode);
 }
 

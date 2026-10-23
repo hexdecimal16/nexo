@@ -1,5 +1,5 @@
 import { parseArgs } from "node:util";
-import { createConfiguredMcpHub, createSession, createSettings, listSessions, nexoModels, resumeSession, type SessionDeps } from "@nexo/core";
+import { createConfiguredMcpHub, createSession, createSettings, listSessions, nexoModels, projectRoots, resumeSession, type SessionDeps } from "@nexo/core";
 import type { McpHub } from "@nexo/mcp";
 import { EFFORTS, type Effort } from "@nexo/router";
 import { BUNDLED_SKILLS_DIR, loadSkills } from "@nexo/skills";
@@ -48,6 +48,8 @@ interface InteractiveArgs {
 	workspace?: string;
 	model?: string;
 	effort?: Effort;
+	/** `--resume --all`: list sessions from every project instead of the current one. */
+	all?: boolean;
 }
 
 /** `--resume` takes an optional id, which `parseArgs` cannot express, so it is pulled out first. */
@@ -66,13 +68,14 @@ export function parseInteractiveArgs(args: string[]): InteractiveArgs {
 			resume = { id: arg.slice("--resume=".length) || null };
 		} else rest.push(arg);
 	}
-	const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { workspace: { type: "string" }, model: { type: "string" }, effort: { type: "string" } } });
+	const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { workspace: { type: "string" }, model: { type: "string" }, effort: { type: "string" }, all: { type: "boolean" } } });
+	if (values.all && !resume) throw usageError("--all applies to --resume only");
 	if (positionals.length > 0) throw usageError(`Unexpected argument "${positionals[0]}"`);
 	if (values.effort !== undefined && !(EFFORTS as readonly string[]).includes(values.effort)) throw usageError(`--effort must be one of ${EFFORTS.join(", ")}`);
 	if (resume && (values.workspace !== undefined || values.model !== undefined || values.effort !== undefined)) {
 		throw usageError("--resume reopens a session as it was; --workspace, --model and --effort apply to new sessions only");
 	}
-	return { resume, workspace: values.workspace, model: values.model, effort: values.effort as Effort | undefined };
+	return { resume, workspace: values.workspace, model: values.model, effort: values.effort as Effort | undefined, all: values.all === true };
 }
 
 const PICKER_LIMIT = 50;
@@ -95,9 +98,9 @@ export async function interactiveCommand(args: string[], io: CliIO, options: Cli
 	if (parsed.resume) {
 		resumeId = parsed.resume.id;
 		if (resumeId === null) {
-			const rows = listSessions(db, { limit: PICKER_LIMIT });
+			const rows = listSessions(db, { limit: PICKER_LIMIT, ...(parsed.all ? {} : { underDir: projectRoots(cwd) }) });
 			if (rows.length === 0) {
-				throw new NexoError({ code: "NOT_FOUND", message: "No sessions to resume", hint: "Run `nexo` to start one" });
+				throw new NexoError({ code: "NOT_FOUND", message: parsed.all ? "No sessions to resume" : "No sessions to resume in this project", hint: parsed.all ? "Run `nexo` to start one" : "Run `nexo --resume --all` to see sessions from every project" });
 			}
 			resumeId = await runSessionPicker({ sessions: rows, terminal: options.terminal, signal: options.signal });
 			if (resumeId === null) return options.signal?.aborted ? EXIT_SIGINT : 0;

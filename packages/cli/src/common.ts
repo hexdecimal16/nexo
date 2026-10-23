@@ -39,7 +39,8 @@ export interface CliOptions {
 
 export const USAGE = `Usage:
   nexo                                     start an interactive session (needs a terminal)
-  nexo --resume [id]                       resume a session (a picker when no id is given)
+  nexo --resume [id] [--all]               resume a session (a picker of this project's sessions when no id is given;
+                                           --all lists every project)
   nexo [--workspace <dir>] [--model <s1|s2|provider/id>] [--effort <level>]   options for a new session
                                            without --workspace each turn works in its own run folder (files carried over
                                            from the previous turn); --workspace . works in the current folder

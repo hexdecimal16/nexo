@@ -123,6 +123,8 @@ export const ConfigSchema = Type.Object(
 			{ maxParallelSubagents: Type.Integer({ minimum: 1 }), maxDepth: Type.Integer({ minimum: 0 }) },
 			{ additionalProperties: false },
 		),
+		/** Extra instruction files (paths or globs inside the project) loaded into the prompt next to AGENTS.md / CLAUDE.md. */
+		instructions: Type.Array(Type.String({ minLength: 1 })),
 		skills: Type.Object(
 			{
 				dirs: Type.Array(Type.String({ minLength: 1 })),
@@ -267,6 +269,7 @@ export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 	},
 	session: { compactAt: 0.8, compactAtBudgetShare: 0.2 },
 	spawn: { maxParallelSubagents: 4, maxDepth: 4 },
+	instructions: [],
 	skills: { dirs: ["$NEXO_HOME/skills", "./.nexo/skills"], pins: {} },
 	tools: {
 		policy: { read: "allow", write: "allow", edit: "allow", bash: "ask", web_fetch: "ask", load_skill: "allow", spawn: "allow" },

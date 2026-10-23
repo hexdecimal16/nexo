@@ -25,6 +25,8 @@ export interface CurationInput {
 	tags: Reflection["playbookTags"];
 	/** Skills the run used; playbook ops, tags and `skill:` scopes for any other skill are rejected. */
 	skills: readonly string[];
+	/** The `project:<id>` scope of the run's repository; "project" ops map to it, and other projects' scopes are rejected. Null when the run had no project. */
+	projectScope?: string | null;
 	maxPlaybookItems: number;
 	/** Embeddings of proposed memory texts (keyed by the text as proposed), from `embeddingModel`. */
 	vectors?: ReadonlyMap<string, ArrayLike<number>>;
@@ -107,18 +109,22 @@ export function applyCuratorDelta(db: Db, input: CurationInput): CurationResult 
 					return;
 				}
 				if (op.op === "add") {
-					const skill = op.scope.startsWith("skill:") ? op.scope.slice("skill:".length) : null;
-					if (!isMemoryScope(op.scope) || (skill !== null && !allowed.has(skill))) {
-						throw new NexoError({ code: "INVALID_REQUEST", message: `The run did not use a skill for scope ${op.scope}` });
+					const scope = op.scope === "project" ? (input.projectScope ?? op.scope) : op.scope;
+					const skill = scope.startsWith("skill:") ? scope.slice("skill:".length) : null;
+					if (!isMemoryScope(scope) || (skill !== null && !allowed.has(skill))) {
+						throw new NexoError({ code: "INVALID_REQUEST", message: `The run did not use a skill or project for scope ${op.scope}` });
 					}
-					const live = liveMemories(db, [op.scope]);
+					if (scope.startsWith("project:") && scope !== input.projectScope) {
+						throw new NexoError({ code: "INVALID_REQUEST", message: `The run did not work in project ${scope}` });
+					}
+					const live = liveMemories(db, [scope]);
 					const vectors = input.embeddingModel ? getEmbeddings(db, live.map((m) => m.id), input.embeddingModel) : new Map<string, Float32Array>();
 					const candidate = { text: redact(op.content), vector: vectorOf(op.content) };
 					if (live.some((m) => isDuplicate(candidate, { text: m.content, vector: vectors.get(m.id) ?? null }))) {
 						result.duplicates++;
 						return;
 					}
-					const row = addMemory(db, { scope: op.scope, type: op.type, content: op.content, importance: op.importance, source: "ace", sourceRunId: runId }, redact, nowIso);
+					const row = addMemory(db, { scope, type: op.type, content: op.content, importance: op.importance, source: "ace", sourceRunId: runId }, redact, nowIso);
 					storeVector(row.id, op.content);
 					result.memoriesAdded.push(row.id);
 					return;
