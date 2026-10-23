@@ -34,6 +34,7 @@ import {
 	wikiPageResponse,
 } from "./api.ts";
 import { sendError, sendJson } from "./http-errors.ts";
+import { type CompanionModel, companionAnswer } from "./companion.ts";
 import { createStaticServer } from "./static.ts";
 
 export const DEFAULT_PUBLIC_DIR = fileURLToPath(new URL("../public/", import.meta.url));
@@ -62,6 +63,8 @@ export interface WebServerOptions {
 	/** `optimize.minJudgeKappa` of the loaded config (default 0.6), for the approval gate. */
 	optimize?: { minJudgeKappa: number };
 	wikisDir?: string;
+	/** The model behind nex, the UI companion (the s1 role). Absent: the ask endpoint answers CONFIG_INVALID. */
+	companion?: CompanionModel | null;
 }
 
 export interface WebServer {
@@ -95,6 +98,7 @@ const ROUTES = {
 	evalCases: /^\/api\/eval-cases$/,
 	evalCaseReview: new RegExp(`^/api/eval-cases/${RUN_ID}/(accept|dismiss)$`),
 	meta: /^\/api\/meta$/,
+	companion: /^\/api\/companion\/ask$/,
 	wikis: /^\/api\/wikis$/,
 	wikiPages: /^\/api\/wikis\/([^/]{1,64})\/pages$/,
 	wikiPage: /^\/api\/wikis\/([^/]{1,64})\/page$/,
@@ -220,6 +224,11 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 			assertWritable();
 			const body = await readJsonBody(req);
 			return sendJson(res, 201, feedbackResponse(ctx, m[1] as string, body));
+		}
+		if (ROUTES.companion.test(path)) {
+			if (method !== "POST") throw methodNotAllowed(method, path, "POST");
+			if (!options.companion) throw new NexoError({ code: "CONFIG_INVALID", message: "nex has no model configured", hint: "Set models.s1 in your nexo config and restart nexo ui" });
+			return sendJson(res, 200, await companionAnswer(ctx, options.companion, await readJsonBody(req)));
 		}
 		if (ROUTES.meta.test(path)) {
 			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
