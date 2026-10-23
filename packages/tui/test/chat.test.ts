@@ -346,8 +346,8 @@ describe("chat screen extras", () => {
 		await until(() => {
 			const out = h.terminal.output();
 			expect(out).toMatch(/✓ spawn\(2 tasks: a, b\)/);
-			expect(out).toMatch(/↳ ✓ subagent CHILD-A survey[^\n]*succeeded · \$\d+\.\d\d/);
-			expect(out).toMatch(/↳ ✓ subagent CHILD-B survey[^\n]*succeeded · \$\d+\.\d\d/);
+			expect(out).toMatch(/↳ ✓ a · \S+ CHILD-A survey[^\n]*succeeded · [^\n]*\$\d+\.\d\d/);
+			expect(out).toMatch(/↳ ✓ b · \S+ CHILD-B survey[^\n]*succeeded · [^\n]*\$\d+\.\d\d/);
 			expect(out).toContain("all done");
 		});
 		h.terminal.send(KEY.ctrlD);

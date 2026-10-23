@@ -283,6 +283,28 @@ describe("spawn", () => {
 		expect(sub("ok")?.attrs.budgetUsd).toBeCloseTo(1 - firstLlmCost, 9);
 	});
 
+	it("retries a child once after a retryable provider failure and closes its span as ok", async () => {
+		const env = makeEnv({ config: { providers: { faux: { maxRetries: 0, retryBaseDelayMs: 0, rateLimitBaseDelayMs: 0 } } } });
+		let toolResult = "";
+		useDispatcher(env, {
+			PARENT: [
+				spawnCall([{ id: "flaky", instruction: "CHILD-FLAKY" }]),
+				async (ctx) => {
+					toolResult = lastToolResultText(ctx);
+					return fauxAssistantMessage("done");
+				},
+			],
+			"CHILD-FLAKY": [fauxAssistantMessage("", { stopReason: "error", errorMessage: "503 Service Unavailable" }), fauxAssistantMessage("recovered")],
+		});
+		const result = await createEngine(env.deps).run({ instruction: "PARENT", budgetUsd: 1 });
+		expect(result.status).toBe("succeeded");
+		const outcome = (JSON.parse(toolResult) as { id: string; status: string; output: string }[])[0];
+		expect(outcome).toMatchObject({ id: "flaky", status: "succeeded" });
+		expect(outcome?.output).toContain("recovered");
+		const sub = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.kind === "subagent");
+		expect(sub?.status).toBe("ok");
+	});
+
 	it("passes a dependency's output into the dependent task's instruction", async () => {
 		const env = makeEnv();
 		let dependentPrompt = "";

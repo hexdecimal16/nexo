@@ -128,6 +128,8 @@ export type EngineEvent =
 			parentRunId: string | null;
 			instruction: string;
 			depth: number;
+			/** The spawn task id, set for subagents. */
+			taskId?: string;
 			/** `provider/id` and effort the run starts on. */
 			model: string;
 			effort: Effort;
@@ -178,7 +180,7 @@ export type EngineEvent =
 			costUsd: number;
 	  }
 	| { type: "approval"; runId: string; depth: number; toolCallId: string; toolName: string; reason: string }
-	| { type: "run_end"; runId: string; depth: number; status: RunStatus; costUsd: number };
+	| { type: "run_end"; runId: string; depth: number; status: RunStatus; costUsd: number; error?: { code: string; message: string } };
 
 /** What a `prepareHistory` hook can use to shrink the history before the run's first request. */
 export interface HistoryContext {
@@ -307,6 +309,8 @@ export interface ParentLink {
 	parentRemainingFraction: number;
 	sessionId: string | null;
 	optimRunId: string | null;
+	/** The spawn task id this child runs, for display. */
+	taskId?: string;
 	/** The rollout's candidate, so subagents use it too. */
 	rolloutCandidate: ArtifactRow | null;
 	approvals: RunApprovals | null;
@@ -749,6 +753,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		deps.onEvent?.({
 			type: "run_start",
 			runId,
+			...(parent?.taskId ? { taskId: parent.taskId } : {}),
 			parentRunId: parent?.runId ?? null,
 			instruction: deps.redact(request.instruction),
 			depth,
@@ -1418,7 +1423,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	if (!parent && !optimRunId && config.learning.enabled && status !== "aborted") {
 		attempt("enqueueing the learn job", () => enqueueLearnJob(db, { runId, trigger: "run_end" }, now().toISOString()));
 	}
-	attempt("run_end event", () => deps.onEvent?.({ type: "run_end", runId, depth, status, costUsd: totalCost }));
+	attempt("run_end event", () => deps.onEvent?.({ type: "run_end", runId, depth, status, costUsd: totalCost, ...(error ? { error: { code: error.code, message: deps.redact(error.message) } } : {}) }));
 	logger.info("run finished", { status, cost_usd: totalCost, approval_cost_usd: approvalCost });
 	const messages = agent ? newMessages(agent.state.messages, seededCount) : [];
 	return {
