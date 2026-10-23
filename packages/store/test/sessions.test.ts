@@ -123,6 +123,26 @@ describe("sessions table", () => {
 		expect(listSessionRows(db).map((s) => s.id).sort()).toEqual(["crashed", "done", "empty"]);
 	});
 
+	it("underDir keeps sessions started in the directory or below it, and not siblings sharing a name prefix", () => {
+		const db = openDb(":memory:");
+		for (const [id, cwd] of [["root", "/p/app"], ["sub", "/p/app/packages/x"], ["sibling", "/p/app2"], ["other", "/q/else"]] as const) {
+			upsertSessionRow(db, sessionRowFromJson(sessionJson(id, { turns: 1, cwd }), `/d/${id}`));
+		}
+		expect(listSessionRows(db, { underDir: "/p/app" }).map((s) => s.id).sort()).toEqual(["root", "sub"]);
+		expect(listSessionRows(db, { underDir: "/p/app/" }).map((s) => s.id).sort()).toEqual(["root", "sub"]);
+		expect(listSessionRows(db, { underDir: "/nowhere" })).toEqual([]);
+		expect(listSessionRows(db)).toHaveLength(4);
+	});
+
+	it("underDir accepts several directories, such as a project's worktrees", () => {
+		const db = openDb(":memory:");
+		for (const [id, cwd] of [["main", "/p/app"], ["wt", "/p/app-feature/src"], ["other", "/q/else"]] as const) {
+			upsertSessionRow(db, sessionRowFromJson(sessionJson(id, { turns: 1, cwd }), `/d/${id}`));
+		}
+		expect(listSessionRows(db, { underDir: ["/p/app", "/p/app-feature"] }).map((s) => s.id).sort()).toEqual(["main", "wt"]);
+		expect(listSessionRows(db, { underDir: [] })).toEqual([]);
+	});
+
 	it("upserts and lists sessions newest first", () => {
 		const db = openDb(":memory:");
 		upsertSessionRow(db, sessionRowFromJson(sessionJson("a", { updatedAt: "2026-10-11T00:00:01.000Z" }), "/d/a"));

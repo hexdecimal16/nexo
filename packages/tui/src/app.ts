@@ -14,7 +14,7 @@ import {
 	type Terminal,
 	TuiMainScreen,
 } from "@earendil-works/pi-tui";
-import { type EngineEvent, listSessions, type RunResult, type Session, type Settings } from "@nexo/core";
+import { type EngineEvent, listSessions, projectRoots, type RunResult, type Session, type Settings } from "@nexo/core";
 import type { Effort } from "@nexo/router";
 import { type Db, getSessionRow, type ScoreStatus, sessionNotFound, type TranscriptLine } from "@nexo/store";
 import { type ErrorPayload, toErrorPayload } from "@nexo/telemetry";
@@ -833,13 +833,14 @@ class InteractiveApp {
 			this.sayError({ code: "INVALID_REQUEST", message: "/resume is not available here", hint: "Start nexo with --resume <id>" });
 			return;
 		}
-		if (args) {
+		const all = args.trim() === "--all";
+		if (args && !all) {
 			this.switchTo(current, args);
 			return;
 		}
-		const rows: SessionChoice[] = listSessions(this.options.db, { limit: 50 }).filter((r) => r.id !== current.id);
+		const rows: SessionChoice[] = listSessions(this.options.db, { limit: 50, ...(all ? {} : { underDir: projectRoots(current.cwd) }) }).filter((r) => r.id !== current.id);
 		if (rows.length === 0) {
-			this.say("no other sessions to resume");
+			this.say(all ? "no other sessions to resume" : "no other sessions in this project (try /resume --all)");
 			return;
 		}
 		this.screen = "picker";

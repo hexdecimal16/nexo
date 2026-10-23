@@ -24,6 +24,8 @@ export * from "./providers/kiro-p.ts";
 export * from "./providers/models.ts";
 export * from "./scoring/calibration.ts";
 export * from "./scoring/sources.ts";
+export { loadProjectInstructions, type ProjectInstructions } from "./session/project-instructions.ts";
+export { projectRoot, projectRoots, projectScope } from "./session/project-root.ts";
 export * from "./session/session.ts";
 export * from "./session/transcript.ts";
 export * from "./settings/config-edit.ts";

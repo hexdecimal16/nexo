@@ -52,7 +52,7 @@ export interface MemoryFilter {
 	offset?: number;
 }
 
-const SCOPE = /^(user|global|skill:[a-z0-9]+(-[a-z0-9]+)*)$/;
+const SCOPE = /^(user|global|project:[0-9a-f]{12}|skill:[a-z0-9]+(-[a-z0-9]+)*)$/;
 
 export function isMemoryScope(value: unknown): value is string {
 	return typeof value === "string" && SCOPE.test(value);

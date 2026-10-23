@@ -23,7 +23,7 @@ export const ReflectionSchema = Type.Object(
 				{
 					content: Text,
 					type: MemoryTypeSchema,
-					scope: Type.Union([Type.Literal("user"), Type.Literal("global"), Type.Literal("skill")]),
+					scope: Type.Union([Type.Literal("user"), Type.Literal("global"), Type.Literal("project"), Type.Literal("skill")]),
 					skill: Type.Optional(SkillName),
 					importance: Importance,
 					outcome: Type.Union([Type.Literal("success"), Type.Literal("failure")]),
@@ -41,7 +41,7 @@ export const ReflectionSchema = Type.Object(
 );
 export type Reflection = Static<typeof ReflectionSchema>;
 
-const MemoryScopeText = Type.String({ pattern: "^(user|global|skill:[a-z0-9]+(-[a-z0-9]+)*)$" });
+const MemoryScopeText = Type.String({ pattern: "^(user|global|project(:[0-9a-f]{12})?|skill:[a-z0-9]+(-[a-z0-9]+)*)$" });
 
 export const CuratorDeltaSchema = Type.Object(
 	{
@@ -78,7 +78,7 @@ Rules:
 - Include lessons about how the work was split up: independent tasks that could have run in parallel, tasks over-provisioned on a strong model, tasks that needed one.
 - The human verdict and comment outrank the automatic scores. A not_done comment says what went wrong.
 - type: fact (about the user's world), preference (how the user wants things), lesson (what worked or failed), workflow (a sequence of steps that worked).
-- scope: user (about this user), global (true for any user), skill (only for the named skill; set "skill").
+- scope: user (about this user), global (true for any user), project (only true for this repository: its commands, conventions, layout), skill (only for the named skill; set "skill").
 - importance from 0 to 1: how much a future run loses without it.
 - playbookTags: for each listed playbook item that clearly helped or clearly hurt this run, its skill, key and "helpful" or "harmful". Leave out items that played no part.
 - Return at most ${MAX_LESSONS} lessons; return none when the run teaches nothing new.
@@ -91,6 +91,7 @@ Rules:
 - memory ops: "add" a new memory; "update" an existing memory (by id) whose content should be refined; "supersede" an existing memory (by id) that a lesson contradicts; "noop" when a lesson is already covered. Never restate an existing memory as an add.
 - playbook ops (only for the skills listed): "add" an item (one imperative sentence); "update" an item (by skill and key); "retire" an item (by skill and key) that the evidence shows is wrong or harmful.
 - Never update, supersede or retire a memory or item whose source is human or user; add a new one instead when needed.
+- Memory scope is user, global or project (this repository; write exactly "project").
 - Keep each content under ${MAX_PROPOSED_CHARS} characters, one idea per memory or item.
 - At most ${MAX_DELTA_OPS} ops per list. Empty lists are fine.
 Reply with only a JSON object, no prose and no code fence:

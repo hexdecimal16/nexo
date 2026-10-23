@@ -10,4 +10,12 @@ describe("renderSystemPrompt", () => {
 		expect(text).not.toContain("{{workspace}}");
 		expect(text).toContain("Make independent tool calls in the same turn");
 	});
+
+	it("puts project instructions before the memories, and adds nothing without them", () => {
+		const base = { systemPrompt: DEFAULT_SYSTEM_PROMPT, plannerPrompt: null, workspace: "/w", skillIndex: "" };
+		const text = renderSystemPrompt({ ...base, projectInstructions: "PROJECT-RULES", memories: "MEMORIES" });
+		expect(text.indexOf("PROJECT-RULES")).toBeGreaterThan(0);
+		expect(text.indexOf("PROJECT-RULES")).toBeLessThan(text.indexOf("MEMORIES"));
+		expect(renderSystemPrompt({ ...base, projectInstructions: "" })).toBe(renderSystemPrompt(base));
+	});
 });

@@ -220,13 +220,26 @@ describe("routing", () => {
 		const code = await runCli(["--resume"], t, { ...h, models: fauxModels(), stdio: ttyStdio() });
 		expect(code).toBe(1);
 		expect(t.err()).toContain("error [NOT_FOUND]");
-		addSession(h, "01SESSIONAAAAAAAAAAAAAAAAA");
+		addSession(h, "01SESSIONAAAAAAAAAAAAAAAAA", { cwd: h.cwd });
 		const terminal = new FakeTerminal();
 		const done = runCli(["--resume"], io(), { ...h, models: fauxModels(), stdio: ttyStdio(), terminal });
 		await until(() => expect(terminal.output()).toContain("Resume a session"));
 		terminal.send(KEY.escape);
 		expect(await done).toBe(0);
 		expect(terminal.output()).not.toContain("nexo session");
+	});
+
+	it("scopes the resume picker to the current project and lists everything with --all", async () => {
+		const h = home(roles);
+		addSession(h, "01SESSIONOTHERPROJECTAAAAAA", { cwd: "/elsewhere/project", title: "other project work" });
+		const t = io();
+		expect(await runCli(["--resume"], t, { ...h, models: fauxModels(), stdio: ttyStdio() })).toBe(1);
+		expect(t.err()).toContain("No sessions to resume in this project");
+		const terminal = new FakeTerminal();
+		const done = runCli(["--resume", "--all"], io(), { ...h, models: fauxModels(), stdio: ttyStdio(), terminal });
+		await until(() => expect(terminal.output()).toContain("other project work"));
+		terminal.send(KEY.escape);
+		expect(await done).toBe(0);
 	});
 
 	it("routes first run (no config) to the setup screen before the chat", async () => {
@@ -533,7 +546,7 @@ describe("signals and prompts", () => {
 
 	it("passes the signal to the resume picker, which cancels on abort", async () => {
 		const h = home(roles);
-		addSession(h, "01SESSIONAAAAAAAAAAAAAAAAA");
+		addSession(h, "01SESSIONAAAAAAAAAAAAAAAAA", { cwd: h.cwd });
 		const ac = new AbortController();
 		const terminal = new FakeTerminal();
 		const done = runCli(["--resume"], io(), { ...h, models: fauxModels(), stdio: ttyStdio(), terminal, signal: ac.signal });
