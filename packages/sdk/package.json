@@ -1,16 +1,16 @@
 {
   "name": "@nexo/sdk",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "exports": { ".": "./src/index.ts" },
   "dependencies": {
     "@earendil-works/pi-ai": "1.1.0",
-    "@nexo/core": "0.3.0",
-    "@nexo/mcp": "0.3.0",
-    "@nexo/skills": "0.3.0",
-    "@nexo/store": "0.3.0",
-    "@nexo/telemetry": "0.3.0",
-    "@nexo/tools": "0.3.0"
+    "@nexo/core": "0.3.1",
+    "@nexo/mcp": "0.3.1",
+    "@nexo/skills": "0.3.1",
+    "@nexo/store": "0.3.1",
+    "@nexo/telemetry": "0.3.1",
+    "@nexo/tools": "0.3.1"
   }
 }
