@@ -1,11 +1,11 @@
 {
   "name": "@nexo/store",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": true,
   "type": "module",
   "exports": { ".": "./src/index.ts" },
   "dependencies": {
-    "@nexo/telemetry": "0.3.3",
+    "@nexo/telemetry": "0.3.4",
     "ulid": "3.0.2"
   }
 }
