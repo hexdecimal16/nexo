@@ -103,6 +103,8 @@ export const ConfigSchema = Type.Object(
 			{
 				perRunUsd: Usd,
 				perSessionUsd: Usd,
+				/** Share of the session cap one chat turn may spend (0 to 1); CLI runs, scoring and optimization use perRunUsd. */
+				perTurnShare: Type.Number({ exclusiveMinimum: 0, maximum: 1 }),
 				dailyUsd: Usd,
 				monthlyUsd: Usd,
 				optimDefaultUsd: Usd,
@@ -261,6 +263,7 @@ export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 	budgets: {
 		perRunUsd: 0.5,
 		perSessionUsd: 5,
+		perTurnShare: 0.2,
 		dailyUsd: 10,
 		monthlyUsd: 150,
 		optimDefaultUsd: 5,

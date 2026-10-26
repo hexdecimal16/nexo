@@ -308,7 +308,7 @@ describe("chat screen", () => {
 	});
 
 	it("renders a budget refusal inline as error [CODE] message — hint", async () => {
-		const h = await startHarness({ overrides: { models: { s1: { provider: "faux", id: "pricey" }, s2: { provider: "faux", id: "slow" } }, providers: { faux: { retryBaseDelayMs: 0, rateLimitBaseDelayMs: 0 } }, budgets: { perSessionUsd: 0.001, estimateOutputTokens: 1 } } });
+		const h = await startHarness({ overrides: { models: { s1: { provider: "faux", id: "pricey" }, s2: { provider: "faux", id: "slow" } }, providers: { faux: { retryBaseDelayMs: 0, rateLimitBaseDelayMs: 0 } }, budgets: { perSessionUsd: 0.001, perTurnShare: 1, estimateOutputTokens: 1 } } });
 		h.faux.setResponses([fauxAssistantMessage("x".repeat(2000))]);
 		submit(h.terminal, "spend it");
 		await until(() => !h.session().running && h.session().turns === 1);

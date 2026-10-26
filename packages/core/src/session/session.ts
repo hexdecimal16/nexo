@@ -362,7 +362,7 @@ export class Session {
 			} catch (error) {
 				return refusedResult(this.env.deps.redact(toErrorPayload(error)));
 			}
-			const limit = runBudgetLimit(this.deps.db, config.budgets, this.env.now(), { run: config.budgets.perRunUsd, session: remaining });
+			const limit = runBudgetLimit(this.deps.db, config.budgets, this.env.now(), { run: config.budgets.perTurnShare * this.budgetUsd, session: remaining });
 			const turnIndex = this.state.turns + 1;
 			this.onEvent = options.onEvent;
 			const sent = withShellNotes(this.state.pendingShell ?? [], instruction);

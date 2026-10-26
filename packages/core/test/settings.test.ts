@@ -243,6 +243,7 @@ describe("config settings", () => {
 			"models.s2.effort",
 			"budgets.perRunUsd",
 			"budgets.perSessionUsd",
+			"budgets.perTurnShare",
 			"budgets.dailyUsd",
 			"budgets.monthlyUsd",
 			"budgets.optimDefaultUsd",

@@ -95,7 +95,7 @@ describe("session turns", () => {
 	});
 
 	it("refuses a turn once the session cap is spent and accepts it after setBudget", async () => {
-		const { env, deps, cwd } = sessionEnv({ config: { budgets: { perSessionUsd: 0.002, perRunUsd: 0.5, estimateOutputTokens: 1 } } });
+		const { env, deps, cwd } = sessionEnv({ config: { budgets: { perSessionUsd: 0.002, perRunUsd: 0.5, perTurnShare: 1, estimateOutputTokens: 1 } } });
 		let budgetLine = "";
 		env.faux.setResponses([
 			async (ctx) => {
@@ -128,7 +128,7 @@ describe("session turns", () => {
 	});
 
 	it("caps each turn's run budget at the session's remaining budget", async () => {
-		const { env, deps, cwd } = sessionEnv({ config: { budgets: { perSessionUsd: 0.2, perRunUsd: 0.5 } } });
+		const { env, deps, cwd } = sessionEnv({ config: { budgets: { perSessionUsd: 0.2, perRunUsd: 0.5, perTurnShare: 1 } } });
 		let line = "";
 		env.faux.setResponses([
 			async (ctx) => {
@@ -141,7 +141,7 @@ describe("session turns", () => {
 	});
 
 	it("names the session's remaining budget and /budget when it is what stopped the turn", async () => {
-		const { env, deps, cwd } = sessionEnv({ config: { budgets: { perSessionUsd: 0.2, perRunUsd: 0.5 } } });
+		const { env, deps, cwd } = sessionEnv({ config: { budgets: { perSessionUsd: 0.2, perRunUsd: 0.5, perTurnShare: 1 } } });
 		env.faux.setResponses([fauxAssistantMessage("never sent")]);
 		const result = await createSession(deps, { cwd, model: "faux/pricey" }).turn("expensive");
 		expect(result.status).toBe("budget_exceeded");
@@ -175,11 +175,11 @@ describe("session turns", () => {
 		let configHash = deps.configHash;
 		const session = createSession({ ...deps, reloadConfig: () => ({ config, configHash }) }, { cwd });
 		await session.turn("one");
-		config = { ...deps.config, budgets: { ...deps.config.budgets, perRunUsd: 0.25 } };
+		config = { ...deps.config, budgets: { ...deps.config.budgets, perSessionUsd: 2.5 } };
 		configHash = "changed";
 		await session.turn("two");
-		expect(lines[0]).toMatch(/of \$0\.50 remaining/);
-		expect(lines[1]).toMatch(/of \$0\.25 remaining/);
+		expect(lines[0]).toMatch(/of \$1\.00 remaining/);
+		expect(lines[1]).toMatch(/of \$0\.50 remaining/);
 	});
 
 	it("compacts older turns when the request would pass compactAt, keeping the last two turns verbatim", async () => {
@@ -229,7 +229,7 @@ describe("session turns", () => {
 	it("compacts when one S2 request with the history would cost more than compactAtBudgetShare of the turn budget", async () => {
 		// compactAt is out of reach; S2 (faux/slow) input costs $5 per million tokens, and each answer adds about 5k tokens.
 		const { env, deps, cwd } = sessionEnv({
-			config: { session: { compactAt: 1, compactAtBudgetShare: 0.05 }, budgets: { perRunUsd: 1, perSessionUsd: 10, estimateOutputTokens: 1 } },
+			config: { session: { compactAt: 1, compactAtBudgetShare: 0.05 }, budgets: { perRunUsd: 1, perSessionUsd: 10, perTurnShare: 0.1, estimateOutputTokens: 1 } },
 		});
 		const long = (label: string) => fauxAssistantMessage(`${label} ${"word ".repeat(4000)}`);
 		let summarized = false;
@@ -255,7 +255,7 @@ describe("session turns", () => {
 
 	it("does not compact on cost when compactAtBudgetShare is 0", async () => {
 		const { env, deps, cwd } = sessionEnv({
-			config: { session: { compactAt: 1, compactAtBudgetShare: 0 }, budgets: { perRunUsd: 1, perSessionUsd: 10, estimateOutputTokens: 1 } },
+			config: { session: { compactAt: 1, compactAtBudgetShare: 0 }, budgets: { perRunUsd: 1, perSessionUsd: 10, perTurnShare: 0.1, estimateOutputTokens: 1 } },
 		});
 		const long = (label: string) => fauxAssistantMessage(`${label} ${"word ".repeat(4000)}`);
 		env.faux.setResponses([long("A1"), long("A2"), long("A3"), fauxAssistantMessage("A4")]);
@@ -351,7 +351,7 @@ describe("continuing on S2", () => {
 	it("starts the next turn on S2 after a turn ran out of budget on S2, and back on S1 after S2 succeeds", async () => {
 		// Turn 1 escalates (verify_fail) and its S2 continuation runs out of the turn budget; turn 2 continues on S2.
 		const { env, deps, cwd } = sessionEnv({
-			config: { ...contains, budgets: { perRunUsd: 1, perSessionUsd: 10, estimateOutputTokens: 1 }, pricingOverrides: { "faux/slow": { input: 0, output: 100_000 } } },
+			config: { ...contains, budgets: { perRunUsd: 1, perSessionUsd: 10, perTurnShare: 0.1, estimateOutputTokens: 1 }, pricingOverrides: { "faux/slow": { input: 0, output: 100_000 } } },
 		});
 		const starts: string[] = [];
 		env.faux.setResponses([
@@ -376,7 +376,7 @@ describe("continuing on S2", () => {
 	});
 
 	it("carries S2 across resume, and /model or /clear override it", async () => {
-		const { env, deps, cwd } = sessionEnv({ config: { budgets: { perRunUsd: 1, perSessionUsd: 10 } } });
+		const { env, deps, cwd } = sessionEnv({ config: { budgets: { perRunUsd: 1, perSessionUsd: 10, perTurnShare: 0.1 } } });
 		const starts: string[] = [];
 		const onEvent = (e: EngineEvent) => {
 			if (e.type === "run_start" && e.depth === 0) starts.push(e.model);

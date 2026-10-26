@@ -72,6 +72,12 @@ export const EDITABLE_SETTINGS: readonly SettingDefinition[] = [
 	{ key: "models.s2.effort", label: "Effort s2", description: "Default reasoning effort for s2", type: { kind: "enum", values: EFFORTS } },
 	{ key: "budgets.perRunUsd", label: "Budget per run", description: "Spending cap for one run or turn, in USD", type: USD },
 	{ key: "budgets.perSessionUsd", label: "Budget per session", description: "Spending cap for one interactive session, in USD", type: USD },
+	{
+		key: "budgets.perTurnShare",
+		label: "Turn share of session",
+		description: "Share of the session budget one chat turn may spend (0 to 1); budgets.perRunUsd still caps CLI runs",
+		type: { kind: "number", integer: false, exclusiveMin: 0, max: 1 },
+	},
 	{ key: "budgets.dailyUsd", label: "Daily budget", description: "Spending cap per UTC day, in USD", type: USD },
 	{ key: "budgets.monthlyUsd", label: "Monthly budget", description: "Spending cap per UTC month, in USD", type: USD },
 	{

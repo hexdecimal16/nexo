@@ -107,7 +107,7 @@ describe("admission", () => {
 		expect(run).toMatchObject({ code: "BUDGET_EXCEEDED", message: "Run budget of $0.50 is not enough to continue ($0.4200 spent)", hint: expect.stringContaining("--budget") });
 		const turn = budgetExhaustedError(budget, "run", true);
 		expect(turn.message).toBe("Turn budget of $0.50 is not enough to continue ($0.4200 spent)");
-		expect(turn.hint).toContain("budgets.perRunUsd");
+		expect(turn.hint).toContain("budgets.perTurnShare");
 		expect(turn.hint).not.toContain("--budget");
 		expect(budgetExhaustedError(budget, "session", true)).toMatchObject({
 			message: "Turn budget of $0.50 is not enough to continue ($0.4200 spent; capped by the session's remaining budget)",

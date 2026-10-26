@@ -67,7 +67,8 @@ export function runBudgetLimit(db: Db, budgets: { dailyUsd: number; monthlyUsd: 
 		{ usd: budgets.monthlyUsd - getSpent(db, monthScope(now)), by: "monthly" },
 	];
 	let best = candidates[0] as { usd: number; by: BudgetLimit };
-	for (const c of candidates) if (c.usd < best.usd) best = c;
+	// Ties go to the later (outer) limit: it is the one the user has to raise.
+	for (const c of candidates) if (c.usd <= best.usd) best = c;
 	return { usd: Math.max(0, best.usd), by: best.by };
 }
 
@@ -82,7 +83,7 @@ export function budgetExhaustedError(budget: RunBudget, by: BudgetLimit, chat: b
 	const capped = by === "run" ? "" : `; ${CAPPED_BY[by]}`;
 	const hint = {
 		run: chat
-			? "Each chat turn is capped by budgets.perRunUsd; raise it in /settings (/budget raises the session's cap, not a turn's)"
+			? "Each chat turn is capped at budgets.perTurnShare of the session budget; raise the share in /settings or the session cap with /budget"
 			: "Pass --budget or raise budgets.perRunUsd",
 		session: "Raise the session's budget with /budget <usd>, then continue",
 		daily: "Raise budgets.dailyUsd or wait until tomorrow (UTC)",

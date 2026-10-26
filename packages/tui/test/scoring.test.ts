@@ -101,7 +101,7 @@ describe("scores and escalations in the chat", () => {
 		const h = await startHarness({
 			overrides: {
 				...FAUX_ROLES,
-				budgets: { perRunUsd: 1, perSessionUsd: 10, estimateOutputTokens: 1 },
+				budgets: { perRunUsd: 1, perSessionUsd: 10, perTurnShare: 0.1, estimateOutputTokens: 1 },
 				pricingOverrides: { "faux/slow": { input: 0, output: 100_000 } },
 				scoring: { scorers: [{ kind: "contains", name: "says-done", text: "DONE" }] },
 			},
