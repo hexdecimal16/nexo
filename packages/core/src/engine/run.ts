@@ -80,6 +80,7 @@ import { assistantText, contentText, estimatePromptChars, foreignToolCallsAsText
 import { DEFAULT_PLANNER_PROMPT, DEFAULT_SYSTEM_PROMPT, renderSystemPrompt } from "./prompts.ts";
 import { loadProjectInstructions } from "../session/project-instructions.ts";
 import { projectScope } from "../session/project-root.ts";
+import { environmentBlock } from "./environment.ts";
 import { type ApiKeyResolver, createGatedStreamFn } from "./provider-gate.ts";
 import { Recorder } from "./recorder.ts";
 import type { ChargedCallDeps } from "../learn/caller.ts";
@@ -946,6 +947,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			workspace,
 			...(rollout ? {} : { wikisDir: deps.paths.wikis }),
 			skillIndex: formatSkillIndex(deps.skills),
+			...(rollout ? {} : { environment: environmentBlock({ ...(request.projectDir ? { projectDir: request.projectDir } : {}), now: new Date(), workspaceShared: sharedWorkspace !== null, ...(process.env.SHELL ? { shell: process.env.SHELL } : {}) }) }),
 			...(request.projectDir && !rollout ? { projectInstructions: loadProjectInstructions(request.projectDir, config.instructions).block } : {}),
 			activeSkill: runSkill
 				? { name: runSkill.name, body: startPlaybookSection ? `${runSkill.body}\n\n${startPlaybookSection}` : runSkill.body }

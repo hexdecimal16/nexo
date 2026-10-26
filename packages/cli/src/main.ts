@@ -140,6 +140,7 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 				model: values.model,
 				effort: values.effort as Effort | undefined,
 				workspace: values.workspace,
+				projectDir: options.cwd ?? process.cwd(),
 				budgetUsd,
 			},
 			options.signal,

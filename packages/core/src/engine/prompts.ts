@@ -21,6 +21,8 @@ export interface SystemPromptParts {
 	/** The directory holding the user wikis; a line naming it is added when set. */
 	wikisDir?: string;
 	skillIndex: string;
+	/** The environment section (`environmentBlock`): launch directory, git branch, platform, shell and time. */
+	environment?: string;
 	/** The project's AGENTS.md / CLAUDE.md data block (`loadProjectInstructions`); empty or absent adds nothing. */
 	projectInstructions?: string;
 	activeSkill?: { name: string; body: string };
@@ -41,5 +43,7 @@ export function renderSystemPrompt(parts: SystemPromptParts): string {
 	if (parts.activeSkill) sections.push(`# Active skill: ${parts.activeSkill.name}\n${parts.activeSkill.body}`);
 	if (parts.projectInstructions) sections.push(parts.projectInstructions);
 	if (parts.memories) sections.push(parts.memories);
+	// Last: it holds the current time, which changes every run and would otherwise break prefix caching for what follows.
+	if (parts.environment) sections.push(parts.environment);
 	return sections.join("\n\n");
 }
