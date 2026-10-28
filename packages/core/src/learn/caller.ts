@@ -162,7 +162,7 @@ export async function structuredLearnCall<T extends TSchema>(
  * Embeds `texts` as one `embedding_call` span (tier `embedding`): the estimate is reserved from `deps.budget`, the key
  * comes from `resolveApiKey(provider)`, and the cost comes from `pricingOverrides` (unknown without one).
  */
-export async function embedCharged(deps: ChargedCallDeps, endpoint: EmbeddingEndpoint, texts: readonly string[], purpose: string): Promise<number[][]> {
+export async function embedCharged(deps: ChargedCallDeps, endpoint: EmbeddingEndpoint, texts: readonly string[], purpose: string, timeoutMs?: number): Promise<number[][]> {
 	if (texts.length === 0) return [];
 	const { env, recorder, budget } = deps;
 	const { config, redact } = env.deps;
@@ -180,7 +180,7 @@ export async function embedCharged(deps: ChargedCallDeps, endpoint: EmbeddingEnd
 	});
 	let settled = false;
 	try {
-		const result = await embedTexts(endpoint, texts, { apiKey: env.deps.resolveApiKey?.(endpoint.provider), fetch: deps.fetch, signal: deps.signal });
+		const result = await embedTexts(endpoint, texts, { apiKey: env.deps.resolveApiKey?.(endpoint.provider), fetch: deps.fetch, signal: deps.signal, ...(timeoutMs ? { timeoutMs } : {}) });
 		const priced = embeddingCost(config, endpoint, result.tokens);
 		settled = true;
 		if (estimate > 0) budget.settleReservation(estimate, priced.costUsd);

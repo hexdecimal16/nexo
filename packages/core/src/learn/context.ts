@@ -6,6 +6,47 @@ import type { NexoConfig } from "../config/schema.ts";
 import { type ChargedCallDeps, embedCharged } from "./caller.ts";
 import { embeddingEndpoint } from "./embedder.ts";
 
+/**
+ * Longest wait for the run-start query embedding. Past it, retrieval falls back to full-text relevance instead of
+ * delaying the first model call (observed average: 10s, with the 30s default as the ceiling).
+ */
+export const QUERY_EMBED_TIMEOUT_MS = 3_000;
+
+/** Most query embeddings kept in memory; least recently used goes first. */
+export const QUERY_EMBED_CACHE_MAX = 64;
+const queryEmbeddings = new Map<string, number[]>();
+
+/** The cache key: the same text sent to the same endpoint, model and dimensions gives the same vector. */
+export function queryEmbeddingKey(endpoint: { model: string; baseUrl: string; dimensions?: number }, text: string): string {
+	return JSON.stringify([endpoint.model, endpoint.baseUrl, endpoint.dimensions ?? null, text]);
+}
+
+/** A cached query vector, marked most recently used; undefined on a miss. */
+export function cachedQueryEmbedding(key: string): number[] | undefined {
+	const vector = queryEmbeddings.get(key);
+	if (vector) {
+		queryEmbeddings.delete(key);
+		queryEmbeddings.set(key, vector);
+	}
+	return vector;
+}
+
+/** Stores a query vector, evicting the least recently used one past QUERY_EMBED_CACHE_MAX. */
+export function rememberQueryEmbedding(key: string, vector: number[]): void {
+	queryEmbeddings.delete(key);
+	queryEmbeddings.set(key, vector);
+	while (queryEmbeddings.size > QUERY_EMBED_CACHE_MAX) {
+		const oldest = queryEmbeddings.keys().next().value;
+		if (oldest === undefined) break;
+		queryEmbeddings.delete(oldest);
+	}
+}
+
+/** Empties the query-embedding cache (tests). */
+export function clearQueryEmbeddingCache(): void {
+	queryEmbeddings.clear();
+}
+
 /** What a run injected from memory: the system-prompt block, the memory ids and the query embedding (reused by load_skill). */
 export interface RunMemoryContext {
 	block: string;
@@ -34,12 +75,24 @@ export async function retrieveRunMemories(deps: ChargedCallDeps, instruction: st
 	const spanId = deps.recorder.start({ kind: "memory_read", name: "retrieve", parentSpanId: deps.parentSpanId, attrs: { scopes } });
 	let embedding: RunMemoryContext["embedding"] = null;
 	let embeddingError: unknown = null;
+	let embeddingCached = false;
 	try {
 		const endpoint = embeddingEndpoint(config);
 		if (endpoint && instruction.trim() && hasLiveMemories(db, scopes)) {
+			const text = instruction.slice(0, 8000);
+			const key = queryEmbeddingKey(endpoint, text);
+			const cached = cachedQueryEmbedding(key);
 			try {
-				const [vector] = await embedCharged({ ...deps, parentSpanId: spanId }, endpoint, [instruction.slice(0, 8000)], "query");
-				if (vector) embedding = { model: endpoint.model, vector };
+				if (cached) {
+					embedding = { model: endpoint.model, vector: cached };
+					embeddingCached = true;
+				} else {
+					const [vector] = await embedCharged({ ...deps, parentSpanId: spanId }, endpoint, [text], "query", QUERY_EMBED_TIMEOUT_MS);
+					if (vector) {
+						embedding = { model: endpoint.model, vector };
+						rememberQueryEmbedding(key, vector);
+					}
+				}
 			} catch (error) {
 				if (deps.signal.aborted) throw error;
 				embeddingError = redact(toErrorPayload(error));
@@ -55,6 +108,7 @@ export async function retrieveRunMemories(deps: ChargedCallDeps, instruction: st
 				candidates: result.candidates,
 				selected: result.selected.map((r) => ({ id: r.memory.id, score: Number(r.score.toFixed(4)), relevance: Number(r.relevance.toFixed(4)) })),
 				...(embeddingError ? { embeddingError } : {}),
+				...(embeddingCached ? { embeddingCached: true } : {}),
 			},
 		});
 		return { block: memoryBlock(memories), ids: new Set(memories.map((m) => m.id)), query: instruction, embedding };

@@ -913,11 +913,6 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			approvals,
 		};
 		for (const factory of extraToolFactories) baseTools.push(...factory(toolCtx));
-		if (deps.mcp) baseTools.push(...(await deps.mcp.tools()));
-		const tools = baseTools
-			.map((t) => (toolDescriptionOverrides.has(t.name) ? { ...t, description: toolDescriptionOverrides.get(t.name) as string } : t))
-			.map(withToolErrorCodes);
-
 		// Retrieval at run start (spec §8.3); the query embedding is charged to this run like any of its calls.
 		memoryDeps = {
 			env,
@@ -931,11 +926,19 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				costUnknown ||= unknown;
 			},
 		};
+		// Retrieval starts before the MCP tools load, so the query embedding runs during that wait.
+		const retrieval = !input.memoryContext && !input.signal?.aborted ? retrieveRunMemories(memoryDeps, request.instruction, ["user", "global", ...(request.projectDir ? [projectScope(request.projectDir)] : []), ...(skill ? [`skill:${skill.name}`] : [])]) : null;
+		retrieval?.catch(() => undefined); // awaited below; a rejection while the MCP tools load is not unhandled
+		if (deps.mcp) baseTools.push(...(await deps.mcp.tools()));
+		const tools = baseTools
+			.map((t) => (toolDescriptionOverrides.has(t.name) ? { ...t, description: toolDescriptionOverrides.get(t.name) as string } : t))
+			.map(withToolErrorCodes);
+
 		if (input.memoryContext) {
 			// load_skill adds to `ids`, so the run works on its own copy.
 			memoryContext = { ...input.memoryContext, ids: new Set(input.memoryContext.ids) };
-		} else if (!input.signal?.aborted) {
-			memoryContext = await retrieveRunMemories(memoryDeps, request.instruction, ["user", "global", ...(request.projectDir ? [projectScope(request.projectDir)] : []), ...(skill ? [`skill:${skill.name}`] : [])]);
+		} else if (retrieval) {
+			memoryContext = await retrieval;
 			input.onMemoryContext?.({ ...memoryContext, ids: new Set(memoryContext.ids) });
 		}
 		// The run directory keeps the memories the run started with (spec §5.1 `context/`).

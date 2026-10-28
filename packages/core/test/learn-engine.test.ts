@@ -1,11 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fauxAssistantMessage, type FauxResponseFactory, fauxToolCall, getSystemMessageText } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { addMemory, addPlaybookItem, getMemory, getRun, listLearnJobs, listSpans, publishPlaybook } from "@nexo/store";
 import { createEngine, createEngineEnv, LearnWorker } from "../src/index.ts";
 import { skillMd } from "./scoring-helpers.ts";
-import { emptyMemoryContext } from "../src/learn/context.ts";
+import { clearQueryEmbeddingCache, emptyMemoryContext } from "../src/learn/context.ts";
 import { embeddingServer, makeEnv } from "./learn-helpers.ts";
 
 /** Scripted agent replies that also record each request's system prompt and last tool result. */
@@ -28,6 +28,8 @@ function capture(env: ReturnType<typeof makeEnv>, replies: ReturnType<typeof fau
 const NOW = () => new Date().toISOString();
 
 describe("memory in run context", () => {
+	// The query-embedding cache is per process; a vector cached by one test would hide another test's endpoint failure.
+	beforeEach(() => clearQueryEmbeddingCache());
 	it("injects the ranked memories as a data block, records a memory_read span and stamps last_used_at", async () => {
 		const env = makeEnv();
 		const m = addMemory(env.deps.db, { scope: "user", type: "preference", content: "Use pnpm, never npm", importance: 0.9, source: "user" }, env.deps.redact, NOW());

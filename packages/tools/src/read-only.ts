@@ -283,7 +283,24 @@ function findReadOnly(args: readonly string[]): boolean {
 	return !args.some((a) => FIND_WRITES.has(a));
 }
 
+/** Dot-commands that only print; any other (`.shell`, `.output`, `.import`, `.read`) can run programs or write files. */
+const SQLITE_SAFE_DOT = /^\.(schema|tables|indexes|indices|databases|headers|mode|timer)\b/;
+/** SQL the sqlite3 shell runs even on a read-only connection: file writes, extensions, other databases. */
+const SQLITE_UNSAFE_SQL = /\b(writefile|readfile|edit|load_extension|fsdir|attach)\b/i;
+const SQLITE_SAFE_FLAGS = new Set(["-readonly", "-header", "-noheader", "-column", "-line", "-list", "-csv", "-json", "-markdown", "-table", "-batch"]);
+
+/** `sqlite3 -readonly <db> [sql|.schema ...]`: the connection cannot write, and no argument reaches the shell or a file. */
+function sqliteReadOnly(args: readonly string[]): boolean {
+	if (!args.includes("-readonly")) return false;
+	return args.every((a) => {
+		if (a.startsWith("-")) return SQLITE_SAFE_FLAGS.has(a);
+		if (a.startsWith(".")) return SQLITE_SAFE_DOT.test(a);
+		return !SQLITE_UNSAFE_SQL.test(a);
+	});
+}
+
 const PROGRAMS: Record<string, (args: readonly string[]) => boolean> = {
+	sqlite3: sqliteReadOnly,
 	sed: sedReadOnly,
 	git: gitReadOnly,
 	gh: ghReadOnly,

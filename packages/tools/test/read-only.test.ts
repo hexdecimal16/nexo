@@ -24,6 +24,8 @@ describe("isReadOnlyCommand", () => {
 			"sed 's/a/b/g' file",
 			'grep "end$" file',
 			"which poetry || which uv",
+			"sqlite3 -readonly data.db 'SELECT count(*) FROM t'",
+			'cd /repo && sqlite3 -readonly -header -column data.db ".schema t"',
 		]) {
 			expect(isReadOnlyCommand(command), command).toBe(true);
 		}
@@ -33,6 +35,11 @@ describe("isReadOnlyCommand", () => {
 		for (const command of [
 			"git fetch origin pull/3955/head:pr-3955",
 			"git push",
+			"sqlite3 data.db 'SELECT 1'",
+			'sqlite3 -readonly data.db ".shell id"',
+			"sqlite3 -readonly data.db \"SELECT writefile('/tmp/x', 'y')\"",
+			"sqlite3 -readonly data.db \"ATTACH 'o.db' AS o\"",
+			"sqlite3 -readonly -cmd '.shell id' data.db",
 			"git branch new-branch",
 			"git branch -D old",
 			"git tag v1",
