@@ -1,6 +1,6 @@
 {
   "name": "@nexo/tui",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": true,
   "type": "module",
   "exports": {
@@ -9,13 +9,13 @@
   "dependencies": {
     "@earendil-works/pi-ai": "1.1.0",
     "@earendil-works/pi-tui": "1.1.0",
-    "@nexo/core": "0.3.4",
-    "@nexo/router": "0.3.4",
-    "@nexo/store": "0.3.4",
-    "@nexo/telemetry": "0.3.4",
-    "@nexo/tools": "0.3.4"
+    "@nexo/core": "0.3.5",
+    "@nexo/router": "0.3.5",
+    "@nexo/store": "0.3.5",
+    "@nexo/telemetry": "0.3.5",
+    "@nexo/tools": "0.3.5"
   },
   "devDependencies": {
-    "@nexo/skills": "0.3.4"
+    "@nexo/skills": "0.3.5"
   }
 }

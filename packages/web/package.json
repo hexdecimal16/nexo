@@ -1,12 +1,12 @@
 {
   "name": "@nexo/web",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": true,
   "type": "module",
   "exports": { ".": "./src/index.ts" },
   "dependencies": {
-    "@nexo/store": "0.3.4",
-    "@nexo/telemetry": "0.3.4",
-    "@nexo/tools": "0.3.4"
+    "@nexo/store": "0.3.5",
+    "@nexo/telemetry": "0.3.5",
+    "@nexo/tools": "0.3.5"
   }
 }
