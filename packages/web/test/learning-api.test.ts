@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { addMemory, addPlaybookItem, type Db, enqueueLearnJob, insertRun, listLearnJobs, listMemories, listPlaybookItems, openDb, publishPlaybook, RunDir, supersedeMemory } from "@nexo/store";
 import { createRedactor } from "@nexo/telemetry";
-import { runRow } from "../../store/test/fixtures.ts";
-import type { LearnJobsResponse, MemoryDetailResponse, MemoryListResponse, PlaybookListResponse, PlaybookResponse, PlaybookRetireResponse } from "../public/lib/api-types.ts";
+import { insertSpan } from "@nexo/store";
+import { runRow, spanRow } from "../../store/test/fixtures.ts";
+import type { LearnJobsResponse, MemoryDetailResponse, MemoryListResponse, PlaybookListResponse, PlaybookResponse, PlaybookRetireResponse, RunDetailResponse } from "../public/lib/api-types.ts";
 import { startWebServer, type WebServer } from "../src/index.ts";
 import { raw } from "./http.ts";
 
@@ -165,5 +166,24 @@ describe("learning API offset paging with totals", () => {
 		expect(jobs.jobs).toHaveLength(1);
 		expect(jobs.total).toBeGreaterThanOrEqual(2);
 		expect((await raw(server.port, "/api/learn/jobs?offset=-1")).status).toBe(400);
+	});
+});
+
+describe("injected memories on run detail", () => {
+	it("reads the memory_read span, resolves memories and falls back to the session's earlier turn", async () => {
+		const memory = addMemory(db, { scope: "user", type: "lesson", content: "Use pnpm", importance: 1, source: "human" }, redact, NOW);
+		const first = runRow({ sessionId: "sess-inj", turnIndex: 0, startedAt: "2026-10-12T01:00:00.000Z" });
+		const second = runRow({ sessionId: "sess-inj", turnIndex: 1, startedAt: "2026-10-12T02:00:00.000Z" });
+		const lone = runRow({ startedAt: "2026-10-12T03:00:00.000Z" });
+		for (const r of [first, second, lone]) insertRun(db, r);
+		insertSpan(db, spanRow(first.id, { kind: "memory_read", name: "retrieve", attrs: { mode: "hybrid", candidates: 4, selected: [{ id: memory.id, score: 0.81, relevance: 0.7 }, { id: "gone", score: 0.5, relevance: 0.4 }] } }));
+		const own = (await raw(server.port, `/api/runs/${first.id}`)).json() as RunDetailResponse;
+		expect(own.injectedMemories?.fromRunId).toBe(first.id);
+		expect(own.injectedMemories?.items.map((i) => i.memory?.content ?? null)).toEqual(["Use pnpm", null]);
+		const later = (await raw(server.port, `/api/runs/${second.id}`)).json() as RunDetailResponse;
+		expect(later.injectedMemories?.fromRunId).toBe(first.id);
+		expect(later.injectedMemories?.candidates).toBe(4);
+		const none = (await raw(server.port, `/api/runs/${lone.id}`)).json() as RunDetailResponse;
+		expect(none.injectedMemories).toBeNull();
 	});
 });

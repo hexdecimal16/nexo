@@ -36,6 +36,7 @@ import {
 import { sendError, sendJson } from "./http-errors.ts";
 import { type CompanionModel, companionAnswer } from "./companion.ts";
 import { createStaticServer } from "./static.ts";
+import { reviewQueueResponse } from "./review-queue-api.ts";
 
 export const DEFAULT_PUBLIC_DIR = fileURLToPath(new URL("../public/", import.meta.url));
 
@@ -96,6 +97,7 @@ const ROUTES = {
 	optim: new RegExp(`^/api/optim/${RUN_ID}$`),
 	optimApprove: new RegExp(`^/api/optim/${RUN_ID}/approve$`),
 	evalCases: /^\/api\/eval-cases$/,
+	reviewQueue: /^\/api\/review-queue$/,
 	evalCaseReview: new RegExp(`^/api/eval-cases/${RUN_ID}/(accept|dismiss)$`),
 	meta: /^\/api\/meta$/,
 	companion: /^\/api\/companion\/ask$/,
@@ -284,6 +286,10 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 			if (method !== "POST") throw methodNotAllowed(method, path, "POST");
 			assertWritable();
 			return sendJson(res, 200, approveOptimResponse(ctx, m[1] as string));
+		}
+		if (ROUTES.reviewQueue.test(path)) {
+			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
+			return sendJson(res, 200, reviewQueueResponse(ctx, url.searchParams));
 		}
 		if (ROUTES.evalCases.test(path)) {
 			if (method !== "GET") throw methodNotAllowed(method, path, "GET");

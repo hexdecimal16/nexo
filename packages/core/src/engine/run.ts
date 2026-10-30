@@ -75,6 +75,7 @@ import type { NexoConfig } from "../config/schema.ts";
 import { type BudgetLimit, budgetExhaustedError, checkAdmission, recordSpend, runBudgetLimit } from "../cost/admission.ts";
 import { budgetLine, RunBudget } from "../cost/budget.ts";
 import { estimateCallCostUsd, priceUsage } from "../cost/pricing.ts";
+import { clearOldToolResults } from "./context-trim.ts";
 import { classifyProviderError, contextOverflowError, providerRetryDelayMs, toolErrorText, withToolErrorCodes } from "./errors.ts";
 import { assistantText, contentText, estimatePromptChars, foreignToolCallsAsText, lastAssistant, recordedContent, withBudgetLine } from "./messages.ts";
 import { DEFAULT_PLANNER_PROMPT, DEFAULT_SYSTEM_PROMPT, renderSystemPrompt } from "./prompts.ts";
@@ -183,6 +184,10 @@ export type EngineEvent =
 			costUsd: number;
 	  }
 	| { type: "approval"; runId: string; depth: number; toolCallId: string; toolName: string; reason: string }
+	/** The loop guard blocked a tool call: `repeat` for identical consecutive calls, `max_tool_calls` when the run passed its cap (the agent gets one reply to report; another tool call ends the run with LOOP_LIMIT). */
+	| { type: "loop_guard"; runId: string; depth: number; toolCallId: string; toolName: string; kind: "repeat" | "max_tool_calls"; count: number; limit: number }
+	/** A request neared the context window, so old tool outputs were replaced by a stub for it (no model call; the saved transcript keeps them). */
+	| { type: "context_trim"; runId: string; depth: number; cleared: number; tokensBefore: number; tokensAfter: number }
 	| { type: "run_end"; runId: string; depth: number; status: RunStatus; costUsd: number; error?: { code: string; message: string } };
 
 /** What a `prepareHistory` hook can use to shrink the history before the run's first request. */
@@ -203,6 +208,16 @@ export interface HistoryContext {
 
 export type HistoryPreparer = (ctx: HistoryContext) => Promise<Message[]>;
 
+/** The tools an explore-mode subagent keeps: read-only research. */
+const EXPLORE_TOOLS: ReadonlySet<string> = new Set(["read", "web_fetch", "load_skill"]);
+
+/** JSON with object keys sorted at every level, so the same arguments in another key order compare equal. */
+function stableJson(value: unknown): string {
+	return JSON.stringify(value, (_key, v: unknown) =>
+		v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : v,
+	);
+}
+
 export interface RunRequest {
 	instruction: string;
 	/** Session rules in force; read on every approval, so rules added during the turn apply to its next calls. */
@@ -214,6 +229,8 @@ export interface RunRequest {
 	skill?: string;
 	model?: string;
 	effort?: Effort;
+	/** Read-only run (spawn mode "explore"): only read, web_fetch and load_skill are available. */
+	exploreOnly?: boolean;
 	workspace?: string;
 	/** Directory nexo was started in: its AGENTS.md / CLAUDE.md go into the prompt and its repo keys the project memory scope. */
 	projectDir?: string;
@@ -931,6 +948,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		retrieval?.catch(() => undefined); // awaited below; a rejection while the MCP tools load is not unhandled
 		if (deps.mcp) baseTools.push(...(await deps.mcp.tools()));
 		const tools = baseTools
+			.filter((t) => !request.exploreOnly || EXPLORE_TOOLS.has(t.name))
 			.map((t) => (toolDescriptionOverrides.has(t.name) ? { ...t, description: toolDescriptionOverrides.get(t.name) as string } : t))
 			.map(withToolErrorCodes);
 
@@ -1053,6 +1071,13 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 
 		const approvedBy = new Map<string, string>();
 		let classify: ReturnType<typeof createApprovalClassifier> | null = null;
+		let lastTrimCleared = 0;
+		/** completedCalls when the tool-call cap was first passed; tool calls from a later model reply end the run. */
+		let loopCapWarnedAt: number | null = null;
+		let loopLimitHit = false;
+		let toolCallCount = 0;
+		let lastCallSignature = "";
+		let repeatCount = 0;
 		const runAgent: Agent = new Agent({
 			streamFn: env.streamFn,
 			initialState: { systemPrompt, model, thinkingLevel: resolved.effort, tools, messages: history },
@@ -1068,11 +1093,45 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				if (requestModel.provider === target.provider && requestModel.id === target.id) return undefined;
 				return { model: target, thinkingLevel: active.resolved.effort };
 			},
-			transformContext: async (messages) => withBudgetLine(foreignToolCallsAsText(messages, active.model), budgetLine(budget)),
+			transformContext: async (messages) => {
+				// Mid-turn relief: compaction runs only before a turn's first request, so a long tool-heavy turn clears old tool outputs instead.
+				let current = messages;
+				const tokens = Math.ceil(requestChars(current, tools) / 4);
+				if (tokens > config.session.compactAt * active.model.contextWindow) {
+					const trimmed = clearOldToolResults(current, 4);
+					if (trimmed.cleared > lastTrimCleared) {
+						const after = Math.ceil(requestChars(trimmed.messages, tools) / 4);
+						deps.onEvent?.({ type: "context_trim", runId, depth, cleared: trimmed.cleared, tokensBefore: tokens, tokensAfter: after });
+					}
+					lastTrimCleared = Math.max(lastTrimCleared, trimmed.cleared);
+					current = trimmed.messages;
+				}
+				return withBudgetLine(foreignToolCallsAsText(current, active.model), budgetLine(budget));
+			},
 			beforeToolCall: async ({ toolCall, args }, signal) => {
 				if (budget.isExhausted()) {
 					budgetExceeded = true;
 					return { block: true, reason: "BUDGET_EXCEEDED: the run budget is exhausted", terminate: true };
+				}
+				const { maxToolCalls, repeatLimit } = config.loop;
+				toolCallCount++;
+				if (maxToolCalls > 0 && toolCallCount > maxToolCalls) {
+					if (loopCapWarnedAt !== null && completedCalls !== loopCapWarnedAt) {
+						loopLimitHit = true;
+						return { block: true, reason: `LOOP_LIMIT: the run kept calling tools after passing loop.maxToolCalls (${maxToolCalls}); it ends here.`, terminate: true };
+					}
+					if (loopCapWarnedAt === null) {
+						loopCapWarnedAt = completedCalls;
+						deps.onEvent?.({ type: "loop_guard", runId, depth, toolCallId: toolCall.id, toolName: toolCall.name, kind: "max_tool_calls", count: toolCallCount - 1, limit: maxToolCalls });
+					}
+					return { block: true, reason: `LOOP_LIMIT: this run made ${maxToolCalls} tool calls (loop.maxToolCalls). Do not call more tools: reply now with what you have done, what you verified and what remains.` };
+				}
+				const signature = `${toolCall.name}:${stableJson(args)}`;
+				repeatCount = signature === lastCallSignature ? repeatCount + 1 : 1;
+				lastCallSignature = signature;
+				if (repeatLimit > 0 && repeatCount > repeatLimit) {
+					deps.onEvent?.({ type: "loop_guard", runId, depth, toolCallId: toolCall.id, toolName: toolCall.name, kind: "repeat", count: repeatCount, limit: repeatLimit });
+					return { block: true, reason: `LOOP_REPEAT: ${toolCall.name} was called ${repeatCount} times in a row with identical arguments (loop.repeatLimit ${repeatLimit}). Change your approach or report the blocker.` };
 				}
 				const classifier = classify;
 				const auth = await env.policy.authorize(
@@ -1284,6 +1343,13 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			if (budgetExceeded) {
 				status = "budget_exceeded";
 				error = budgetExhaustedError(budget, input.budgetLimit ?? "run", sessionId !== null && !parent).toPayload();
+			} else if (loopLimitHit) {
+				status = "failed";
+				error = new NexoError({
+					code: "LOOP_LIMIT",
+					message: `The run passed loop.maxToolCalls (${config.loop.maxToolCalls}) and kept calling tools after it was asked to report`,
+					hint: "Raise loop.maxToolCalls (0 turns the cap off) or split the task into smaller ones",
+				}).toPayload();
 			} else if (input.signal?.aborted || last?.stopReason === "aborted") {
 				status = "aborted";
 			} else if (last?.stopReason === "error") {

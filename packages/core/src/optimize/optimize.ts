@@ -1,3 +1,4 @@
+import { holdoutRegression } from "./holdout-gate.ts";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -377,8 +378,8 @@ export async function startOptimization(baseEnv: EngineEnv, options: OptimizeOpt
 		// The report (spec §8.2.5): the base and the best candidate on the holdout split only.
 		ctx.phase = "final";
 		options.onEvent?.({ type: "phase", phase: "holdout" });
-		const bestArtifactId = artifactOfCandidate.get(result.bestId) ?? base.id;
-		const best = getArtifact(db, bestArtifactId) as ArtifactRow;
+		let bestArtifactId = artifactOfCandidate.get(result.bestId) ?? base.id;
+		let best = getArtifact(db, bestArtifactId) as ArtifactRow;
 		const before = perCaseOf(cases.holdout, baseline.holdout);
 		let after = before;
 		let deterministic = baseline.holdout.deterministic.some(Boolean);
@@ -395,6 +396,16 @@ export async function startOptimization(baseEnv: EngineEnv, options: OptimizeOpt
 					// A holdout case the budget cannot cover counts against the candidate.
 					after[c.id] = { quality: 0, costUsd: 0 };
 				}
+			}
+		}
+		// Verify-or-rollback: a candidate that lowers the holdout mean, or drops any one case by more than maxCaseDrop, is not promoted.
+		if (bestArtifactId !== base.id) {
+			const gate = holdoutRegression(before, after, cases.holdout.map((c) => c.id), config.optimize.maxCaseDrop);
+			if (gate.regressed) {
+				logger.warn("optimization reverted to the base version: the best candidate regressed on the holdout", { optim_run_id: optimRunId, mean_drop: gate.meanDrop, worst_case_drop: gate.worstDrop });
+				bestArtifactId = base.id;
+				best = base as ArtifactRow;
+				after = before;
 			}
 		}
 		const key = judgeKey(config);

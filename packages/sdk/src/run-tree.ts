@@ -16,6 +16,8 @@ export interface RunNode {
 	status: "running" | RunEnd["status"];
 	costUsd: number;
 	toolCalls: number;
+	/** Tool calls the loop guard blocked (repeated identical calls or the max-tool-calls cap). */
+	loopGuards: number;
 	/** Name of the tool in flight, or null. */
 	currentTool: string | null;
 	error: { code: string; message: string } | null;
@@ -61,6 +63,7 @@ export function trackRunTree(onChange?: (node: RunNode) => void): RunTree {
 						status: "running",
 						costUsd: 0,
 						toolCalls: 0,
+						loopGuards: 0,
 						currentTool: null,
 						error: null,
 						startedAt: Date.now(),
@@ -78,6 +81,11 @@ export function trackRunTree(onChange?: (node: RunNode) => void): RunTree {
 					update(event.runId, (n) => {
 						n.toolCalls++;
 						n.currentTool = event.toolName;
+					});
+					break;
+				case "loop_guard":
+					update(event.runId, (n) => {
+						n.loopGuards++;
 					});
 					break;
 				case "tool_end":

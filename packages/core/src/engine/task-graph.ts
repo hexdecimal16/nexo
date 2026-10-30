@@ -10,6 +10,8 @@ export interface SpawnTask {
 	effort?: Effort;
 	budgetUsd?: number;
 	dependsOn?: string[];
+	/** "explore" gives the subagent read-only tools and asks for a short summary; omitted or "work" gives it the full toolset. */
+	mode?: "explore" | "work";
 }
 
 export type TaskStatus = RunStatus | "skipped";

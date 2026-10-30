@@ -15,6 +15,7 @@ export * from "./mine.ts";
 export * from "./optim.ts";
 export * from "./paths.ts";
 export * from "./playbooks.ts";
+export * from "./review-queue.ts";
 export * from "./runs.ts";
 export * from "./scores.ts";
 export * from "./sessions.ts";

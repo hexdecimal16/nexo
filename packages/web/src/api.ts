@@ -210,7 +210,37 @@ export function runDetailResponse(ctx: ApiContext, id: string): RunDetailRespons
 		scores: listScores(ctx.db, id).map(({ details: { rubric: _rubric, ...details }, ...score }) => ({ ...score, details })),
 		escalations: listEscalations(ctx.db, id),
 		judgeDisagrees: judgeDisagrees(ctx.db, id),
+		injectedMemories: injectedMemories(ctx, run),
 	};
+}
+
+/**
+ * The memories injected into a run. Retrieval runs once per process, at its first turn, and later turns reuse that set,
+ * so for a session turn this looks at the turn itself and then at earlier turns for the latest `memory_read` "retrieve" span.
+ */
+function injectedMemories(ctx: ApiContext, run: RunRow): RunDetailResponse["injectedMemories"] {
+	const turn = run.turnIndex ?? null;
+	const candidates: string[] = [run.id];
+	if (run.sessionId && turn !== null) {
+		const earlier = queryRuns(ctx.db, { sessionId: run.sessionId, limit: MAX_RUN_PAGE })
+			.runs.filter((r) => r.id !== run.id && r.turnIndex !== null && r.turnIndex <= turn)
+			.sort((a, b) => (b.turnIndex ?? 0) - (a.turnIndex ?? 0));
+		candidates.push(...earlier.map((r) => r.id));
+	}
+	const num = (v: unknown): number | null => (typeof v === "number" ? v : null);
+	for (const runId of candidates) {
+		const span = listSpans(ctx.db, runId).find((s) => s.kind === "memory_read" && s.name === "retrieve");
+		if (!span) continue;
+		const selected = Array.isArray(span.attrs.selected) ? span.attrs.selected : [];
+		const items = selected.flatMap((entry: unknown) => {
+			if (typeof entry !== "object" || entry === null) return [];
+			const e = entry as Record<string, unknown>;
+			if (typeof e.id !== "string") return [];
+			return [{ id: e.id, score: num(e.score), relevance: num(e.relevance), memory: getMemory(ctx.db, e.id) ?? null }];
+		});
+		return { fromRunId: runId, mode: typeof span.attrs.mode === "string" ? span.attrs.mode : null, candidates: num(span.attrs.candidates), items };
+	}
+	return null;
 }
 
 /** The run's own `escalation` spans, oldest first. */

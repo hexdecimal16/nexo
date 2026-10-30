@@ -13,7 +13,7 @@ export const SKILL = `${SKILL_HEAD}Run the linter.\n`;
 
 /** makeEnv with the ci-fix skill, a judge, and these config overrides. */
 export function optimEnv(config: DeepPartial<NexoConfig> = {}): TestEnv {
-	return makeEnv({ skills: { "ci-fix": SKILL }, config: { ...JUDGE, ...config }, extraModels: JUDGE_MODELS });
+	return makeEnv({ skills: { "ci-fix": SKILL }, config: { ...JUDGE, ...config, optimize: { reflectionTier: "s2", ...(config.optimize ?? {}) } }, extraModels: JUDGE_MODELS });
 }
 
 export interface CallContext {

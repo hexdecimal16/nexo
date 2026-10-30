@@ -16,7 +16,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { type EngineEvent, listSessions, projectRoots, type RunResult, type Session, type Settings } from "@nexo/core";
 import type { Effort } from "@nexo/router";
-import { type Db, getSessionRow, type ScoreStatus, sessionNotFound, type TranscriptLine } from "@nexo/store";
+import { type Db, getSessionRow, reviewQueue, type ScoreStatus, sessionNotFound, type TranscriptLine } from "@nexo/store";
 import { type ErrorPayload, toErrorPayload } from "@nexo/telemetry";
 import { describeSessionRule, type Prompter } from "@nexo/tools";
 import { createApprovalPrompter } from "./approvals.ts";
@@ -671,6 +671,20 @@ class InteractiveApp {
 				this.chat.addChild(new Block(`score ${escapeControl(oneLine(event.scorer, 60))}: ${scoreVerdict(event)}`, style.gray, "  "));
 				break;
 			}
+			case "loop_guard": {
+				this.currentText = null;
+				const what =
+					event.kind === "max_tool_calls"
+						? `tool-call cap reached (loop.maxToolCalls ${event.limit}); the agent was asked to report`
+						: `blocked ${escapeControl(oneLine(event.toolName, 40))}: ${event.count} identical calls in a row (loop.repeatLimit ${event.limit})`;
+				this.chat.addChild(new Block(`⚠ ${what}`, style.yellow, "  "));
+				break;
+			}
+			case "context_trim":
+				if (event.depth !== 0) return;
+				this.currentText = null;
+				this.chat.addChild(new Block(`context nearly full: cleared ${event.cleared} old tool outputs (~${event.tokensBefore} → ~${event.tokensAfter} tokens)`, style.gray, "  "));
+				break;
 			case "compaction_start":
 				this.currentText = null;
 				this.chat.addChild(new Block("compacting earlier turns…", style.gray, "  "));
@@ -797,6 +811,15 @@ class InteractiveApp {
 					this.say("── conversation cleared ── (same session; earlier turns stay in its history)");
 					this.tui.requestRender(true);
 					break;
+				case "queue": {
+					const items = reviewQueue(this.options.db, { limit: 10 });
+					this.say(
+						items.length === 0
+							? "no unreviewed runs in the last 7 days"
+							: items.map((i) => `${i.runId.slice(-6)} ${i.failureMode} ${i.score === null ? "–" : i.score.toFixed(2)} ${escapeControl(i.instruction)}`).join("\n"),
+					);
+					break;
+				}
 				case "sessions":
 					this.say(this.sessionsText(session));
 					break;

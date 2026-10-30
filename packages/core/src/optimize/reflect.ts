@@ -74,7 +74,7 @@ export async function stopOnRefusal<T>(fn: () => Promise<T>): Promise<T> {
 async function reflectionCompletion(payer: OptimPayer, request: { system: string; user: string; purpose: string; currentTextChars: number }): Promise<string> {
 	const { env, budget } = payer;
 	const { config } = env.deps;
-	const spec = config.models.s2;
+	const spec = config.models[config.optimize.reflectionTier];
 	const model = env.registry.get(spec.provider, spec.id);
 	const effort = env.registry.clampEffort(model, spec.effort ?? "off");
 	const { text } = await stopOnRefusal(() =>

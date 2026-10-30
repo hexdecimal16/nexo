@@ -14,6 +14,11 @@ const SpawnTaskSchema = Type.Object({
 	effort: Type.Optional(EffortSchema),
 	budgetUsd: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
 	dependsOn: Type.Optional(Type.Array(Type.String(), { description: "Task ids whose outputs this task needs" })),
+	mode: Type.Optional(
+		Type.Union([Type.Literal("explore"), Type.Literal("work")], {
+			description: '"explore": read-only research (read, web_fetch, load_skill) that returns a short summary and keeps the parent context small; "work" (default): full tools. Run write-capable tasks one at a time.',
+		}),
+	),
 });
 
 const SpawnParams = Type.Object({ tasks: Type.Array(SpawnTaskSchema, { minItems: 1 }) });
@@ -60,7 +65,8 @@ async function runSpawn(
 			const runChild = (childBudgetUsd: number) =>
 				executeRun(env, {
 				request: {
-					instruction: withDependencyOutputs(task.instruction, input.dependencyOutputs),
+					instruction: task.mode === "explore" ? `${withDependencyOutputs(task.instruction, input.dependencyOutputs)}\n\nYou are an explorer: you cannot change anything. Finish with a summary of at most 300 words: findings, source paths or URLs, and what you could not verify.` : withDependencyOutputs(task.instruction, input.dependencyOutputs),
+					...(task.mode === "explore" ? { exploreOnly: true } : {}),
 					skill: task.skill,
 					model: task.model,
 					effort: task.effort,

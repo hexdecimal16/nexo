@@ -15,7 +15,7 @@ import {
 	type Session,
 	type SessionDeps,
 } from "@nexo/core";
-import { resolveNexoPaths } from "@nexo/store";
+import { resolveNexoPaths, reviewQueue, type ReviewQueueItem, type ReviewQueueOptions } from "@nexo/store";
 import { NexoError } from "@nexo/telemetry";
 import { nonInteractivePrompter, type Prompter } from "@nexo/tools";
 import { createRuntime } from "./runtime.ts";
@@ -51,6 +51,8 @@ export interface Nexo {
 	createSession(options: CreateSessionOptions): Session;
 	/** Reopens a session by id. NOT_FOUND for an unknown id, CONFLICT when another process has it open. */
 	resumeSession(id: string): Session;
+	/** Recent runs without a human verdict, worst first (failed, over budget, aborted, low score, unscored). */
+	reviewQueue(options?: ReviewQueueOptions): ReviewQueueItem[];
 	/** Read-only setup checks (never prints key values). */
 	doctor(): DoctorReport;
 	/** Closes MCP servers and the database. Close sessions first. Safe to call twice. */
@@ -127,6 +129,10 @@ export function createNexo(options: NexoOptions = {}): Nexo {
 		resumeSession(id) {
 			live();
 			return resumeSession(sessionDeps(), id);
+		},
+		reviewQueue(queueOptions) {
+			live();
+			return reviewQueue(runtime.db, queueOptions);
 		},
 		doctor() {
 			return runDoctor({ paths: runtime.paths, settings: runtime.settings, env, cwd });

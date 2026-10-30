@@ -293,7 +293,7 @@ describe("mid-run escalation", () => {
 	});
 
 	it("escalates after turns that repeat the same tool results (stagnation)", async () => {
-		const env = judgeEnv({ config: { tools: { policy: { bash: "allow" } } } });
+		const env = judgeEnv({ config: { tools: { policy: { bash: "allow" } }, loop: { repeatLimit: 0 } } });
 		const same = () => fauxAssistantMessage([fauxToolCall("bash", { command: "echo same" })]);
 		route(env, [same(), same(), same(), same(), fauxAssistantMessage("stuck")]);
 		const result = await createEngine(env.deps).run({ instruction: "Loop" });

@@ -119,6 +119,30 @@ export const EDITABLE_SETTINGS: readonly SettingDefinition[] = [
 		type: { kind: "number", integer: false, min: 0, max: 1 },
 	},
 	{
+		key: "optimize.reflectionTier",
+		label: "Optimizer edit model",
+		description: "Which model tier writes candidate edits in `nexo optimize` (s1 is cheaper; edit quality barely depends on model size)",
+		type: { kind: "enum", values: ["s1", "s2"] },
+	},
+	{
+		key: "optimize.maxCaseDrop",
+		label: "Optimizer max case drop",
+		description: "Largest quality drop on one holdout case a promoted candidate may have (0 to 1); a larger drop or a lower holdout mean reverts to the base version",
+		type: { kind: "number", integer: false, min: 0, max: 1 },
+	},
+	{
+		key: "loop.maxToolCalls",
+		label: "Max tool calls",
+		description: "Most tool calls one run may make before it is stopped and told to report (0 = no cap)",
+		type: { kind: "number", integer: true, min: 0 },
+	},
+	{
+		key: "loop.repeatLimit",
+		label: "Repeat limit",
+		description: "Most identical consecutive tool calls (same tool and arguments) before the next one is blocked (0 = off)",
+		type: { kind: "number", integer: true, min: 0 },
+	},
+	{
 		key: "spawn.maxParallelSubagents",
 		label: "Parallel subagents",
 		description: "Most subagents one run may have working at the same time",

@@ -24,10 +24,10 @@ const MINE = { days: 30, maxRuns: 500, minCluster: 3, maxNew: 3, cosine: 0.8, ja
 describe("optimize config", () => {
 	it("fills the spec §9 defaults and keeps budgets.optimDefaultUsd", () => {
 		const config = load({ models })();
-		expect(config.optimize).toEqual({ minCases: 10, patience: 5, minJudgeKappa: 0.6, noveltySimilarity: 0.98, offspringAlpha: 0.5, mine: MINE, climb: { guards: 2 } });
+		expect(config.optimize).toEqual({ minCases: 10, patience: 5, minJudgeKappa: 0.6, reflectionTier: "s1", maxCaseDrop: 0.2, noveltySimilarity: 0.98, offspringAlpha: 0.5, mine: MINE, climb: { guards: 2 } });
 		expect(DEFAULT_CONFIG.optimize.minCases).toBe(10);
 		expect(config.budgets.optimDefaultUsd).toBe(5);
-		expect(load({ models, optimize: { patience: 8 } })().optimize).toEqual({ minCases: 10, patience: 8, minJudgeKappa: 0.6, noveltySimilarity: 0.98, offspringAlpha: 0.5, mine: MINE, climb: { guards: 2 } });
+		expect(load({ models, optimize: { patience: 8 } })().optimize).toEqual({ minCases: 10, patience: 8, minJudgeKappa: 0.6, reflectionTier: "s1", maxCaseDrop: 0.2, noveltySimilarity: 0.98, offspringAlpha: 0.5, mine: MINE, climb: { guards: 2 } });
 	});
 
 	it("refuses out-of-range mining and climb settings", () => {

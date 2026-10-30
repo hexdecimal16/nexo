@@ -1,7 +1,25 @@
-import type { Feedback, ReadOnlyInfo, RunDetailResponse, RunStatus, RunSummary } from "./api-types.ts";
+import type { Feedback, InjectedMemories, ReadOnlyInfo, RunDetailResponse, RunStatus, RunSummary } from "./api-types.ts";
 import { renderError, runLink, sessionLink, stateClass, statusBadge, verdictBadge } from "./common-view.ts";
 import { durationMs, formatDuration, formatTime, formatUsd, shortId, truncate } from "./format.ts";
 import { html, type SafeHtml } from "./html.ts";
+
+/** The memories injected into the run, with where the selection was recorded and each memory's rank score. */
+export function renderInjectedMemories(data: InjectedMemories | null, runId: string): SafeHtml {
+	if (!data) return html`<p class="muted">No memory retrieval was recorded for this run.</p>`;
+	const origin = data.fromRunId === runId ? "" : html` Retrieved at an earlier turn of this session: <a href="${runLink(data.fromRunId)}">run ${shortId(data.fromRunId)}</a>.`;
+	const facts = html`<p class="muted">${data.mode ? `Mode ${data.mode}. ` : ""}${data.candidates !== null ? `${data.candidates} candidates. ` : ""}${origin}</p>`;
+	if (data.items.length === 0) return html`${facts}<p class="muted">Retrieval selected no memories.</p>`;
+	return html`${facts}<table class="runs memories">
+	<thead><tr><th>Scope</th><th>Type</th><th>Source</th><th>Memory</th><th class="num">Score</th><th class="num">Relevance</th></tr></thead>
+	<tbody>${data.items.map(
+		(i) => html`<tr>
+		<td class="mono">${i.memory?.scope ?? ""}</td><td>${i.memory?.type ?? ""}</td><td>${i.memory?.source ?? ""}</td>
+		<td>${i.memory ? i.memory.content : html`<span class="muted mono">${i.id} (no longer in the store)</span>`}${i.memory?.retiredAt ? html` <span class="muted">retired since</span>` : ""}${i.memory?.supersededBy ? html` <span class="muted">replaced since</span>` : ""}</td>
+		<td class="num">${i.score === null ? "" : i.score.toFixed(2)}</td><td class="num">${i.relevance === null ? "" : i.relevance.toFixed(2)}</td>
+	</tr>`,
+	)}</tbody>
+</table>`;
+}
 
 export function shouldPoll(status: RunStatus): boolean {
 	return status === "running";

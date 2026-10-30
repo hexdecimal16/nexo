@@ -52,6 +52,17 @@ function ensureExitHandler(): void {
 	process.on("exit", killLiveBashGroups);
 }
 
+const SECRET_ENV_NAME = /(^|_)(API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|PRIVATE_KEY|ACCESS_KEY|SESSION_KEY)(_|$)|^(AWS|AZURE|GCP|GOOGLE|OPENAI|ANTHROPIC|GITHUB|GH|NPM|SSH_AUTH)_.*(KEY|TOKEN|SECRET|SOCK)/i;
+
+/** The process environment without variables whose names look like secrets (API keys, tokens, passwords), for commands the agent runs. */
+export function bashEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	const out: NodeJS.ProcessEnv = {};
+	for (const [name, value] of Object.entries(source)) {
+		if (value !== undefined && !SECRET_ENV_NAME.test(name)) out[name] = value;
+	}
+	return out;
+}
+
 export interface BashRun {
 	command: string;
 	cwd: string;
@@ -282,11 +293,11 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 	const bash: AgentTool<typeof BashParams> = {
 		name: "bash",
 		label: "Run command",
-		description: "Run a bash command in the workspace directory.",
+		description: "Run a bash command in the workspace directory (bash -c, no TTY, no stdin). Returns `exit code: N` followed by combined stdout and stderr; output beyond the limit is truncated, so filter with grep, head or tail. Chain related steps with && in one call. A command that may outlive the timeout belongs in the background: nohup <command> > job.log 2>&1 &, then poll job.log. Pass timeoutMs to raise the default. The environment is filtered, so secrets such as API keys are not available.",
 		parameters: BashParams,
 		execute: async (_id, params, signal) => {
 			const timeoutMs = params.timeoutMs ?? ctx.bashTimeoutMs;
-			const r = await runBash({ command: params.command, cwd: root, timeoutMs, signal });
+			const r = await runBash({ command: params.command, cwd: root, timeoutMs, signal, env: bashEnv() });
 			const body = `${r.output}${r.truncated ? "\n[output truncated]" : ""}`;
 			switch (r.ended) {
 				case "failed":

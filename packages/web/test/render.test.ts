@@ -159,6 +159,7 @@ describe("run view", () => {
 		scores: [],
 		escalations: [],
 		judgeDisagrees: false,
+		injectedMemories: null,
 		...overrides,
 	});
 
@@ -548,5 +549,19 @@ describe("span selection", () => {
 		const markup = renderTimeline(timelineRows([node(root)], NOW), "r").value;
 		expect(markup).toContain(`data-span-id="r" aria-current="true"`);
 		expect(renderTimeline(timelineRows([node(root)], NOW)).value).not.toContain("aria-current");
+	});
+});
+
+describe("injected memories view", () => {
+	it("escapes memory text, links the source run and handles empty states", async () => {
+		const { renderInjectedMemories } = await import("../public/lib/run-view.ts");
+		expect(renderInjectedMemories(null, "r1").value).toContain("No memory retrieval");
+		const memory = { id: "m1", scope: "user", type: "lesson", content: XSS, importance: 1, source: "human", sourceRunId: null, supersededBy: "m2", retiredAt: null, createdAt: "2026-10-12T00:00:00.000Z", lastUsedAt: null } as const;
+		const markup = renderInjectedMemories({ fromRunId: "r0", mode: "fts", candidates: 3, items: [{ id: "m1", score: 0.9, relevance: 0.5, memory }, { id: "m9", score: null, relevance: null, memory: null }] }, "r1").value;
+		expect(markup).not.toContain("<script>");
+		expect(markup).toContain("/run.html?id=r0");
+		expect(markup).toContain("replaced since");
+		expect(markup).toContain("no longer in the store");
+		expect(renderInjectedMemories({ fromRunId: "r1", mode: null, candidates: null, items: [] }, "r1").value).toContain("selected no memories");
 	});
 });

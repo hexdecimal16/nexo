@@ -48,12 +48,13 @@ export const USAGE = `Usage:
   nexo --version                           print the installed version
   nexo settings                            open the settings screen (needs a terminal)
   nexo settings get <key>
-  nexo settings set <key> <value>          keys: models.s1|s2|judge|reflector|embedding, budgets.*, tools.policy.*, tools.autoApprove, tools.nonInteractiveAsk, models.approver, scoring.judge, learning.*, memory.*, optimize.minCases|patience|minJudgeKappa|noveltySimilarity|offspringAlpha
+  nexo settings set <key> <value>          keys: models.s1|s2|judge|reflector|embedding, budgets.*, tools.policy.*, tools.autoApprove, tools.nonInteractiveAsk, models.approver, scoring.judge, learning.*, memory.*, optimize.minCases|patience|minJudgeKappa|noveltySimilarity|offspringAlpha|reflectionTier|maxCaseDrop, loop.maxToolCalls|repeatLimit
   nexo settings reset <key>                remove it from the user config
   nexo settings set-key <provider>         reads the key from a hidden prompt, or from stdin when piped
   nexo run <instruction...> [--skill <name>] [--model <s1|s2|provider/id>] [--effort <level>] [--workspace <dir>] [--budget <usd>] [--no-review]
   nexo cost [--by model|tier|day|run|skill] [--since YYYY-MM-DD]
   nexo reindex
+  nexo review-queue [--limit <n>] [--days <n>]   recent runs without a verdict, worst first
   nexo eval judge [--judge <provider/id[+provider/id…]>]   judge-vs-human agreement and Cohen's κ
   nexo eval add --target <target> --input <text> [--skill <name>] [--expected <text>] [--feedback <text>]
   nexo eval list --target <target>

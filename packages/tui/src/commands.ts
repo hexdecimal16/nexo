@@ -25,6 +25,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
 	{ name: "done", description: "Mark the last turn done" },
 	{ name: "notdone", description: "Mark the last turn not done", argumentHint: "[comment]" },
 	{ name: "cost", description: "Show the session's cost and budget" },
+	{ name: "queue", description: "List recent runs without a verdict, worst first" },
 	{ name: "budget", description: "Set this session's budget cap", argumentHint: "<usd>" },
 	{ name: "model", description: "Set this session's model (default clears it)", argumentHint: "<s1|s2|provider/id|default>", getArgumentCompletions: items(["s1", "s2", "default"]) },
 	{ name: "effort", description: "Set this session's effort (default clears it)", argumentHint: "<level|default>", getArgumentCompletions: items([...EFFORTS, "default"]) },

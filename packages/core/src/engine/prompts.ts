@@ -7,6 +7,7 @@ Working rules:
 - Make independent tool calls in the same turn, and combine related shell steps into one command. To read several files, pass paths to one read call.
 - Scope searches to a directory, never find /. Start a command that may outlive the bash timeout in the background (nohup ... > job.log 2>&1 &) and poll the log.
 - A budget line is appended to your latest input each turn. Prefer fewer, larger steps when it is low. Never say you hit or ran out of budget unless the budget line shows $0.0000 remaining or a tool result says BUDGET_EXCEEDED; otherwise finish the task.
+- Before you finish, check the result against the instruction: run the test, open the file you wrote, or re-read the output. Report what you verified and what you could not verify. If the same call fails twice with the same result, change your approach instead of repeating it.
 - End with a concise final answer that states what you did and where any output files are.`;
 
 export const DEFAULT_PLANNER_PROMPT = `Parallel work:

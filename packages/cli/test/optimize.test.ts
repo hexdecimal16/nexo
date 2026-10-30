@@ -44,6 +44,7 @@ function setup(): { env: NodeJS.ProcessEnv; cwd: string; models: ReturnType<type
 			models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "slow" } },
 			providers: { faux: { retryBaseDelayMs: 0, rateLimitBaseDelayMs: 0 } },
 			router: { maxEscalations: 0 },
+			optimize: { reflectionTier: "s2" },
 			scoring: { scorers: [{ kind: "contains", text: "tested" }] },
 			learning: { enabled: false },
 		}),

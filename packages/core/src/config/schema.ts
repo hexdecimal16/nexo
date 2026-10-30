@@ -121,6 +121,11 @@ export const ConfigSchema = Type.Object(
 			},
 			{ additionalProperties: false },
 		),
+		/** Guards against a run that loops: a cap on tool calls and a limit on identical consecutive calls; 0 turns a guard off. */
+		loop: Type.Object(
+			{ maxToolCalls: Type.Integer({ minimum: 0 }), repeatLimit: Type.Integer({ minimum: 0 }) },
+			{ additionalProperties: false },
+		),
 		spawn: Type.Object(
 			{ maxParallelSubagents: Type.Integer({ minimum: 1 }), maxDepth: Type.Integer({ minimum: 0 }) },
 			{ additionalProperties: false },
@@ -213,6 +218,10 @@ export const ConfigSchema = Type.Object(
 				patience: Type.Integer({ minimum: 1 }),
 				/** Lowest judge Cohen's κ that lets judge-only evidence promote a candidate. */
 				minJudgeKappa: Type.Number({ minimum: -1, maximum: 1 }),
+				/** Model tier that writes candidate edits. Edit quality barely depends on model size, so s1 is the default. */
+				reflectionTier: Type.Union([Type.Literal("s1"), Type.Literal("s2")]),
+				/** Largest drop in one holdout case's quality that a promoted candidate may have; a larger drop, or a lower holdout mean, reverts to the base version. */
+				maxCaseDrop: Type.Number({ minimum: 0, maximum: 1 }),
 				/** Embedding cosine at or above which a reflected text counts as a near-duplicate of a candidate and is skipped before any rollout. */
 				noveltySimilarity: Type.Number({ exclusiveMinimum: 0, maximum: 1 }),
 				/** How strongly a parent's child count lowers its chance of being sampled again (0 turns the penalty off). */
@@ -271,6 +280,7 @@ export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 		estimateOutputTokens: 4096,
 	},
 	session: { compactAt: 0.8, compactAtBudgetShare: 0.2 },
+	loop: { maxToolCalls: 200, repeatLimit: 3 },
 	spawn: { maxParallelSubagents: 4, maxDepth: 4 },
 	instructions: [],
 	skills: { dirs: ["$NEXO_HOME/skills", "./.nexo/skills"], pins: {} },
@@ -286,5 +296,5 @@ export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 	redaction: { patterns: [] },
 	memory: { enabled: true, maxTokens: 1500, weights: { relevance: 1, importance: 0.5, recency: 0.3 }, tauDays: 14, topK: 20, minRelevance: 0 },
 	learning: { enabled: true, maxPlaybookItems: 50, perJobUsd: 0.15, staleMinutes: 10, drainAfterRunMs: 30_000 },
-	optimize: { minCases: 10, patience: 5, minJudgeKappa: 0.6, noveltySimilarity: 0.98, offspringAlpha: 0.5, mine: { days: 30, maxRuns: 500, minCluster: 3, maxNew: 3, cosine: 0.8, jaccard: 0.5 }, climb: { guards: 2 } },
+	optimize: { minCases: 10, patience: 5, minJudgeKappa: 0.6, reflectionTier: "s1", maxCaseDrop: 0.2, noveltySimilarity: 0.98, offspringAlpha: 0.5, mine: { days: 30, maxRuns: 500, minCluster: 3, maxNew: 3, cosine: 0.8, jaccard: 0.5 }, climb: { guards: 2 } },
 };

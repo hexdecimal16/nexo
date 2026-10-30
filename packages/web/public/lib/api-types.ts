@@ -175,6 +175,24 @@ export interface RunDetailResponse {
 	escalations: Escalation[];
 	/** True when the latest judge verdict and the latest human verdict disagree. */
 	judgeDisagrees: boolean;
+	/** The memories retrieval chose for this run (or for the session turn whose set it reuses); null when none was recorded. */
+	injectedMemories: InjectedMemories | null;
+}
+
+export interface InjectedMemory {
+	id: string;
+	score: number | null;
+	relevance: number | null;
+	/** The stored memory; null when it no longer exists. */
+	memory: Memory | null;
+}
+
+export interface InjectedMemories {
+	/** The run whose `memory_read` span recorded the selection (an earlier turn for later turns of a session). */
+	fromRunId: string;
+	mode: string | null;
+	candidates: number | null;
+	items: InjectedMemory[];
 }
 
 export interface Span {

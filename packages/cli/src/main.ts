@@ -9,6 +9,7 @@ import { evalCommand } from "./eval.ts";
 import { learnCommand, learnEventLine, memoryCommand, playbookCommand } from "./learn.ts";
 import { optimizeCommand } from "./optimize.ts";
 import { createTtyPrompter } from "./prompter.ts";
+import { reviewQueueCommand } from "./review-queue.ts";
 import { createTtyLineAsker, isInteractiveTerminal, type LineAsker, promptReview } from "./review.ts";
 import { createRuntime } from "./runtime.ts";
 import { interactiveCommand, settingsScreenCommand } from "./interactive.ts";
@@ -123,6 +124,11 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 			if (event.type === "tool_start") io.stderr.write(`${"  ".repeat(event.depth)}  · ${event.toolName}\n`);
 			if (event.type === "approval") io.stderr.write(`\x1b[2m${"  ".repeat(event.depth)}    auto-allowed: ${escapeControl(event.reason)}\x1b[22m\n`);
 			if (event.type === "escalation" && event.applied) io.stderr.write(escalationLine(event.depth, event.model, event.trigger, event.reason));
+			if (event.type === "loop_guard") {
+				const what = event.kind === "max_tool_calls" ? `tool-call cap reached (loop.maxToolCalls ${event.limit}); asked the agent to report` : `blocked ${escapeControl(event.toolName)}: ${event.count} identical calls in a row (loop.repeatLimit ${event.limit})`;
+				io.stderr.write(`${"  ".repeat(event.depth)}  ⚠ ${what}\n`);
+			}
+			if (event.type === "context_trim" && event.depth === 0) io.stderr.write(`  · context nearly full: cleared ${event.cleared} old tool outputs (~${event.tokensBefore} → ~${event.tokensAfter} tokens)\n`);
 		},
 		onLearnEvent: (event) => {
 			const line = learnEventLine(event);
@@ -221,6 +227,8 @@ export async function runCli(argv: string[], io: CliIO, options: CliOptions = {}
 				return costCommand(rest, io, options);
 			case "reindex":
 				return reindexCommand(io, options);
+			case "review-queue":
+				return reviewQueueCommand(rest, io, options);
 			case "eval":
 				return await evalCommand(rest, io, options);
 			case "optimize":
