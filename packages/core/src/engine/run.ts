@@ -977,6 +977,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		const systemPrompt = renderSystemPrompt({
 			systemPrompt: systemPromptText,
 			plannerPrompt: tools.some((t) => t.name === "spawn") ? plannerPromptText : null,
+			webSearch: tools.some((t) => t.name === "web_search"),
 			workspace,
 			...(rollout ? {} : { wikisDir: deps.paths.wikis }),
 			skillIndex: formatSkillIndex(deps.skills),

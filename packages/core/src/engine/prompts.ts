@@ -19,6 +19,8 @@ export interface SystemPromptParts {
 	systemPrompt: string;
 	plannerPrompt: string | null;
 	workspace: string;
+	/** The run has the web_search tool; WEB_SEARCH_PROMPT is added. */
+	webSearch?: boolean;
 	/** The directory holding the user wikis; a line naming it is added when set. */
 	wikisDir?: string;
 	skillIndex: string;
@@ -31,6 +33,9 @@ export interface SystemPromptParts {
 	memories?: string;
 }
 
+/** Added only when web_search is available, so runs without a search key are not told about a tool they lack. */
+export const WEB_SEARCH_PROMPT = `Web research: your training data has a cutoff, so use web_search for anything that may have changed or that you are not sure of: current versions, APIs and docs, error messages, prices, news and other recent facts. Search with specific terms, read the best one to three hits with web_fetch, and cite the URLs you relied on in your answer. Do not search for things the workspace or a skill already answers.`;
+
 /** The line that points the agent at the wikis directory; the wiki skill holds the rules for using it. */
 export function wikiPrompt(wikisDir: string): string {
 	return `Wikis: the user keeps persistent knowledge bases as markdown folders under ${wikisDir}. When a task produces durable subject knowledge worth keeping (research findings, a source you read, a topic the user keeps returning to), load the wiki skill with load_skill and file it in the wiki that fits, creating a new wiki when none fits. Do not create or edit wikis for one-off questions, small talk or routine code changes. Load the wiki skill first whenever the task is about a wiki.`;
@@ -39,6 +44,7 @@ export function wikiPrompt(wikisDir: string): string {
 export function renderSystemPrompt(parts: SystemPromptParts): string {
 	const sections = [parts.systemPrompt.replaceAll("{{workspace}}", parts.workspace)];
 	if (parts.plannerPrompt) sections.push(parts.plannerPrompt);
+	if (parts.webSearch) sections.push(WEB_SEARCH_PROMPT);
 	if (parts.wikisDir) sections.push(wikiPrompt(parts.wikisDir));
 	if (parts.skillIndex) sections.push(parts.skillIndex);
 	if (parts.activeSkill) sections.push(`# Active skill: ${parts.activeSkill.name}\n${parts.activeSkill.body}`);

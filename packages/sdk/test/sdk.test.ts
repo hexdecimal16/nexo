@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider, type FauxResponseStep, fauxToolCall, getSystemMessageText } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { checkSetup, createNexo, type EngineEvent } from "../src/index.ts";
 
@@ -15,7 +15,7 @@ afterEach(() => {
 	for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function setup(responses: ReturnType<typeof fauxAssistantMessage>[]) {
+function setup(responses: FauxResponseStep[]) {
 	const root = mkdtempSync(join(tmpdir(), "nexo-sdk-"));
 	roots.push(root);
 	const home = join(root, "home");
@@ -86,7 +86,14 @@ describe("web search", () => {
 		}) as typeof fetch;
 
 	it("gives an unattended run the web_search tool, allowed without a prompt, when a key is passed in code", async () => {
-		const h = setup([fauxAssistantMessage([fauxToolCall("web_search", { query: "node 22" })]), fauxAssistantMessage("found it")]);
+		let systemPrompt = "";
+		const h = setup([
+			(context) => {
+				systemPrompt = context.messages.flatMap((m) => (m.role === "system" ? [getSystemMessageText(m)] : [])).join("\n");
+				return fauxAssistantMessage([fauxToolCall("web_search", { query: "node 22" })]);
+			},
+			fauxAssistantMessage("found it"),
+		]);
 		const calls: string[] = [];
 		const nexo = createNexo({ home: h.home, cwd: h.root, env: h.env, models: h.models, apiKeys: { brave: BRAVE_KEY }, fetch: braveFetch(calls) });
 		const events: EngineEvent[] = [];
@@ -97,19 +104,29 @@ describe("web search", () => {
 			expect(end).toMatchObject({ isError: false });
 			expect(end && "output" in end ? end.output : "").toContain("1. [Node 22](https://nodejs.org/en/blog/node-22)");
 			expect(calls).toHaveLength(1);
+			// The prompt tells the agent when to search.
+			expect(systemPrompt).toContain("use web_search for anything that may have changed");
 		} finally {
 			await nexo.close();
 		}
 	});
 
 	it("leaves web_search out of a run without a search key", async () => {
-		const h = setup([fauxAssistantMessage([fauxToolCall("web_search", { query: "x" })]), fauxAssistantMessage("done")]);
+		let systemPrompt = "";
+		const h = setup([
+			(context) => {
+				systemPrompt = context.messages.flatMap((m) => (m.role === "system" ? [getSystemMessageText(m)] : [])).join("\n");
+				return fauxAssistantMessage([fauxToolCall("web_search", { query: "x" })]);
+			},
+			fauxAssistantMessage("done"),
+		]);
 		const nexo = createNexo({ home: h.home, cwd: h.root, env: h.env, models: h.models, fetch: braveFetch() });
 		const events: EngineEvent[] = [];
 		try {
 			await nexo.run({ instruction: "search", budgetUsd: 0.5 }, { onEvent: (e) => events.push(e) });
 			const end = events.find((e) => e.type === "tool_end" && e.toolName === "web_search");
 			expect(end).toMatchObject({ isError: true });
+			expect(systemPrompt).not.toContain("web_search");
 		} finally {
 			await nexo.close();
 		}
