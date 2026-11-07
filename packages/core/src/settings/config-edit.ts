@@ -60,6 +60,7 @@ const POLICY_DESCRIPTIONS: Record<string, string> = {
 	edit: "edit files in the workspace",
 	bash: "run shell commands",
 	web_fetch: "fetch web pages",
+	web_search: "search the web (sends the query to Brave or Tavily)",
 	load_skill: "load a skill's instructions",
 	spawn: "start subagents",
 };
@@ -94,6 +95,12 @@ export const EDITABLE_SETTINGS: readonly SettingDefinition[] = [
 			type: { kind: "enum", values: POLICY_VALUES },
 		}),
 	),
+	{
+		key: "tools.webSearch.count",
+		label: "Web search results",
+		description: "Results web_search returns after merging Brave and Tavily (1 to 20); set a key for either to turn web search on",
+		type: { kind: "number", integer: true, min: 1, max: 20 },
+	},
 	{
 		key: "tools.nonInteractiveAsk",
 		label: "Ask without a terminal",

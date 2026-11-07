@@ -2,7 +2,10 @@ import { accessSync, constants, existsSync } from "node:fs";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import type { NexoPaths } from "@nexo/store";
 import { toErrorPayload } from "@nexo/telemetry";
-import type { Settings } from "./settings.ts";
+import { SEARCH_PROVIDERS, type SearchProviderId } from "@nexo/tools";
+import type { KeyStatus, Settings } from "./settings.ts";
+
+const KEY_SOURCE: Record<KeyStatus["state"], string> = { option: "passed in code", env: "environment", file: "credentials file", unset: "not set" };
 
 /** Oldest Node release nexo supports; keep in step with `engines.node` in package.json. */
 export const MIN_NODE_VERSION = "22.19.0";
@@ -112,13 +115,26 @@ export function runDoctor(options: DoctorOptions): DoctorReport {
 		add({ id: "models", status: "ok", message: "Models s1 and s2 are set" });
 	}
 
-	for (const key of settings.keyProviders()) {
+	const keys = settings.keyProviders();
+	for (const key of keys.filter((k) => k.purpose === "model")) {
 		if (key.state === "unset") {
 			add({ id: `key:${key.provider}`, status: "warn", message: `No API key for ${key.provider}`, fix: `Run \`nexo settings set-key ${key.provider}\` (not needed for keyless or local providers)` });
 		} else {
-			add({ id: `key:${key.provider}`, status: "ok", message: `API key for ${key.provider} found (${key.state === "env" ? "environment" : "credentials file"})` });
+			add({ id: `key:${key.provider}`, status: "ok", message: `API key for ${key.provider} found (${KEY_SOURCE[key.state]})` });
 		}
 	}
+	const search = keys.filter((k) => k.purpose === "search");
+	const searchOn = search.filter((k) => k.state !== "unset");
+	add(
+		searchOn.length > 0
+			? { id: "web_search", status: "ok", message: `Web search uses ${searchOn.map((k) => `${k.provider} (${KEY_SOURCE[k.state]})`).join(", ")}` }
+			: {
+					id: "web_search",
+					status: "warn",
+					message: "No web search key (the web_search tool is off)",
+					fix: `Run \`nexo settings set-key ${search.map((k) => k.provider).join("` or `nexo settings set-key ")}\`, or set ${search.map((k) => SEARCH_PROVIDERS[k.provider as SearchProviderId]?.envVar).join(" or ")}`,
+				},
+	);
 
 	if (config) {
 		add(

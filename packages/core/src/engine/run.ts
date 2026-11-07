@@ -62,8 +62,11 @@ import {
 	createBuiltinTools,
 	createChangeTracker,
 	createPolicy,
+	createWebSearchTool,
 	FileLeases,
 	type Prompter,
+	SEARCH_PROVIDER_IDS,
+	type SearchProviderId,
 	type SessionRule,
 	TOOL_OUTPUT_PREFIX,
 	type ToolPolicy,
@@ -117,6 +120,8 @@ export interface EngineDeps {
 	resolveApiKey?: ApiKeyResolver;
 	/** The process's MCP servers; every run gets their tools. The caller closes it. */
 	mcp?: McpHub;
+	/** fetch for the web_search providers; tests pass a fake. */
+	fetch?: typeof fetch;
 }
 
 /** Longest tool result text carried by a `tool_end` preview (`output` carries all of it). */
@@ -209,7 +214,7 @@ export interface HistoryContext {
 export type HistoryPreparer = (ctx: HistoryContext) => Promise<Message[]>;
 
 /** The tools an explore-mode subagent keeps: read-only research. */
-const EXPLORE_TOOLS: ReadonlySet<string> = new Set(["read", "web_fetch", "load_skill"]);
+const EXPLORE_TOOLS: ReadonlySet<string> = new Set(["read", "web_fetch", "web_search", "load_skill"]);
 
 /** JSON with object keys sorted at every level, so the same arguments in another key order compare equal. */
 function stableJson(value: unknown): string {
@@ -229,7 +234,7 @@ export interface RunRequest {
 	skill?: string;
 	model?: string;
 	effort?: Effort;
-	/** Read-only run (spawn mode "explore"): only read, web_fetch and load_skill are available. */
+	/** Read-only run (spawn mode "explore"): only read, web_fetch, web_search and load_skill are available. */
 	exploreOnly?: boolean;
 	workspace?: string;
 	/** Directory nexo was started in: its AGENTS.md / CLAUDE.md go into the prompt and its repo keys the project memory scope. */
@@ -906,6 +911,13 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				},
 			}),
 		];
+		// web_search exists only when a search provider has a key; keys are read per run, so a key set mid-session applies to the next turn.
+		const webSearchTool = createWebSearchTool({
+			keys: Object.fromEntries(SEARCH_PROVIDER_IDS.map((id) => [id, deps.resolveApiKey?.(id)])) as Partial<Record<SearchProviderId, string>>,
+			count: config.tools.webSearch.count,
+			...(deps.fetch ? { fetch: deps.fetch } : {}),
+		});
+		if (webSearchTool) baseTools.push(webSearchTool);
 		const toolCtx: RunToolContext = {
 			env,
 			runId,

@@ -26,7 +26,7 @@ export function oneLine(text: string, max: number): string {
 	return flat.length > max ? `${flat.slice(0, Math.max(0, max - 1))}…` : flat;
 }
 
-const SUBJECT_KEY: Record<string, string> = { bash: "command", read: "path", write: "path", edit: "path", web_fetch: "url", load_skill: "name" };
+const SUBJECT_KEY: Record<string, string> = { bash: "command", read: "path", write: "path", edit: "path", web_fetch: "url", web_search: "query", load_skill: "name" };
 
 /** `tool(args)` summary: the tool's subject argument when it has one, otherwise compact JSON; control-escaped. */
 export function toolSummary(toolName: string, args: unknown, max = 80): string {

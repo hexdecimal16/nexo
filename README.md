@@ -45,6 +45,19 @@ For scripts, `nexo init --yes --s1 <provider/id> --s2 <provider/id>` runs withou
 
 Data lives in `~/.nexo` (set `NEXO_HOME` to change it).
 
+### Web search
+
+The agent gets a `web_search` tool once a [Brave Search](https://api-dashboard.search.brave.com) or [Tavily](https://app.tavily.com) key is set. With both keys, it queries both in parallel and merges the results. Results found by both rank higher, and a provider that fails is skipped. The tool is allowed without a prompt (`tools.policy.web_search`), including in unattended runs.
+
+```sh
+nexo settings set-key brave            # or tavily; hidden prompt, or pipe the key on stdin
+nexo settings keys                     # which keys are set, and from where
+nexo search "node 22 release notes"    # try it without a model (--count <n>, --json)
+nexo settings set tools.webSearch.count 10
+```
+
+`BRAVE_API_KEY` and `TAVILY_API_KEY` work too, and they take precedence over the credentials file. In a chat, `/settings` lists both keys.
+
 ## Use it from Node
 
 ```ts
@@ -58,6 +71,8 @@ try {
   await nexo.close();
 }
 ```
+
+Keys can be passed in code without touching disk: `createNexo({ apiKeys: { anthropic: "…", brave: "…" } })`. `nexo.webSearch(query)` searches directly, without a model and at no model cost. `nexo.keys()`, `nexo.setKey()` and `nexo.removeKey()` manage stored keys.
 
 The SDK denies every tool approval by default, so a backend never waits on a person. Always pass `budgetUsd`. `checkSetup()` runs the doctor checks without starting the engine, which suits a start-up pre-flight.
 

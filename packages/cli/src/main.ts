@@ -18,6 +18,7 @@ import { doctorCommand } from "./doctor.ts";
 import { initCommand } from "./init.ts";
 import { updateCommand } from "./update.ts";
 import { nexoVersion } from "./version.ts";
+import { searchCommand } from "./search.ts";
 import { settingsCommand } from "./settings.ts";
 import { escapeControl } from "@nexo/tui";
 import { runUi } from "./ui.ts";
@@ -241,6 +242,8 @@ export async function runCli(argv: string[], io: CliIO, options: CliOptions = {}
 				return playbookCommand(rest, io, options);
 			case "doctor":
 				return doctorCommand(rest, io, options);
+			case "search":
+				return await searchCommand(rest, io, options);
 			case "init":
 				return await initCommand(rest, io, options, stdio);
 			case "update":

@@ -6,6 +6,7 @@ import {
 	type DeepPartial,
 	type DoctorReport,
 	type EngineEvent,
+	type KeyStatus,
 	type NexoConfig,
 	nexoModels,
 	resumeSession,
@@ -17,7 +18,7 @@ import {
 } from "@nexo/core";
 import { resolveNexoPaths, reviewQueue, type ReviewQueueItem, type ReviewQueueOptions } from "@nexo/store";
 import { NexoError } from "@nexo/telemetry";
-import { nonInteractivePrompter, type Prompter } from "@nexo/tools";
+import { nonInteractivePrompter, type Prompter, SEARCH_PROVIDER_IDS, type SearchOutcome, type SearchProviderId, webSearch } from "@nexo/tools";
 import { createRuntime } from "./runtime.ts";
 
 export interface NexoOptions {
@@ -33,6 +34,19 @@ export interface NexoOptions {
 	prompter?: Prompter;
 	/** Model registry; defaults to the built-in one. Tests pass a fake provider. */
 	models?: Models;
+	/**
+	 * API keys by provider id, for this instance only: model providers (`anthropic`, `google`, …) and the web search
+	 * providers `brave` and `tavily`. They win over the environment and `credentials.json` and are never written to disk.
+	 */
+	apiKeys?: Readonly<Record<string, string>>;
+	/** fetch used by web search; tests pass a fake. */
+	fetch?: typeof fetch;
+}
+
+export interface NexoWebSearchOptions {
+	/** Results after merging (1 to 20); defaults to `tools.webSearch.count`. */
+	count?: number;
+	signal?: AbortSignal;
 }
 
 export interface NexoRunOptions {
@@ -55,6 +69,20 @@ export interface Nexo {
 	reviewQueue(options?: ReviewQueueOptions): ReviewQueueItem[];
 	/** Read-only setup checks (never prints key values). */
 	doctor(): DoctorReport;
+	/**
+	 * Searches the web directly (no model, no cost), with the same providers and merging as the agent's `web_search`
+	 * tool. INVALID_REQUEST when no `brave` or `tavily` key is set. Provider failures are in `failures`.
+	 */
+	webSearch(query: string, options?: NexoWebSearchOptions): Promise<SearchOutcome>;
+	/** Key status of the model providers in use and the web search providers; never contains key values. */
+	keys(): KeyStatus[];
+	/**
+	 * Stores a key in `credentials.json` (mode 600) for later processes too; runs started afterwards use it. Keys passed
+	 * as `apiKeys` still win. INVALID_REQUEST for an unknown provider or a malformed key.
+	 */
+	setKey(provider: string, apiKey: string): KeyStatus;
+	/** Deletes a provider's key from `credentials.json`. */
+	removeKey(provider: string): KeyStatus;
 	/** Closes MCP servers and the database. Close sessions first. Safe to call twice. */
 	close(): Promise<void>;
 }
@@ -68,11 +96,11 @@ function withHome(options: Pick<NexoOptions, "home" | "env">): NodeJS.ProcessEnv
  * Setup checks without building a runtime, for a backend's start-up pre-flight. Works when the config is broken,
  * which is when `createNexo` would throw.
  */
-export function checkSetup(options: Pick<NexoOptions, "home" | "cwd" | "env" | "models"> = {}): DoctorReport {
+export function checkSetup(options: Pick<NexoOptions, "home" | "cwd" | "env" | "models" | "apiKeys"> = {}): DoctorReport {
 	const env = withHome(options);
 	const cwd = options.cwd ?? process.cwd();
 	const paths = resolveNexoPaths(env);
-	const settings = createSettings({ paths, cwd, env, models: options.models ?? nexoModels() });
+	const settings = createSettings({ paths, cwd, env, models: options.models ?? nexoModels(), apiKeys: options.apiKeys });
 	return runDoctor({ paths, settings, env, cwd });
 }
 
@@ -88,6 +116,8 @@ export function createNexo(options: NexoOptions = {}): Nexo {
 		prompter,
 		models: options.models,
 		overrides: options.config,
+		apiKeys: options.apiKeys,
+		...(options.fetch ? { fetch: options.fetch } : {}),
 		onEvent: (event) => {
 			for (const listener of [...listeners]) listener(event);
 		},
@@ -136,6 +166,28 @@ export function createNexo(options: NexoOptions = {}): Nexo {
 		},
 		doctor() {
 			return runDoctor({ paths: runtime.paths, settings: runtime.settings, env, cwd });
+		},
+		async webSearch(query, searchOptions = {}) {
+			live();
+			const keys = Object.fromEntries(SEARCH_PROVIDER_IDS.map((id) => [id, runtime.settings.resolveApiKey(id)])) as Partial<Record<SearchProviderId, string>>;
+			try {
+				return await webSearch(query, { keys, count: searchOptions.count ?? runtime.config.tools.webSearch.count, ...(options.fetch ? { fetch: options.fetch } : {}) }, searchOptions.signal);
+			} catch (error) {
+				if (searchOptions.signal?.aborted || error instanceof NexoError) throw error;
+				// An empty query or no key: the message names `nexo settings set-key` and the environment variables.
+				throw new NexoError({ code: "INVALID_REQUEST", message: error instanceof Error ? error.message : String(error), hint: "Pass apiKeys: { brave: \"…\" } or { tavily: \"…\" } to createNexo, or call setKey" });
+			}
+		},
+		keys() {
+			return runtime.settings.keyProviders();
+		},
+		setKey(provider, apiKey) {
+			live();
+			return runtime.settings.setKey(provider, apiKey);
+		},
+		removeKey(provider) {
+			live();
+			return runtime.settings.removeKey(provider);
 		},
 		async close() {
 			if (closed) return;

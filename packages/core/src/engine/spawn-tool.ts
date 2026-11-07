@@ -16,7 +16,7 @@ const SpawnTaskSchema = Type.Object({
 	dependsOn: Type.Optional(Type.Array(Type.String(), { description: "Task ids whose outputs this task needs" })),
 	mode: Type.Optional(
 		Type.Union([Type.Literal("explore"), Type.Literal("work")], {
-			description: '"explore": read-only research (read, web_fetch, load_skill) that returns a short summary and keeps the parent context small; "work" (default): full tools. Run write-capable tasks one at a time.',
+			description: '"explore": read-only research (read, web_fetch, web_search, load_skill) that returns a short summary and keeps the parent context small; "work" (default): full tools. Run write-capable tasks one at a time.',
 		}),
 	),
 });

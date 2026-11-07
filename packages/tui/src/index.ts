@@ -3,4 +3,4 @@ export { type ApprovalHost, type ApprovalPrompterOptions, createApprovalPrompter
 export { runSessionPicker, type SessionChoice, type SessionPickerOptions, sessionPickerItems } from "./session-picker.ts";
 export { helpText, type ParsedCommand, parseSlashCommand, SLASH_COMMANDS } from "./commands.ts";
 export type { SettingsScreenMode } from "./settings-screen.ts";
-export { escapeControl, oneLine } from "./text.ts";
+export { escapeControl, escapeControlKeepLines, oneLine } from "./text.ts";

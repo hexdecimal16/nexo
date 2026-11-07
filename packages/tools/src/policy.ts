@@ -86,7 +86,7 @@ function escapeControl(text: string): string {
 	return text.replace(/[\u0000-\u001f\u007f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
 }
 
-const SUBJECT_KEY: Record<string, string> = { bash: "command", read: "path", write: "path", edit: "path", web_fetch: "url" };
+const SUBJECT_KEY: Record<string, string> = { bash: "command", read: "path", write: "path", edit: "path", web_fetch: "url", web_search: "query" };
 
 function subjectOf(toolName: string, args: unknown): string {
 	const key = SUBJECT_KEY[toolName];

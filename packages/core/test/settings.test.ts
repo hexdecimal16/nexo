@@ -114,9 +114,9 @@ describe("provider keys", () => {
 	it("reports env, credentials file (last 4) or not set, and never the key", () => {
 		const f = fixture();
 		const settings = createSettings(f.options({ env: { OPENAI_API_KEY: "env-openai-key-0123456789" } }));
-		expect(settings.keyStatus("faux")).toEqual({ provider: "faux", state: "unset", envVar: null, last4: null, inFile: false });
+		expect(settings.keyStatus("faux")).toEqual({ provider: "faux", purpose: "model", state: "unset", envVar: null, last4: null, inFile: false });
 		const set = settings.setKey("faux", FILE_KEY);
-		expect(set).toEqual({ provider: "faux", state: "file", envVar: null, last4: "abcd", inFile: true });
+		expect(set).toEqual({ provider: "faux", purpose: "model", state: "file", envVar: null, last4: "abcd", inFile: true });
 		expect(keyStatusLabel(set)).toBe("set (credentials file, …abcd)");
 		const env = settings.keyStatus("openai");
 		expect(env).toMatchObject({ state: "env", envVar: "OPENAI_API_KEY", last4: null });
@@ -209,7 +209,27 @@ describe("provider keys", () => {
 		writeJson(f.paths.config, { models: { s1: { provider: "anthropic", id: "a" }, s2: { provider: "openai", id: "b" }, judge: [{ provider: "groq", id: "c" }] } });
 		writeFileSync(f.paths.credentials, JSON.stringify({ mistral: { apiKey: "mistral-key-0123456789" }, anthropic: { apiKey: FILE_KEY } }), { mode: 0o600 });
 		const settings = createSettings(f.options());
-		expect(settings.keyProviders().map((s) => `${s.provider}:${s.state}`)).toEqual(["anthropic:file", "openai:unset", "groq:unset", "mistral:file"]);
+		expect(settings.keyProviders().map((s) => `${s.provider}:${s.state}`)).toEqual(["anthropic:file", "openai:unset", "groq:unset", "brave:unset", "tavily:unset", "mistral:file"]);
+	});
+
+	it("handles the web search providers: listed, settable, env wins over file, code keys win over both", () => {
+		const f = fixture();
+		const settings = createSettings(f.options({ env: { TAVILY_API_KEY: " tvly-env-key-0123456789 " } }));
+		expect(settings.keyStatus("brave")).toEqual({ provider: "brave", purpose: "search", state: "unset", envVar: null, last4: null, inFile: false });
+		expect(settings.setKey("brave", "brave-file-key-0123456789")).toMatchObject({ purpose: "search", state: "file", last4: "6789" });
+		expect(settings.resolveApiKey("brave")).toBe("brave-file-key-0123456789");
+		expect(settings.keyStatus("tavily")).toMatchObject({ purpose: "search", state: "env", envVar: "TAVILY_API_KEY" });
+		expect(settings.resolveApiKey("tavily")).toBe("tvly-env-key-0123456789");
+		// Search keys are secrets like model keys.
+		expect(settings.redact("x tvly-env-key-0123456789 brave-file-key-0123456789")).toBe(`x ${REDACTED} ${REDACTED}`);
+
+		const inCode = createSettings(f.options({ env: { TAVILY_API_KEY: "tvly-env-key-0123456789" }, apiKeys: { tavily: "tvly-code-key-0123456789", brave: " " } }));
+		expect(inCode.keyStatus("tavily")).toMatchObject({ state: "option" });
+		expect(keyStatusLabel(inCode.keyStatus("tavily"))).toBe("set (passed in code)");
+		expect(inCode.resolveApiKey("tavily")).toBe("tvly-code-key-0123456789");
+		expect(inCode.resolveApiKey("brave")).toBe("brave-file-key-0123456789");
+		expect(inCode.redact("tvly-code-key-0123456789")).toBe(REDACTED);
+		expect(settings.removeKey("brave")).toMatchObject({ state: "unset", inFile: false });
 	});
 
 	it("lists a provider/model catalog from the model registry", () => {
@@ -252,8 +272,10 @@ describe("config settings", () => {
 			"tools.policy.edit",
 			"tools.policy.bash",
 			"tools.policy.web_fetch",
+			"tools.policy.web_search",
 			"tools.policy.load_skill",
 			"tools.policy.spawn",
+			"tools.webSearch.count",
 			"tools.nonInteractiveAsk",
 			"tools.autoApprove",
 			"session.compactAt",

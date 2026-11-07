@@ -152,6 +152,8 @@ export const ConfigSchema = Type.Object(
 				nonInteractiveAsk: NonInteractiveAskSchema,
 				autoApprove: Type.Union([Type.Literal("off"), Type.Literal("on")]),
 				bashTimeoutMs: Type.Integer({ minimum: 1000 }),
+				/** The `web_search` tool: on when a Brave or Tavily key is set; `count` results are returned after merging. */
+				webSearch: Type.Object({ count: Type.Integer({ minimum: 1, maximum: 20 }) }, { additionalProperties: false }),
 			},
 			{ additionalProperties: false },
 		),
@@ -285,11 +287,12 @@ export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 	instructions: [],
 	skills: { dirs: ["$NEXO_HOME/skills", "./.nexo/skills"], pins: {} },
 	tools: {
-		policy: { read: "allow", write: "allow", edit: "allow", bash: "ask", web_fetch: "ask", load_skill: "allow", spawn: "allow" },
+		policy: { read: "allow", write: "allow", edit: "allow", bash: "ask", web_fetch: "ask", web_search: "allow", load_skill: "allow", spawn: "allow" },
 		rules: [],
 		nonInteractiveAsk: "deny",
 		autoApprove: "off",
 		bashTimeoutMs: 120_000,
+		webSearch: { count: 8 },
 	},
 	mcp: { servers: {} },
 	pricingOverrides: {},

@@ -1,6 +1,7 @@
 import { type Component, Input, type SelectItem, truncateToWidth } from "@earendil-works/pi-tui";
 import { type KeyStatus, keyStatusLabel, ON_OFF, type SettingView, type Settings } from "@nexo/core";
 import { toErrorPayload } from "@nexo/telemetry";
+import { isSearchProvider, SEARCH_PROVIDERS } from "@nexo/tools";
 import { fitLines, MaskedInput } from "./components.ts";
 import { PickerView, type View } from "./picker.ts";
 import { escapeControl, formatError } from "./text.ts";
@@ -119,7 +120,11 @@ export class SettingsScreen implements Component {
 			this.setError(error);
 		}
 		const items: SelectItem[] = [
-			...keys.map((k) => ({ value: `key:${k.provider}`, label: `${escapeControl(k.provider)} key`, description: escapeControl(keyStatusLabel(k)) })),
+			...keys.map((k) => ({
+				value: `key:${k.provider}`,
+				label: `${escapeControl(k.provider)} key${k.purpose === "search" ? " (web search)" : ""}`,
+				description: escapeControl(keyStatusLabel(k)),
+			})),
 			...views.map((v) => ({ value: `set:${v.key}`, label: escapeControl(v.label), description: settingDescription(v) })),
 		];
 		return new PickerView({
@@ -150,7 +155,8 @@ export class SettingsScreen implements Component {
 			this.setError(error);
 			return this.menuView();
 		}
-		const items: SelectItem[] = [{ value: "set", label: "Set key", description: "masked entry; stored in credentials.json (mode 600)" }];
+		const signup = isSearchProvider(provider) ? `; get one at ${SEARCH_PROVIDERS[provider].signupUrl}` : "";
+		const items: SelectItem[] = [{ value: "set", label: "Set key", description: `masked entry; stored in credentials.json (mode 600)${signup}` }];
 		if (status.inFile) items.push({ value: "remove", label: "Remove key", description: "delete it from credentials.json" });
 		items.push({ value: BACK, label: "Back" });
 		return new PickerView({

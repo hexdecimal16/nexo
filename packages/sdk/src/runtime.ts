@@ -37,6 +37,10 @@ export interface RuntimeOptions {
 	prompter: Prompter;
 	models?: Models;
 	overrides?: DeepPartial<NexoConfig>;
+	/** Keys by provider id (model providers, `brave`, `tavily`) that win over the environment and credentials file; never written. */
+	apiKeys?: Readonly<Record<string, string>>;
+	/** fetch for web search providers; tests pass a fake. */
+	fetch?: typeof fetch;
 	onEvent?: (event: EngineEvent) => void;
 	/** Receives the learn worker's job events. */
 	onLearnEvent?: (event: LearnEvent) => void;
@@ -46,7 +50,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 	const paths = resolveNexoPaths(options.env);
 	ensureNexoDirs(paths);
 	const models = options.models ?? nexoModels();
-	const settings = createSettings({ paths, cwd: options.cwd, env: options.env, models, overrides: options.overrides });
+	const settings = createSettings({ paths, cwd: options.cwd, env: options.env, models, overrides: options.overrides, apiKeys: options.apiKeys });
 	const { config, hash } = settings.loadConfig();
 	const redact = settings.redact;
 	const logger = openLogger(settings, paths, "cli");
@@ -66,6 +70,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 		skills,
 		onEvent: options.onEvent,
 		resolveApiKey: settings.resolveApiKey,
+		...(options.fetch ? { fetch: options.fetch } : {}),
 		...(mcp ? { mcp } : {}),
 	});
 	return { paths, config, configHash: hash, models, db, skills, engine, redact, logger, settings, mcp, learner: new LearnWorker(engine.env, options.onLearnEvent ? { onEvent: options.onLearnEvent } : {}) };

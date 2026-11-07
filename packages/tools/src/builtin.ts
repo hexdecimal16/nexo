@@ -315,7 +315,7 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 	const webFetch: AgentTool<typeof FetchParams> = {
 		name: "web_fetch",
 		label: "Fetch URL",
-		description: `Fetch an http(s) URL and return readable text. HTML pages are converted to plain text with links kept as [text](url); scripts, styles, navigation and footers are dropped. Markdown is requested first, so sites that serve it return it unchanged. Output is capped at ${MAX_FETCH_CHARS} characters. Binary files are refused. If a site blocks the fetch (for example a Cloudflare challenge), load the browser skill and read the page there.`,
+		description: `Fetch an http(s) URL and return readable text. To find URLs, use web_search when it is available. HTML pages are converted to plain text with links kept as [text](url); scripts, styles, navigation and footers are dropped. Markdown is requested first, so sites that serve it return it unchanged. Output is capped at ${MAX_FETCH_CHARS} characters. Binary files are refused. If a site blocks the fetch (for example a Cloudflare challenge), load the browser skill and read the page there.`,
 		parameters: FetchParams,
 		execute: async (_id, params, signal) => {
 			const url = new URL(params.url);

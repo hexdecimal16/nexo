@@ -30,6 +30,15 @@ describe("runDoctor", () => {
 		expect(status(report, "judge")).toBe("warn");
 	});
 
+	it("warns once when no web search key is set, and names the providers in use", () => {
+		const off = runDoctor(setup({ models }));
+		const check = off.checks.find((c) => c.id === "web_search");
+		expect(check).toMatchObject({ status: "warn", message: "No web search key (the web_search tool is off)" });
+		expect(check?.fix).toContain("nexo settings set-key brave");
+		expect(check?.fix).toContain("TAVILY_API_KEY");
+		expect(off.checks.some((c) => c.id === "key:brave" || c.id === "key:tavily")).toBe(false);
+	});
+
 	it("fails on a first run without models", () => {
 		const report = runDoctor(setup());
 		expect(report.ok).toBe(false);

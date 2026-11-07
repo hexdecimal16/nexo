@@ -1,6 +1,7 @@
 import type { Models } from "@earendil-works/pi-ai";
 import { findEnvKeys, getEnvApiKey } from "@earendil-works/pi-ai/compat";
 import type { NexoPaths } from "@nexo/store";
+import { isSearchProvider, SEARCH_PROVIDER_IDS, SEARCH_PROVIDERS } from "@nexo/tools";
 import {
 	createMutableRedactor,
 	createRedactor,
@@ -34,12 +35,15 @@ import { KIRO_P_PROVIDER } from "../providers/kiro-p.ts";
 import { type CredentialsData, readCredentials, writeCredentials } from "./credentials.ts";
 
 /**
- * A provider's key state. `env`: the provider's environment variable is set (it wins); `file`: `credentials.json`
- * holds the key; `unset`: neither. The key itself is never part of it.
+ * A provider's key state. `option`: the key was passed in code (`SettingsOptions.apiKeys`, the SDK's `apiKeys`) and
+ * wins over everything; `env`: the provider's environment variable is set (it wins over the file); `file`:
+ * `credentials.json` holds the key; `unset`: none of these. The key itself is never part of it.
  */
 export interface KeyStatus {
 	provider: string;
-	state: "env" | "file" | "unset";
+	state: "option" | "env" | "file" | "unset";
+	/** `model` for a model provider, `search` for a web search API (brave, tavily). */
+	purpose: "model" | "search";
 	/** The environment variable providing the key; null for ambient credentials (AWS, Google ADC) or when not `env`. */
 	envVar: string | null;
 	/** Last 4 characters of the stored key when `state` is `file`. */
@@ -83,6 +87,8 @@ export interface SettingsOptions {
 	models?: Models;
 	/** Per-invocation overrides (CLI flags) applied on top of the config files by `loadConfig`. */
 	overrides?: DeepPartial<NexoConfig>;
+	/** Keys by provider id that win over the environment and the credentials file; kept in memory, never written. */
+	apiKeys?: Readonly<Record<string, string>>;
 }
 
 /** Result shape of `SessionDeps.reloadConfig`. */
@@ -112,11 +118,14 @@ export interface Settings {
 	keyStatus(provider: string): KeyStatus;
 	/** Throws INVALID_REQUEST unless `setKey` would accept the provider id (checked before asking for a key). */
 	validateKeyProvider(provider: string): void;
-	/** Providers of the configured models (s1, s2, judge, reflector, approver, embedding) in that order, then the others in the credentials file. */
+	/**
+	 * Providers of the configured models (s1, s2, judge, reflector, approver, embedding) in that order, then the web
+	 * search providers (brave, tavily), then the others in the credentials file.
+	 */
 	keyProviders(): KeyStatus[];
 	/**
 	 * Stores a key (trimmed; at least MIN_SECRET_LENGTH characters, no whitespace) and redacts it from now on. The
-	 * provider must be in the model registry or the config. INVALID_REQUEST on bad input.
+	 * provider must be in the model registry, the config or a web search provider. INVALID_REQUEST on bad input.
 	 */
 	setKey(provider: string, apiKey: string): KeyStatus;
 	/** Deletes the provider's entry from `credentials.json` and returns the resulting status. */
@@ -171,6 +180,7 @@ function configuredProviders(merged: Record<string, unknown>): string[] {
 }
 
 export function keyStatusLabel(status: KeyStatus): string {
+	if (status.state === "option") return "set (passed in code)";
 	if (status.state === "env") return "set (env)";
 	if (status.state === "file") return `set (credentials file, …${status.last4 ?? ""})`;
 	return "not set";
@@ -179,6 +189,8 @@ export function keyStatusLabel(status: KeyStatus): string {
 export function createSettings(options: SettingsOptions): Settings {
 	const { paths, cwd } = options;
 	const env = providerEnv(options.env ?? process.env);
+	const optionKeys = new Map<string, string>();
+	for (const [provider, value] of Object.entries(options.apiKeys ?? {})) if (typeof value === "string" && value.trim() !== "") optionKeys.set(provider, value.trim());
 	const secrets: SecretSet = createSecretSet();
 	let patterns: readonly string[] = [];
 	const redact = createMutableRedactor(createRedactor(patterns, { secrets }));
@@ -195,7 +207,7 @@ export function createSettings(options: SettingsOptions): Settings {
 	};
 
 	/** Adds a key to the redactor; a key too short to be an exact-match pattern is logged (without its value) instead. */
-	const registerSecret = (provider: string, source: "env" | "file", value: string): void => {
+	const registerSecret = (provider: string, source: "option" | "env" | "file", value: string): void => {
 		if (secrets.add(value)) return;
 		warnOnce(`${source}:${provider}`, "API key too short to redact; it is used but not redacted as an exact match", {
 			provider,
@@ -210,11 +222,17 @@ export function createSettings(options: SettingsOptions): Settings {
 	};
 
 	const envKey = (provider: string): string | undefined => {
-		const value = getEnvApiKey(provider, env)?.trim();
+		const value = (isSearchProvider(provider) ? env[SEARCH_PROVIDERS[provider].envVar] : getEnvApiKey(provider, env))?.trim();
 		return value ? value : undefined;
 	};
+	const envVarOf = (provider: string): string | null => (isSearchProvider(provider) ? SEARCH_PROVIDERS[provider].envVar : (findEnvKeys(provider, env)?.[0] ?? null));
 
 	const resolveApiKey: ApiKeyResolver = (provider) => {
+		const fromOption = optionKeys.get(provider);
+		if (fromOption !== undefined) {
+			registerSecret(provider, "option", fromOption);
+			return fromOption;
+		}
 		const fromEnv = envKey(provider);
 		if (fromEnv !== undefined) {
 			if (fromEnv === AMBIENT_CREDENTIALS) return undefined;
@@ -239,9 +257,9 @@ export function createSettings(options: SettingsOptions): Settings {
 	const validateProvider = (provider: string, strict: boolean): void => {
 		const known =
 			!containsSecret(provider) &&
-			(options.models?.getProvider(provider) !== undefined || configured().includes(provider) || (!strict && provider in credentials));
+			(options.models?.getProvider(provider) !== undefined || isSearchProvider(provider) || configured().includes(provider) || (!strict && provider in credentials));
 		if (!known) {
-			const ids = [...new Set([...(options.models?.getProviders().map((p) => p.id) ?? []), ...configured()])].sort();
+			const ids = [...new Set([...(options.models?.getProviders().map((p) => p.id) ?? []), ...configured(), ...SEARCH_PROVIDER_IDS])].sort();
 			throw invalidRequest(
 				"Unknown provider: not in the model registry or the nexo config",
 				ids.length > 0 ? `Use a provider id such as ${ids.slice(0, 12).join(", ")}${ids.length > 12 ? ", …" : ""}` : "Configure models.s1/models.s2 first",
@@ -254,11 +272,13 @@ export function createSettings(options: SettingsOptions): Settings {
 	const keyStatus = (provider: string): KeyStatus => {
 		const stored = credentials[provider];
 		const inFile = stored !== undefined;
+		const purpose = isSearchProvider(provider) ? "search" : "model";
+		if (optionKeys.has(provider)) return { provider, purpose, state: "option", envVar: null, last4: null, inFile };
 		// claude-p and kiro-p run a local CLI that brings its own login: ambient credentials, like AWS or Google ADC.
-		if (provider === CLAUDE_P_PROVIDER || provider === KIRO_P_PROVIDER) return { provider, state: "env", envVar: null, last4: null, inFile };
-		if (envKey(provider) !== undefined) return { provider, state: "env", envVar: findEnvKeys(provider, env)?.[0] ?? null, last4: null, inFile };
-		if (stored?.apiKey) return { provider, state: "file", envVar: null, last4: stored.apiKey.slice(-4), inFile };
-		return { provider, state: "unset", envVar: null, last4: null, inFile };
+		if (provider === CLAUDE_P_PROVIDER || provider === KIRO_P_PROVIDER) return { provider, purpose, state: "env", envVar: null, last4: null, inFile };
+		if (envKey(provider) !== undefined) return { provider, purpose, state: "env", envVar: envVarOf(provider), last4: null, inFile };
+		if (stored?.apiKey) return { provider, purpose, state: "file", envVar: null, last4: stored.apiKey.slice(-4), inFile };
+		return { provider, purpose, state: "unset", envVar: null, last4: null, inFile };
 	};
 
 
@@ -269,8 +289,9 @@ export function createSettings(options: SettingsOptions): Settings {
 		return loaded;
 	};
 
-	/** Redacts env keys of the providers in use, since bash children inherit the environment and could print them. */
+	/** Redacts env keys of the providers in use and of the search providers, since bash children inherit the environment and could print them. */
 	const registerEnvKeys = (): void => {
+		for (const provider of SEARCH_PROVIDER_IDS) resolveApiKey(provider);
 		try {
 			for (const provider of modelProviders(deepMerge(mergedLayers(layers()), options.overrides))) resolveApiKey(provider);
 		} catch {
@@ -309,10 +330,11 @@ export function createSettings(options: SettingsOptions): Settings {
 			} catch {
 				fromModels = [];
 			}
+			const fromSearch = SEARCH_PROVIDER_IDS.filter((p) => !fromModels.includes(p));
 			const fromFile = Object.keys(credentials)
-				.filter((p) => !fromModels.includes(p))
+				.filter((p) => !fromModels.includes(p) && !isSearchProvider(p))
 				.sort();
-			return [...fromModels, ...fromFile].map(keyStatus);
+			return [...fromModels, ...fromSearch, ...fromFile].map(keyStatus);
 		},
 		setKey(provider, apiKey) {
 			validateProvider(provider, true);

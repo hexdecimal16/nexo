@@ -120,6 +120,23 @@ export async function settingsCommand(args: string[], io: CliIO, options: CliOpt
 				if (view.notice) io.stderr.write(`note: ${view.notice}\n`);
 				return 0;
 			}
+			case "keys": {
+				if (rest.length !== 0) throw usageError("nexo settings keys takes no arguments");
+				for (const status of build().keyProviders()) {
+					const tag = status.purpose === "search" ? " (web search)" : "";
+					const env = status.state === "env" && status.envVar ? ` via ${status.envVar}` : "";
+					io.stdout.write(`${status.provider}${tag}: ${keyStatusLabel(status)}${env}\n`);
+				}
+				return 0;
+			}
+			case "remove-key": {
+				if (rest.length !== 1) throw usageError("nexo settings remove-key needs exactly one provider");
+				const settings = build();
+				redact = settings.redact;
+				const status = settings.removeKey(rest[0] as string);
+				io.stdout.write(`${status.provider}: ${keyStatusLabel(status)}\n`);
+				return 0;
+			}
 			case "set-key": {
 				if (rest.length > 1) {
 					throw new NexoError({
@@ -145,7 +162,7 @@ export async function settingsCommand(args: string[], io: CliIO, options: CliOpt
 				return 0;
 			}
 			default:
-				throw usageError(sub === undefined ? "nexo settings needs get, set, reset or set-key (or a terminal for the screen)" : `Unknown settings command "${sub}"`);
+				throw usageError(sub === undefined ? "nexo settings needs get, set, reset, keys, set-key or remove-key (or a terminal for the screen)" : `Unknown settings command "${sub}"`);
 		}
 	} catch (error) {
 		const payload = toErrorPayload(error);

@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { checkSetup, createNexo, type EngineEvent } from "../src/index.ts";
 
@@ -72,5 +72,63 @@ describe("createNexo", () => {
 		roots.push(empty);
 		mkdirSync(join(empty, "home"));
 		expect(checkSetup({ home: join(empty, "home"), cwd: empty, env: h.env, models: h.models }).ok).toBe(false);
+	});
+});
+
+describe("web search", () => {
+	const BRAVE_KEY = "brave-sdk-key-0123456789";
+	const braveFetch = (calls: string[] = []) =>
+		(async (input: string | URL | Request) => {
+			calls.push(String(input));
+			return new Response(JSON.stringify({ web: { results: [{ title: "Node 22", url: "https://nodejs.org/en/blog/node-22", description: "Node.js <b>22</b> released" }] } }), {
+				headers: { "content-type": "application/json" },
+			});
+		}) as typeof fetch;
+
+	it("gives an unattended run the web_search tool, allowed without a prompt, when a key is passed in code", async () => {
+		const h = setup([fauxAssistantMessage([fauxToolCall("web_search", { query: "node 22" })]), fauxAssistantMessage("found it")]);
+		const calls: string[] = [];
+		const nexo = createNexo({ home: h.home, cwd: h.root, env: h.env, models: h.models, apiKeys: { brave: BRAVE_KEY }, fetch: braveFetch(calls) });
+		const events: EngineEvent[] = [];
+		try {
+			const result = await nexo.run({ instruction: "When was node 22 released?", budgetUsd: 0.5 }, { onEvent: (e) => events.push(e) });
+			expect(result.status).toBe("succeeded");
+			const end = events.find((e) => e.type === "tool_end" && e.toolName === "web_search");
+			expect(end).toMatchObject({ isError: false });
+			expect(end && "output" in end ? end.output : "").toContain("1. [Node 22](https://nodejs.org/en/blog/node-22)");
+			expect(calls).toHaveLength(1);
+		} finally {
+			await nexo.close();
+		}
+	});
+
+	it("leaves web_search out of a run without a search key", async () => {
+		const h = setup([fauxAssistantMessage([fauxToolCall("web_search", { query: "x" })]), fauxAssistantMessage("done")]);
+		const nexo = createNexo({ home: h.home, cwd: h.root, env: h.env, models: h.models, fetch: braveFetch() });
+		const events: EngineEvent[] = [];
+		try {
+			await nexo.run({ instruction: "search", budgetUsd: 0.5 }, { onEvent: (e) => events.push(e) });
+			const end = events.find((e) => e.type === "tool_end" && e.toolName === "web_search");
+			expect(end).toMatchObject({ isError: true });
+		} finally {
+			await nexo.close();
+		}
+	});
+
+	it("searches directly, reports key status and stores keys", async () => {
+		const h = setup([]);
+		const nexo = createNexo({ home: h.home, cwd: h.root, env: h.env, models: h.models, fetch: braveFetch() });
+		try {
+			await expect(nexo.webSearch("node")).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+			expect(nexo.keys().filter((k) => k.purpose === "search").map((k) => `${k.provider}:${k.state}`)).toEqual(["brave:unset", "tavily:unset"]);
+			expect(nexo.setKey("brave", BRAVE_KEY)).toMatchObject({ state: "file", last4: "6789" });
+			const outcome = await nexo.webSearch("node", { count: 3 });
+			expect(outcome.answered).toEqual(["brave"]);
+			expect(outcome.results[0]).toMatchObject({ title: "Node 22", snippet: "Node.js 22 released", providers: ["brave"] });
+			expect(JSON.stringify(nexo.keys())).not.toContain(BRAVE_KEY);
+			expect(nexo.removeKey("brave")).toMatchObject({ state: "unset" });
+		} finally {
+			await nexo.close();
+		}
 	});
 });

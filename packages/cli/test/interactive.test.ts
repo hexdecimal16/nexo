@@ -419,6 +419,8 @@ describe("nexo settings", () => {
 		const terminal = new FakeTerminal();
 		const done = runCli(["settings"], io(), { ...h, models: fauxModels(), stdio: ttyStdio(), terminal, proc: new EventEmitter() as never });
 		await until(() => expect(terminal.output()).toMatch(/Model s1\s+faux\/fast/));
+		expect(terminal.output()).toMatch(/brave key \(web search\)\s+not set/);
+		expect(terminal.output()).toMatch(/tavily key \(web search\)\s+not set/);
 		terminal.send(KEY.escape);
 		expect(await done).toBe(0);
 		expect(terminal.stopped).toBe(true);
@@ -438,6 +440,40 @@ describe("nexo settings", () => {
 		expect(statSync(file).mode & 0o777).toBe(0o600);
 		const logs = join(h.home, "logs");
 		if (existsSync(logs)) for (const f of readdirSync(logs)) expect(readFileSync(join(logs, f), "utf8")).not.toContain(KEY_TEXT);
+	});
+
+	it("sets, lists and removes a web search key, and searches with it", async () => {
+		const h = home(roles);
+		const BRAVE = "brave-cli-key-0123456789";
+		expect(await runCli(["settings", "set-key", "brave"], io(), { ...h, models: fauxModels(), stdio: pipedStdio(`${BRAVE}\n`) })).toBe(0);
+		let t = io();
+		expect(await runCli(["settings", "keys"], t, { ...h, models: fauxModels(), stdio: pipedStdio("") })).toBe(0);
+		expect(t.out()).toContain("brave (web search): set (credentials file, …6789)");
+		expect(t.out()).toContain("tavily (web search): not set");
+		expect(t.out()).not.toContain(BRAVE);
+
+		const seen: string[] = [];
+		const searchFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			seen.push((init?.headers as Record<string, string>)["X-Subscription-Token"] ?? "");
+			return new Response(JSON.stringify({ web: { results: [{ title: "Hit", url: "https://a.test/x", description: "snippet" }] } }), { headers: { "content-type": "application/json" } });
+		}) as typeof fetch;
+		t = io();
+		expect(await runCli(["search", "node", "22", "--count", "3"], t, { ...h, models: fauxModels(), stdio: pipedStdio(""), searchFetch })).toBe(0);
+		expect(t.out()).toBe("1. [Hit](https://a.test/x)\n   snippet\n   (brave)\n");
+		expect(t.err()).toContain("searched brave");
+		expect(t.out() + t.err()).not.toContain(BRAVE);
+		expect(seen).toEqual([BRAVE]);
+		t = io();
+		expect(await runCli(["search", "x", "--json"], t, { ...h, models: fauxModels(), stdio: pipedStdio(""), searchFetch })).toBe(0);
+		expect(JSON.parse(t.out())).toMatchObject({ answered: ["brave"], results: [{ url: "https://a.test/x" }] });
+		expect(await runCli(["search", "x", "--count", "50"], io(), { ...h, models: fauxModels(), stdio: pipedStdio(""), searchFetch })).toBe(2);
+
+		t = io();
+		expect(await runCli(["settings", "remove-key", "brave"], t, { ...h, models: fauxModels(), stdio: pipedStdio("") })).toBe(0);
+		expect(t.out()).toBe("brave: not set\n");
+		t = io();
+		expect(await runCli(["search", "x"], t, { ...h, models: fauxModels(), stdio: pipedStdio(""), searchFetch })).toBe(4);
+		expect(t.err()).toContain("nexo settings set-key brave");
 	});
 
 	it("set-key refuses a key in argv without echoing it", async () => {
