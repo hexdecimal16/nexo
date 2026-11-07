@@ -27,6 +27,7 @@ const NEXT_STEPS = [
 	"  nexo run \"<task>\"    run one task",
 	"  nexo ui              open the run inspector",
 	"  nexo doctor          check your setup",
+	"  nexo settings set-key playwright-<profile>   let the agent use that Chrome profile (needs playwright-cli)",
 ].join("\n");
 
 /** Model-influenced text shown on the terminal: control characters removed, length capped. */
@@ -141,6 +142,28 @@ async function initBody(args: string[], io: CliIO, options: CliOptions, stdio: C
 		} catch (error) {
 			say((error as Error).message);
 		}
+	}
+
+	if (!yes && !settings.keyProviders().some((k) => k.purpose === "browser" && k.state !== "unset")) {
+		say("");
+		say("Optional: let the agent control your Chrome through playwright-cli and the Playwright Extension.");
+		const name = (await ask("Chrome profile name, such as personal (Enter to skip): ")).toLowerCase();
+		if (name) {
+			const provider = `playwright-${name}`;
+			try {
+				settings.validateKeyProvider(provider);
+				say("Copy the token from the Playwright Extension in that Chrome profile.");
+				const token = await readHiddenKey(stdio.stdin, io.stderr, provider, signal);
+				if (token === null) throw new Cancelled();
+				if (token) {
+					settings.setKey(provider, token);
+					say(`Stored the ${provider} token`);
+				} else say(`Skipped the ${provider} token`);
+			} catch (error) {
+				if (error instanceof Cancelled) throw error;
+				say((error as Error).message);
+			}
+		} else say("Skipped browser setup; add a profile later with: nexo settings set-key playwright-<profile>");
 	}
 
 	if (values["skip-test"]) {

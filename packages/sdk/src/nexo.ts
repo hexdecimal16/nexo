@@ -36,7 +36,7 @@ export interface NexoOptions {
 	models?: Models;
 	/**
 	 * API keys by provider id, for this instance only: model providers (`anthropic`, `google`, …) and the web search
-	 * providers `brave` and `tavily`. They win over the environment and `credentials.json` and are never written to disk.
+	 * providers `brave` and `tavily`, and `playwright-<profile>` Chrome profile tokens for the browser skill. They win over the environment and `credentials.json` and are never written to disk.
 	 */
 	apiKeys?: Readonly<Record<string, string>>;
 	/** fetch used by web search; tests pass a fake. */
@@ -74,7 +74,7 @@ export interface Nexo {
 	 * tool. INVALID_REQUEST when no `brave` or `tavily` key is set. Provider failures are in `failures`.
 	 */
 	webSearch(query: string, options?: NexoWebSearchOptions): Promise<SearchOutcome>;
-	/** Key status of the model providers in use and the web search providers; never contains key values. */
+	/** Key status of the model providers in use, the web search providers and stored playwright-<profile> browser tokens; never contains key values. */
 	keys(): KeyStatus[];
 	/**
 	 * Stores a key in `credentials.json` (mode 600) for later processes too; runs started afterwards use it. Keys passed

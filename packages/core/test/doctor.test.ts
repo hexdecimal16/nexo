@@ -65,3 +65,13 @@ describe("runDoctor", () => {
 		expect(report.ok).toBe(true);
 	});
 });
+
+describe("runDoctor browser check", () => {
+	it("warns with an install fix when playwright-cli is not on PATH", () => {
+		const report = runDoctor(setup({ models }));
+		const check = report.checks.find((c) => c.id === "browser");
+		expect(check).toMatchObject({ status: "warn" });
+		expect(check?.fix).toContain("npm install -g @playwright/cli@latest");
+		expect(report.ok).toBe(true);
+	});
+});

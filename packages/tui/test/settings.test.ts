@@ -221,6 +221,8 @@ describe("first-run setup", () => {
 		await until(() => expect(h.terminal.output()).toContain("API key for faux"));
 		h.terminal.type(SECRET);
 		h.terminal.send(KEY.enter);
+		await until(() => expect(h.terminal.output()).toContain("Optional: let the agent control your Chrome"));
+		h.terminal.send(KEY.escape); // skip the optional browser step
 		await until(() => expect(h.session().status).toBe("active"));
 		expect(h.settings.setupStatus().needed).toBe(false);
 		expect(h.settings.getSetting("models.s1").value).toBe("faux/fast");
@@ -270,8 +272,40 @@ describe("runSettingsScreen", () => {
 		terminal.send(KEY.enter);
 		await until(() => expect(terminal.output()).toContain("API key for faux"));
 		terminal.send(KEY.escape); // skip: keyless providers are allowed
+		await until(() => expect(terminal.output()).toContain("Optional: let the agent control your Chrome"));
+		terminal.send(KEY.escape); // skip the optional browser step
 		expect(await done).toEqual({ completed: true });
 		expect(settings.setupStatus().needed).toBe(false);
 		expect(settings.keyStatus("faux").state).toBe("unset");
+	});
+
+	it("stores a Chrome profile token in the optional browser step of first-run setup", async () => {
+		const faux = fauxProvider({ models: FAUX_MODELS });
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const h = makeHarness({ userConfig: {} });
+		const settings = createSettings({ paths: h.paths, cwd: h.cwd, env: {}, models });
+		const terminal = new FakeTerminal();
+		const token = "pwtok_0123456789abcdef0123456789abcdef";
+		const done = runSettingsScreen({ settings, terminal, mode: "setup" });
+		await until(() => expect(terminal.output()).toContain("Choose model s1"));
+		terminal.type("faux/fast");
+		terminal.send(KEY.enter);
+		await until(() => expect(terminal.output()).toContain("Choose model s2"));
+		terminal.type("faux/fast");
+		terminal.send(KEY.enter);
+		await until(() => expect(terminal.output()).toContain("API key for faux"));
+		terminal.send(KEY.escape);
+		await until(() => expect(terminal.output()).toContain("Optional: let the agent control your Chrome"));
+		terminal.send(KEY.enter); // first item: Add a Chrome profile
+		await until(() => expect(terminal.output()).toContain("Chrome profile name"));
+		terminal.type("personal");
+		terminal.send(KEY.enter);
+		await until(() => expect(terminal.output()).toContain("Playwright Extension token for playwright-personal"));
+		terminal.type(token);
+		terminal.send(KEY.enter);
+		expect(await done).toEqual({ completed: true });
+		expect(settings.keyStatus("playwright-personal")).toMatchObject({ purpose: "browser", state: "file" });
+		expect(terminal.raw()).not.toContain(token);
 	});
 });

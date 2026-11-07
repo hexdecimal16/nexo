@@ -767,3 +767,19 @@ describe("judge, scoring and learning settings", () => {
 		expect(read(f).models.reflector).toEqual({ provider: "g", id: "y", effort: "high" });
 	});
 });
+
+describe("browser profile tokens", () => {
+	it("stores playwright-<profile> tokens as browser keys, lists them and rejects bad names", () => {
+		const f = fixture();
+		const settings = createSettings(f.options());
+		const token = "pwtok_0123456789abcdef0123456789abcdef";
+		settings.validateKeyProvider("playwright-personal");
+		const status = settings.setKey("playwright-personal", token);
+		expect(status).toMatchObject({ provider: "playwright-personal", purpose: "browser", state: "file", last4: token.slice(-4) });
+		expect(settings.keyProviders().find((k) => k.provider === "playwright-personal")?.purpose).toBe("browser");
+		expect(settings.redact(`token ${token}`)).not.toContain(token);
+		expectCode(() => settings.validateKeyProvider("playwright-Bad Name"), "INVALID_REQUEST");
+		expectCode(() => settings.validateKeyProvider("playwright-"), "INVALID_REQUEST");
+		expect(settings.removeKey("playwright-personal").state).toBe("unset");
+	});
+});

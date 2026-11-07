@@ -122,9 +122,10 @@ export class SettingsScreen implements Component {
 		const items: SelectItem[] = [
 			...keys.map((k) => ({
 				value: `key:${k.provider}`,
-				label: `${escapeControl(k.provider)} key${k.purpose === "search" ? " (web search)" : ""}`,
+				label: `${escapeControl(k.provider)} key${k.purpose === "search" ? " (web search)" : k.purpose === "browser" ? " (browser profile)" : ""}`,
 				description: escapeControl(keyStatusLabel(k)),
 			})),
+			{ value: "browser:add", label: "Add browser profile", description: "store a Chrome profile token from the Playwright Extension for the browser skill" },
 			...views.map((v) => ({ value: `set:${v.key}`, label: escapeControl(v.label), description: settingDescription(v) })),
 		];
 		return new PickerView({
@@ -134,7 +135,8 @@ export class SettingsScreen implements Component {
 			hint: "type to filter · ↑↓ move · enter edit · esc close",
 			onPick: (value) => {
 				this.status = null;
-				if (value.startsWith("key:")) this.show(this.keyActionsView(value.slice(4)));
+				if (value === "browser:add") this.show(this.browserProfileView(() => this.backToMenu(), () => this.backToMenu()));
+				else if (value.startsWith("key:")) this.show(this.keyActionsView(value.slice(4)));
 				else this.editSetting(value.slice(4));
 			},
 			onCancel: () => this.close(true),
@@ -196,7 +198,7 @@ export class SettingsScreen implements Component {
 		};
 		input.onCancel = onCancel;
 		return new EntryView({
-			title: `API key for ${escapeControl(provider)} (input hidden)`,
+			title: `${provider.startsWith("playwright-") ? "Playwright Extension token" : "API key"} for ${escapeControl(provider)} (input hidden)`,
 			hint: "paste or type the key · enter save · esc cancel",
 			input,
 		});
@@ -308,6 +310,7 @@ export class SettingsScreen implements Component {
 	// First-run setup
 
 	private skippedKeys = new Set<string>();
+	private browserAsked = false;
 
 	private nextSetupStep(): View | null {
 		const status = this.settings.setupStatus();
@@ -338,7 +341,62 @@ export class SettingsScreen implements Component {
 				},
 			);
 		}
+		if (!this.browserAsked && !this.hasBrowserProfile()) {
+			this.browserAsked = true;
+			return this.browserSetupView();
+		}
 		return null;
+	}
+
+	private hasBrowserProfile(): boolean {
+		try {
+			return this.settings.keyProviders().some((k) => k.purpose === "browser" && k.state !== "unset");
+		} catch {
+			return false;
+		}
+	}
+
+	/** Optional last setup step: browser control through playwright-cli and the Playwright Extension. */
+	private browserSetupView(): View {
+		return new PickerView({
+			title: "Optional: let the agent control your Chrome (needs playwright-cli and the Playwright Extension)",
+			items: [
+				{ value: "add", label: "Add a Chrome profile", description: "store its Playwright Extension token as playwright-<profile>" },
+				{ value: "skip", label: "Skip for now", description: "add one later in /settings or with nexo settings set-key playwright-<profile>" },
+			],
+			maxVisible: () => 3,
+			onPick: (value) => {
+				if (value === "add") this.show(this.browserProfileView(() => this.advanceSetup(), () => this.advanceSetup()));
+				else this.advanceSetup();
+			},
+			onCancel: () => this.advanceSetup(),
+		});
+	}
+
+	/** Asks for a Chrome profile name, then its Playwright Extension token, stored as playwright-<profile>. */
+	private browserProfileView(onDone: () => void, onCancel: () => void): View {
+		const input = new Input({ prompt: style.gray("profile> ") });
+		input.onSubmit = (raw) => {
+			const name = raw.trim().toLowerCase();
+			if (!name) {
+				onCancel();
+				return;
+			}
+			const provider = `playwright-${name}`;
+			try {
+				this.settings.validateKeyProvider(provider);
+			} catch (error) {
+				this.setError(error);
+				return;
+			}
+			this.show(this.keyEntryView(provider, onDone, onCancel));
+		};
+		input.onEscape = onCancel;
+		return new EntryView({
+			title: "Chrome profile name, such as personal or work (lowercase letters, digits, hyphens)",
+			hint: "enter next · empty or esc skips",
+			input,
+		});
 	}
 
 	private advanceSetup(): void {

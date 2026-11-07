@@ -43,7 +43,8 @@ export interface KeyStatus {
 	provider: string;
 	state: "option" | "env" | "file" | "unset";
 	/** `model` for a model provider, `search` for a web search API (brave, tavily). */
-	purpose: "model" | "search";
+	/** `browser`: a Chrome profile's Playwright Extension token, stored as `playwright-<profile>` for the browser skill. */
+	purpose: "model" | "search" | "browser";
 	/** The environment variable providing the key; null for ambient credentials (AWS, Google ADC) or when not `env`. */
 	envVar: string | null;
 	/** Last 4 characters of the stored key when `state` is `file`. */
@@ -146,6 +147,13 @@ export interface Settings {
 
 /** What pi-ai's `getEnvApiKey` returns for ambient credentials (Google ADC, AWS profiles) instead of a key. */
 const AMBIENT_CREDENTIALS = "<authenticated>";
+
+/** Credentials name of a Chrome profile's Playwright Extension token: `playwright-<profile>`, read by the bundled browser skill. */
+const BROWSER_KEY = /^playwright-[a-z0-9][a-z0-9-]{0,31}$/;
+
+export function isBrowserProfileKey(provider: string): boolean {
+	return BROWSER_KEY.test(provider);
+}
 
 function invalidRequest(message: string, hint?: string): NexoError {
 	return new NexoError({ code: "INVALID_REQUEST", message, ...(hint ? { hint } : {}) });
@@ -257,7 +265,7 @@ export function createSettings(options: SettingsOptions): Settings {
 	const validateProvider = (provider: string, strict: boolean): void => {
 		const known =
 			!containsSecret(provider) &&
-			(options.models?.getProvider(provider) !== undefined || isSearchProvider(provider) || configured().includes(provider) || (!strict && provider in credentials));
+			(options.models?.getProvider(provider) !== undefined || isSearchProvider(provider) || isBrowserProfileKey(provider) || configured().includes(provider) || (!strict && provider in credentials));
 		if (!known) {
 			const ids = [...new Set([...(options.models?.getProviders().map((p) => p.id) ?? []), ...configured(), ...SEARCH_PROVIDER_IDS])].sort();
 			throw invalidRequest(
@@ -272,7 +280,7 @@ export function createSettings(options: SettingsOptions): Settings {
 	const keyStatus = (provider: string): KeyStatus => {
 		const stored = credentials[provider];
 		const inFile = stored !== undefined;
-		const purpose = isSearchProvider(provider) ? "search" : "model";
+		const purpose = isSearchProvider(provider) ? "search" : isBrowserProfileKey(provider) ? "browser" : "model";
 		if (optionKeys.has(provider)) return { provider, purpose, state: "option", envVar: null, last4: null, inFile };
 		// claude-p and kiro-p run a local CLI that brings its own login: ambient credentials, like AWS or Google ADC.
 		if (provider === CLAUDE_P_PROVIDER || provider === KIRO_P_PROVIDER) return { provider, purpose, state: "env", envVar: null, last4: null, inFile };

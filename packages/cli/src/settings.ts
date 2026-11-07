@@ -123,7 +123,7 @@ export async function settingsCommand(args: string[], io: CliIO, options: CliOpt
 			case "keys": {
 				if (rest.length !== 0) throw usageError("nexo settings keys takes no arguments");
 				for (const status of build().keyProviders()) {
-					const tag = status.purpose === "search" ? " (web search)" : "";
+					const tag = status.purpose === "search" ? " (web search)" : status.purpose === "browser" ? " (browser profile)" : "";
 					const env = status.state === "env" && status.envVar ? ` via ${status.envVar}` : "";
 					io.stdout.write(`${status.provider}${tag}: ${keyStatusLabel(status)}${env}\n`);
 				}

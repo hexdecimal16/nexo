@@ -156,5 +156,24 @@ export function runDoctor(options: DoctorOptions): DoctorReport {
 		}
 	}
 
+	const browserProfiles = keys.filter((k) => k.purpose === "browser" && k.state !== "unset").map((k) => k.provider.slice("playwright-".length));
+	add(
+		commandExists("playwright-cli", env, cwd)
+			? {
+					id: "browser",
+					status: "ok",
+					message:
+						browserProfiles.length > 0
+							? `Browser control: playwright-cli found, Chrome profiles ${browserProfiles.join(", ")}`
+							: "Browser control: playwright-cli found, no Chrome profile token stored (Chrome asks you to approve each connection)",
+				}
+			: {
+					id: "browser",
+					status: "warn",
+					message: "playwright-cli not found (the browser skill can't control Chrome)",
+					fix: "Run `npm install -g @playwright/cli@latest`, install the Playwright Extension in Chrome, then `nexo settings set-key playwright-<profile>` with the extension's token",
+				},
+	);
+
 	return { ok: checks.every((c) => c.status !== "fail"), checks };
 }
