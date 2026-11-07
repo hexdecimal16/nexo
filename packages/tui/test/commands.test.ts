@@ -169,6 +169,21 @@ describe("slash commands", () => {
 		await h.done;
 	});
 
+	it("/allow-all turns allow-all mode on and off for the session and the footer shows it", async () => {
+		const h = await startHarness();
+		submit(h.terminal, "/allow-all");
+		await until(() => expect(h.terminal.output()).toContain("allow-all mode: off"));
+		submit(h.terminal, "/allow-all on");
+		await until(() => expect(h.session().allowAll).toBe(true));
+		await until(() => expect(h.terminal.output()).toMatch(/faux\/fast · [^\n]* · allow-all · turn/));
+		submit(h.terminal, "/allow-all maybe");
+		await until(() => expect(h.terminal.output()).toMatch(/error \[INVALID_REQUEST\] [^\n]*on or off/));
+		submit(h.terminal, "/allow-all off");
+		await until(() => expect(h.session().allowAll).toBe(false));
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
 	it("/permissions lists, removes and clears the session's rules", async () => {
 		const h = await startHarness();
 		h.session().addSessionRule({ tool: "bash", kind: "prefix", value: "npm run test" });

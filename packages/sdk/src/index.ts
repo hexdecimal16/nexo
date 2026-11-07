@@ -1,6 +1,6 @@
 export { checkSetup, createNexo, type Nexo, type NexoOptions, type NexoRunOptions, type NexoWebSearchOptions } from "./nexo.ts";
 export type { KeyStatus } from "@nexo/core";
-export type { SearchFailure, SearchOutcome, SearchProviderId, SearchResult } from "@nexo/tools";
+export { allowAllPrompter, type ApprovalAnswer, type ApprovalRequest, nonInteractivePrompter, type Prompter, type SearchFailure, type SearchOutcome, type SearchProviderId, type SearchResult, type SessionRule } from "@nexo/tools";
 export { createRuntime, openLogger, type Runtime, type RuntimeOptions } from "./runtime.ts";
 export type { CreateSessionOptions, DeepPartial, DoctorReport, EngineEvent, NexoConfig, RunRequest, RunResult, Session } from "@nexo/core";
 export type { FailureMode, ReviewQueueItem, ReviewQueueOptions } from "@nexo/store";

@@ -32,6 +32,8 @@ export interface NexoOptions {
 	env?: NodeJS.ProcessEnv;
 	/** Approval prompter. Default: non-interactive, which denies every `ask`, so a backend never waits on a human. */
 	prompter?: Prompter;
+	/** When true, automatically approves all tool approval prompts without asking or calling the approver model. */
+	allowAll?: boolean;
 	/** Model registry; defaults to the built-in one. Tests pass a fake provider. */
 	models?: Models;
 	/**
@@ -109,6 +111,7 @@ export function createNexo(options: NexoOptions = {}): Nexo {
 	const env = withHome(options);
 	const cwd = options.cwd ?? process.cwd();
 	const prompter = options.prompter ?? nonInteractivePrompter;
+	const allowAll = options.allowAll ?? false;
 	const listeners = new Set<(event: EngineEvent) => void>();
 	const runtime = createRuntime({
 		env,
@@ -147,14 +150,20 @@ export function createNexo(options: NexoOptions = {}): Nexo {
 			const { onEvent } = runOptions;
 			if (onEvent) listeners.add(onEvent);
 			try {
-				return await runtime.engine.run(request, runOptions.signal);
+				return await runtime.engine.run(
+					allowAll && request.allowAll === undefined ? { ...request, allowAll: true } : request,
+					runOptions.signal,
+				);
 			} finally {
 				if (onEvent) listeners.delete(onEvent);
 			}
 		},
 		createSession(sessionOptions) {
 			live();
-			return createSession(sessionDeps(), sessionOptions);
+			return createSession(
+				sessionDeps(),
+				allowAll && sessionOptions.allowAll === undefined ? { ...sessionOptions, allowAll: true } : sessionOptions,
+			);
 		},
 		resumeSession(id) {
 			live();

@@ -35,6 +35,7 @@ export interface Prompter {
 }
 
 export const nonInteractivePrompter: Prompter = { interactive: false, approve: async () => "deny" };
+export const allowAllPrompter: Prompter = { interactive: true, approve: async () => "once" };
 
 export interface PolicyDecision {
 	action: PolicyAction;
@@ -54,9 +55,11 @@ export interface AuthorizeOptions {
 	addSessionRule?: (rule: SessionRule) => void;
 	/** The approver (auto mode); never throws, returns "ask" on any failure. */
 	classify?: (toolName: string, args: unknown, signal?: AbortSignal) => Promise<Classification>;
+	/** When true, automatically approves all tool approval prompts without asking or calling the approver model. */
+	allowAll?: boolean;
 }
 
-export type ApprovedBy = "config" | "session_rule" | "auto" | "user";
+export type ApprovedBy = "config" | "session_rule" | "auto" | "user" | "allow_all";
 
 export type Authorization = { allowed: true; by: ApprovedBy; reason?: string } | { allowed: false; error: NexoError };
 
@@ -173,6 +176,7 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
 			}
 			const ruleMatches = () => (options.sessionRules?.() ?? []).some((rule) => matchesSessionRule(rule, toolName, args));
 			if (ruleMatches()) return { allowed: true, by: "session_rule" };
+			if (options.allowAll) return { allowed: true, by: "allow_all", reason: "allow-all" };
 			if (!prompter.interactive && cfg.nonInteractiveAsk === "allow") return { allowed: true, by: "config" };
 			const aborted = (): Authorization => ({
 				allowed: false,

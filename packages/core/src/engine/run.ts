@@ -231,6 +231,8 @@ export interface RunRequest {
 	addSessionRule?: (rule: SessionRule) => void;
 	/** Auto mode for this run (a session's /auto); defaults to tools.autoApprove === "on". */
 	autoApprove?: boolean;
+	/** When true, automatically approves all tool approval prompts without asking or calling the approver model. */
+	allowAll?: boolean;
 	skill?: string;
 	model?: string;
 	effort?: Effort;
@@ -319,6 +321,7 @@ export interface RunApprovals {
 	sessionRules: () => readonly SessionRule[];
 	addSessionRule?: (rule: SessionRule) => void;
 	auto: boolean;
+	allowAll: boolean;
 	/** The user's message that started the root run; the approver's <request> at every depth. */
 	userRequest: string;
 }
@@ -511,6 +514,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 					sessionRules: request.sessionRules ?? (() => []),
 					...(request.addSessionRule ? { addSessionRule: request.addSessionRule } : {}),
 					auto: request.autoApprove ?? config.tools.autoApprove === "on",
+					allowAll: request.allowAll ?? false,
 					userRequest: request.instruction,
 				};
 
@@ -1158,12 +1162,13 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 								sessionRules: approvals.sessionRules,
 								...(approvals.addSessionRule ? { addSessionRule: approvals.addSessionRule } : {}),
 								...(classifier ? { classify: (name: string, a: unknown, s?: AbortSignal) => classifier(name, a, toolCall.id, s) } : {}),
+								allowAll: approvals.allowAll,
 							}
 						: undefined,
 				);
 				if (!auth.allowed) return { block: true, reason: toolErrorText(auth.error) };
 				approvedBy.set(toolCall.id, auth.by);
-				if (auth.by === "auto") deps.onEvent?.({ type: "approval", runId, depth, toolCallId: toolCall.id, toolName: toolCall.name, reason: deps.redact(auth.reason ?? "") });
+				if (auth.by === "auto" || auth.by === "allow_all") deps.onEvent?.({ type: "approval", runId, depth, toolCallId: toolCall.id, toolName: toolCall.name, reason: deps.redact(auth.reason ?? "") });
 				return undefined;
 			},
 			afterToolCall: async ({ toolCall, result }) => {

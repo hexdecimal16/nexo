@@ -73,6 +73,42 @@ describe("createNexo", () => {
 		mkdirSync(join(empty, "home"));
 		expect(checkSetup({ home: join(empty, "home"), cwd: empty, env: h.env, models: h.models }).ok).toBe(false);
 	});
+
+	it("auto-approves tools with allowAll: true in createNexo and run", async () => {
+		const h = setup([
+			fauxAssistantMessage([fauxToolCall("bash", { command: "echo hello-allow-all" })]),
+			fauxAssistantMessage("done"),
+		]);
+		const events: EngineEvent[] = [];
+		const nexo = createNexo({ home: h.home, cwd: h.root, env: h.env, models: h.models, allowAll: true });
+		try {
+			const result = await nexo.run({ instruction: "run echo", budgetUsd: 0.5 }, { onEvent: (e) => events.push(e) });
+			expect(result.status).toBe("succeeded");
+			const approvalEvent = events.find((e) => e.type === "approval");
+			expect(approvalEvent).toMatchObject({ toolName: "bash", reason: "allow-all" });
+			const toolEnd = events.find((e) => e.type === "tool_end" && e.toolName === "bash");
+			expect(toolEnd).toMatchObject({ isError: false });
+		} finally {
+			await nexo.close();
+		}
+	});
+
+	it("auto-approves tools in session with allowAll: true", async () => {
+		const h = setup([
+			fauxAssistantMessage([fauxToolCall("bash", { command: "echo session-allow" })]),
+			fauxAssistantMessage("session done"),
+		]);
+		const nexo = createNexo({ home: h.home, cwd: h.root, env: h.env, models: h.models });
+		try {
+			const session = nexo.createSession({ cwd: h.root, allowAll: true });
+			expect(session.allowAll).toBe(true);
+			const result = await session.turn("run echo");
+			expect(result.status).toBe("succeeded");
+			session.close();
+		} finally {
+			await nexo.close();
+		}
+	});
 });
 
 describe("web search", () => {

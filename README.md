@@ -74,7 +74,7 @@ try {
 
 - Pass keys in code without writing them to disk: `createNexo({ apiKeys: { anthropic: "…" } })`.
 - `nexo.keys()`, `nexo.setKey()` and `nexo.removeKey()` manage stored keys. `nexo.webSearch(query)` searches without a model.
-- The SDK denies every tool approval by default, so a backend never waits on a person. Always pass `budgetUsd`.
+- The SDK denies every tool approval by default, so a backend never waits on a person. Pass `allowAll: true` to `createNexo` or `run` to auto-approve tool actions in sandboxed environments. Always pass `budgetUsd`.
 - `checkSetup()` runs the doctor checks without starting the engine, for a start-up pre-flight.
 
 ## Security

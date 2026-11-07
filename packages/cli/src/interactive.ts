@@ -50,6 +50,7 @@ interface InteractiveArgs {
 	effort?: Effort;
 	/** `--resume --all`: list sessions from every project instead of the current one. */
 	all?: boolean;
+	allowAll?: boolean;
 }
 
 /** `--resume` takes an optional id, which `parseArgs` cannot express, so it is pulled out first. */
@@ -68,14 +69,14 @@ export function parseInteractiveArgs(args: string[]): InteractiveArgs {
 			resume = { id: arg.slice("--resume=".length) || null };
 		} else rest.push(arg);
 	}
-	const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { workspace: { type: "string" }, model: { type: "string" }, effort: { type: "string" }, all: { type: "boolean" } } });
+	const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { workspace: { type: "string" }, model: { type: "string" }, effort: { type: "string" }, all: { type: "boolean" }, "allow-all": { type: "boolean" } } });
 	if (values.all && !resume) throw usageError("--all applies to --resume only");
 	if (positionals.length > 0) throw usageError(`Unexpected argument "${positionals[0]}"`);
 	if (values.effort !== undefined && !(EFFORTS as readonly string[]).includes(values.effort)) throw usageError(`--effort must be one of ${EFFORTS.join(", ")}`);
 	if (resume && (values.workspace !== undefined || values.model !== undefined || values.effort !== undefined)) {
 		throw usageError("--resume reopens a session as it was; --workspace, --model and --effort apply to new sessions only");
 	}
-	return { resume, workspace: values.workspace, model: values.model, effort: values.effort as Effort | undefined, all: values.all === true };
+	return { resume, workspace: values.workspace, model: values.model, effort: values.effort as Effort | undefined, all: values.all === true, allowAll: values["allow-all"] === true };
 }
 
 const PICKER_LIMIT = 50;
@@ -145,7 +146,12 @@ export async function interactiveCommand(args: string[], io: CliIO, options: Cli
 			signal: options.signal,
 			openSession: (prompter) => {
 				const deps = buildDeps(prompter);
-				return resumeId ? resumeSession(deps, resumeId) : createSession(deps, { cwd, workspace: parsed.workspace, model: parsed.model, effort: parsed.effort });
+				if (resumeId) {
+					const s = resumeSession(deps, resumeId);
+					if (parsed.allowAll) s.setAllowAll(true);
+					return s;
+				}
+				return createSession(deps, { cwd, workspace: parsed.workspace, model: parsed.model, effort: parsed.effort, allowAll: parsed.allowAll });
 			},
 			resumeSession: (id, prompter) => resumeSession(buildDeps(prompter), id),
 		});

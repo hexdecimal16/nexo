@@ -225,4 +225,19 @@ describe("authorize with session rules and the approver", () => {
 		const auth = await createPolicy(approvalCfg).authorize(settledLater, "bash", { command: "pwd" }, undefined, undefined, { sessionRules: () => rules });
 		expect(auth).toEqual({ allowed: true, by: "session_rule" });
 	});
+
+	it("allowAll automatically allows tools that ask without prompting or calling the classifier", async () => {
+		const quiet: Prompter = { interactive: false, approve: async () => "deny" };
+		let called = false;
+		const auth = await createPolicy(approvalCfg).authorize(quiet, "bash", { command: "npm test" }, undefined, undefined, {
+			classify: async () => ((called = true), { decision: "ask", reason: "x" }),
+			allowAll: true,
+		});
+		expect(auth).toEqual({ allowed: true, by: "allow_all", reason: "allow-all" });
+		expect(called).toBe(false);
+
+		// But config deny still blocks
+		const denied = await createPolicy(approvalCfg).authorize(quiet, "bash", { command: "rm important.txt" }, undefined, undefined, { allowAll: true });
+		expect(denied).toMatchObject({ allowed: false, error: { code: "TOOL_DENIED" } });
+	});
 });

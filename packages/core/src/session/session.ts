@@ -81,6 +81,8 @@ export interface CreateSessionOptions {
 	/** Initial session-level overrides, as `/model` and `/effort` set them. */
 	model?: string;
 	effort?: Effort;
+	/** When true, automatically approves all tool approval prompts for this session. */
+	allowAll?: boolean;
 }
 
 export interface TurnOptions {
@@ -260,6 +262,14 @@ export class Session {
 		this.state.autoApprove = on;
 		this.save();
 	}
+	/** Allow-all mode for this session: auto-approves all tool approval prompts without asking. */
+	get allowAll(): boolean {
+		return this.state.allowAll ?? false;
+	}
+	setAllowAll(on: boolean | null): void {
+		this.state.allowAll = on;
+		this.save();
+	}
 	get remainingUsd(): number {
 		return Math.max(0, this.budgetUsd - this.state.costUsd);
 	}
@@ -384,6 +394,7 @@ export class Session {
 					sessionRules: () => this.state.sessionRules ?? [],
 					addSessionRule: (rule) => this.addSessionRule(rule),
 					autoApprove: this.autoApprove,
+					allowAll: this.allowAll,
 					onSteeringReady: (control) => {
 						this.steerCtl = control;
 						for (const text of this.steerPending.splice(0)) control.steer(text);
@@ -681,6 +692,7 @@ export function createSession(deps: SessionDeps, options: CreateSessionOptions):
 		updatedAt: nowIso,
 		lastRunId: null,
 		context: null,
+		allowAll: options.allowAll ?? null,
 	};
 	const dir = SessionDir.create(deps.paths.sessions, id, deps.redact);
 	const session = openSession(deps, dir, state, [], SessionLock.acquire(dir.root, id));

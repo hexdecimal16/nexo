@@ -376,7 +376,7 @@ class InteractiveApp {
 		const fraction = session.contextFraction;
 		const ctx = fraction === null ? "ctx –" : `ctx ${Math.round(fraction * 100)}%`;
 		const score = !this.running && this.lastScore ? [this.lastScore] : [];
-		const parts = [escapeControl(model), escapeControl(effort), ...(session.autoApprove ? ["auto"] : []), `turn ${usd(turn)}`, ...score, `session ${usd(spent)}/${usd(session.budgetUsd)}`, ctx];
+		const parts = [escapeControl(model), escapeControl(effort), ...(session.allowAll ? ["allow-all"] : session.autoApprove ? ["auto"] : []), `turn ${usd(turn)}`, ...score, `session ${usd(spent)}/${usd(session.budgetUsd)}`, ctx];
 		return style.gray(parts.join(" · ")) + (this.running ? style.cyan(" · running…") : "");
 	}
 
@@ -773,6 +773,17 @@ class InteractiveApp {
 						this.say(`auto mode ${session.autoApprove ? "on" : "off"}${args === "default" ? " (following tools.autoApprove)" : " for this session"}`);
 					} else {
 						this.sayError({ code: "INVALID_REQUEST", message: `Unknown /auto argument "${escapeControl(oneLine(args, 40))}"`, hint: "Use on, off or default" });
+					}
+					break;
+				}
+				case "allow-all": {
+					if (!args) {
+						this.say(`allow-all mode: ${session.allowAll ? "on" : "off"}`);
+					} else if (args === "on" || args === "off") {
+						session.setAllowAll(args === "on");
+						this.say(`allow-all mode ${session.allowAll ? "on" : "off"} for this session`);
+					} else {
+						this.sayError({ code: "INVALID_REQUEST", message: `Unknown /allow-all argument "${escapeControl(oneLine(args, 40))}"`, hint: "Use on or off" });
 					}
 					break;
 				}

@@ -45,6 +45,8 @@ export interface SessionJson {
 	sessionRules?: { tool: string; kind: "prefix" | "tool" | "host"; value?: string }[];
 	/** The `/auto` override; null or absent follows `tools.autoApprove`. */
 	autoApprove?: boolean | null;
+	/** The `/allow-all` override; when true, auto-approves all tool prompts this session. */
+	allowAll?: boolean | null;
 }
 
 /** A `!` shell command the user ran, as the model will read it; `output` is redacted and capped. */

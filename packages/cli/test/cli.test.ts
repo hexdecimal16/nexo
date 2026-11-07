@@ -69,6 +69,18 @@ describe("nexo run", () => {
 		expect(t.err()).toContain("auto-allowed: prints text");
 	});
 
+	it("prints an auto-allowed line on stderr when --allow-all is passed", async () => {
+		const h = home({ ...config, tools: { policy: { bash: "ask" } } });
+		const t = io();
+		const responses = [
+			fauxAssistantMessage([fauxToolCall("bash", { command: "touch hi" })]),
+			fauxAssistantMessage("done"),
+		];
+		const code = await runCli(["run", "--allow-all", "say", "hi"], t, { ...h, models: fauxModels(responses) });
+		expect(code).toBe(0);
+		expect(t.err()).toContain("auto-allowed: allow-all");
+	});
+
 	it("exits 2 with the error and hint when config is missing", async () => {
 		const h = home();
 		const t = io();

@@ -104,6 +104,7 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 			workspace: { type: "string" },
 			budget: { type: "string" },
 			"no-review": { type: "boolean" },
+			"allow-all": { type: "boolean" },
 		},
 	});
 	const instruction = positionals.join(" ").trim();
@@ -149,6 +150,7 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 				workspace: values.workspace,
 				projectDir: options.cwd ?? process.cwd(),
 				budgetUsd,
+				allowAll: values["allow-all"] === true,
 			},
 			options.signal,
 		);

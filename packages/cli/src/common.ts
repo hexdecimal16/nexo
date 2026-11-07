@@ -43,7 +43,7 @@ export const USAGE = `Usage:
   nexo                                     start an interactive session (needs a terminal)
   nexo --resume [id] [--all]               resume a session (a picker of this project's sessions when no id is given;
                                            --all lists every project)
-  nexo [--workspace <dir>] [--model <s1|s2|provider/id>] [--effort <level>]   options for a new session
+  nexo [--workspace <dir>] [--model <s1|s2|provider/id>] [--effort <level>] [--allow-all]   options for a new session
                                            without --workspace each turn works in its own run folder (files carried over
                                            from the previous turn); --workspace . works in the current folder
   nexo sessions [--limit <n>]
@@ -57,7 +57,7 @@ export const USAGE = `Usage:
   nexo settings remove-key <provider>      delete a key from the credentials file
   nexo settings keys                       key status of the model and web search providers (never the keys)
   nexo search <query...> [--count <n>] [--json]   search the web with the configured Brave/Tavily keys
-  nexo run <instruction...> [--skill <name>] [--model <s1|s2|provider/id>] [--effort <level>] [--workspace <dir>] [--budget <usd>] [--no-review]
+  nexo run <instruction...> [--skill <name>] [--model <s1|s2|provider/id>] [--effort <level>] [--workspace <dir>] [--budget <usd>] [--no-review] [--allow-all]
   nexo cost [--by model|tier|day|run|skill] [--since YYYY-MM-DD]
   nexo reindex
   nexo review-queue [--limit <n>] [--days <n>]   recent runs without a verdict, worst first
