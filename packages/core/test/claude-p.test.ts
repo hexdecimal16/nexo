@@ -1,4 +1,5 @@
-import { createModels, Type, type Context } from "@earendil-works/pi-ai";
+import { createModels, type Context } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { CLAUDE_P_PROVIDER, claudePProvider, type ClaudePRequest, nexoModels, renderTranscript } from "../src/index.ts";
 

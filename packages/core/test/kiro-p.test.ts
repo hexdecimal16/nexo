@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createModels, Type, type Context } from "@earendil-works/pi-ai";
+import { createModels, type Context } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { KIRO_P_IDLE_ENV, KIRO_P_PROVIDER, kiroPProvider, type KiroPRequest, type KiroPRunner, nexoModels, parseReply } from "../src/index.ts";
 

@@ -5,8 +5,8 @@
   "type": "module",
   "exports": { ".": "./src/index.ts" },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "1.1.0",
-    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-agent-core": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.0",
     "@google/genai": "2.21.0",
     "@nexo/mcp": "0.4.1",
     "@nexo/memory": "0.4.1",
