@@ -1,4 +1,4 @@
-import { createSettings, keyStatusLabel, nexoModels, type Settings, type SettingView } from "@nexo/core";
+import { createSettings, keyStatusLabel, nexoModels, SETTING_GROUPS, type Settings, type SettingView } from "@nexo/core";
 import { ensureNexoDirs, resolveNexoPaths } from "@nexo/store";
 import { NexoError, toErrorPayload } from "@nexo/telemetry";
 import { type CliIO, type CliOptions, type CliStdio, EXIT_SIGINT, exitCodeFor, printError, usageError } from "./common.ts";
@@ -85,7 +85,7 @@ function show(view: SettingView): string {
 	return view.value === null ? "unset" : String(view.value);
 }
 
-/** `nexo settings get|set|reset|set-key`: no TUI, for scripts. Invalid keys and values are usage errors (exit 2). */
+/** `nexo settings list|get|set|reset|keys|set-key|remove-key`: no TUI, for scripts. Invalid keys and values are usage errors (exit 2). */
 export async function settingsCommand(args: string[], io: CliIO, options: CliOptions, stdio: CliStdio): Promise<number> {
 	const [sub, ...rest] = args;
 	const env = options.env ?? process.env;
@@ -118,6 +118,20 @@ export async function settingsCommand(args: string[], io: CliIO, options: CliOpt
 				const view = build().resetSetting(rest[0] as string);
 				io.stdout.write(`${view.key} = ${show(view)}\n`);
 				if (view.notice) io.stderr.write(`note: ${view.notice}\n`);
+				return 0;
+			}
+			case "list": {
+				if (rest.length !== 0) throw usageError("nexo settings list takes no arguments");
+				const views = build().settings();
+				for (const group of SETTING_GROUPS) {
+					const inGroup = views.filter((v) => v.group === group.id);
+					if (inGroup.length === 0) continue;
+					io.stdout.write(`${group.label}\n`);
+					for (const view of inGroup) {
+						const source = view.source === "unset" ? "" : ` (${view.source})`;
+						io.stdout.write(`  ${view.key} = ${show(view)}${source}\n`);
+					}
+				}
 				return 0;
 			}
 			case "keys": {
@@ -162,7 +176,7 @@ export async function settingsCommand(args: string[], io: CliIO, options: CliOpt
 				return 0;
 			}
 			default:
-				throw usageError(sub === undefined ? "nexo settings needs get, set, reset, keys, set-key or remove-key (or a terminal for the screen)" : `Unknown settings command "${sub}"`);
+				throw usageError(sub === undefined ? "nexo settings needs list, get, set, reset, keys, set-key or remove-key (or a terminal for the screen)" : `Unknown settings command "${sub}"`);
 		}
 	} catch (error) {
 		const payload = toErrorPayload(error);

@@ -327,6 +327,20 @@ describe("nexo sessions", () => {
 });
 
 describe("nexo settings", () => {
+	it("list prints every setting under its group heading", async () => {
+		const h = home();
+		const opts = { ...h, models: fauxModels() };
+		let t = io();
+		expect(await runCli(["settings", "set", "budgets.perRunUsd", "0.75"], t, opts)).toBe(0);
+		t = io();
+		expect(await runCli(["settings", "list"], t, opts)).toBe(0);
+		const out = t.out();
+		expect(out).toMatch(/^Models\n {2}models\.s1 = /);
+		expect(out).toContain("  budgets.perRunUsd = 0.75 (user)");
+		expect(out.indexOf("Budgets\n")).toBeLessThan(out.indexOf("  budgets.perRunUsd"));
+		expect(out.indexOf("Optimization\n")).toBeLessThan(out.indexOf("  budgets.optimDefaultUsd"));
+	});
+
 	it("get and set work without a terminal or a valid config", async () => {
 		const h = home();
 		const opts = { ...h, models: fauxModels() };

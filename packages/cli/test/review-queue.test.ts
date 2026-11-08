@@ -72,7 +72,7 @@ describe("nexo review-queue", () => {
 		await runCli(["help"], io, cliHome());
 		const text = io.out() + io.err();
 		expect(text).toContain("nexo review-queue");
-		expect(text).toContain("loop.maxToolCalls|repeatLimit");
-		expect(text).toContain("reflectionTier|maxCaseDrop");
+		expect(text).toContain("nexo settings list");
+		expect(text).toContain("keys as shown by nexo settings list");
 	});
 });

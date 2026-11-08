@@ -49,8 +49,9 @@ export const USAGE = `Usage:
   nexo sessions [--limit <n>]
   nexo --version                           print the installed version
   nexo settings                            open the settings screen (needs a terminal)
+  nexo settings list                       every editable setting by group, with its value and source
   nexo settings get <key>
-  nexo settings set <key> <value>          keys: models.s1|s2|judge|reflector|embedding, budgets.*, tools.policy.*, tools.webSearch.count, tools.autoApprove, tools.nonInteractiveAsk, models.approver, scoring.judge, learning.*, memory.*, optimize.minCases|patience|minJudgeKappa|noveltySimilarity|offspringAlpha|reflectionTier|maxCaseDrop, loop.maxToolCalls|repeatLimit
+  nexo settings set <key> <value>          keys as shown by nexo settings list; auto mode: tools.autoApprove, tools.nonInteractiveAsk, models.approver
   nexo settings reset <key>                remove it from the user config
   nexo settings set-key <provider>         reads the key from a hidden prompt, or from stdin when piped; playwright-<profile> stores a Chrome profile's browser token
                                            (brave or tavily turns on the web_search tool)

@@ -15,6 +15,7 @@ import {
 	runDoctor,
 	type Session,
 	type SessionDeps,
+	type SettingView,
 } from "@nexo/core";
 import { resolveNexoPaths, reviewQueue, type ReviewQueueItem, type ReviewQueueOptions } from "@nexo/store";
 import { NexoError } from "@nexo/telemetry";
@@ -85,6 +86,19 @@ export interface Nexo {
 	setKey(provider: string, apiKey: string): KeyStatus;
 	/** Deletes a provider's key from `credentials.json`. */
 	removeKey(provider: string): KeyStatus;
+	/**
+	 * Every editable setting with its value, source and `group`, in the same order as the TUI settings screen and
+	 * `nexo settings list` (group by group, see `SETTING_GROUPS`).
+	 */
+	settings(): SettingView[];
+	getSetting(key: string): SettingView;
+	/**
+	 * Writes one setting to the user config (~/.nexo/config.json) after schema validation; INVALID_REQUEST for an unknown
+	 * key or a bad value. This instance keeps the config it was created with; a new `createNexo` picks the change up.
+	 */
+	setSetting(key: string, value: unknown): SettingView;
+	/** Removes a setting from the user config, so the project config or the default applies again. */
+	resetSetting(key: string): SettingView;
 	/** Closes MCP servers and the database. Close sessions first. Safe to call twice. */
 	close(): Promise<void>;
 }
@@ -197,6 +211,20 @@ export function createNexo(options: NexoOptions = {}): Nexo {
 		removeKey(provider) {
 			live();
 			return runtime.settings.removeKey(provider);
+		},
+		settings() {
+			return runtime.settings.settings();
+		},
+		getSetting(key) {
+			return runtime.settings.getSetting(key);
+		},
+		setSetting(key, value) {
+			live();
+			return runtime.settings.setSetting(key, value);
+		},
+		resetSetting(key) {
+			live();
+			return runtime.settings.resetSetting(key);
 		},
 		async close() {
 			if (closed) return;

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider, type FauxResponseStep, fauxToolCall, getSystemMessageText } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import { checkSetup, createNexo, type EngineEvent } from "../src/index.ts";
+import { checkSetup, createNexo, type EngineEvent, SETTING_GROUPS } from "../src/index.ts";
 
 const config = {
 	models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "fast" } },
@@ -180,6 +180,24 @@ describe("web search", () => {
 			expect(outcome.results[0]).toMatchObject({ title: "Node 22", snippet: "Node.js 22 released", providers: ["brave"] });
 			expect(JSON.stringify(nexo.keys())).not.toContain(BRAVE_KEY);
 			expect(nexo.removeKey("brave")).toMatchObject({ state: "unset" });
+		} finally {
+			await nexo.close();
+		}
+	});
+
+	it("lists, sets and resets settings with the same groups as the TUI and CLI", async () => {
+		const h = setup([]);
+		const nexo = createNexo({ home: h.home, cwd: h.root, env: h.env, models: h.models });
+		try {
+			const views = nexo.settings();
+			const order = SETTING_GROUPS.map((g) => g.id);
+			const positions = views.map((v) => order.indexOf(v.group));
+			expect(positions.every((p) => p >= 0)).toBe(true);
+			expect(positions).toEqual([...positions].sort((a, b) => a - b));
+			expect(nexo.setSetting("budgets.perRunUsd", 0.75)).toMatchObject({ value: 0.75, source: "user", group: "budgets" });
+			expect(nexo.getSetting("budgets.perRunUsd").value).toBe(0.75);
+			expect(nexo.resetSetting("budgets.perRunUsd").source).toBe("default");
+			expect(() => nexo.setSetting("budgets.nope", 1)).toThrow();
 		} finally {
 			await nexo.close();
 		}

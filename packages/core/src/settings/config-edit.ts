@@ -24,6 +24,36 @@ export interface SettingDefinition {
 	label: string;
 	description: string;
 	type: SettingType;
+	/** Section the setting is listed under in the settings screen and `nexo settings list`. */
+	group: SettingGroupId;
+}
+
+export type SettingGroupId = "models" | "budgets" | "tools" | "runs" | "memory" | "scoring" | "optimize";
+
+/** Setting groups in display order. */
+export const SETTING_GROUPS: readonly { id: SettingGroupId; label: string }[] = [
+	{ id: "models", label: "Models" },
+	{ id: "budgets", label: "Budgets" },
+	{ id: "tools", label: "Tools & permissions" },
+	{ id: "runs", label: "Runs & sessions" },
+	{ id: "memory", label: "Memory & learning" },
+	{ id: "scoring", label: "Scoring" },
+	{ id: "optimize", label: "Optimization" },
+];
+
+export function settingGroupLabel(id: SettingGroupId): string {
+	return SETTING_GROUPS.find((g) => g.id === id)?.label ?? id;
+}
+
+function groupOf(key: string): SettingGroupId {
+	if (key === "budgets.optimDefaultUsd" || key.startsWith("optimize.")) return "optimize";
+	if (key === "models.judge" || key.startsWith("scoring.")) return "scoring";
+	if (key.startsWith("models.")) return "models";
+	if (key.startsWith("budgets.")) return "budgets";
+	if (key.startsWith("tools.")) return "tools";
+	if (key.startsWith("memory.") || key.startsWith("learning.")) return "memory";
+	if (key.startsWith("session.") || key.startsWith("loop.") || key.startsWith("spawn.")) return "runs";
+	throw new Error(`No settings group for ${key}`);
 }
 
 /** Where the effective value comes from; `unset` means no layer defines it. */
@@ -65,8 +95,7 @@ const POLICY_DESCRIPTIONS: Record<string, string> = {
 	spawn: "start subagents",
 };
 
-/** Every setting the settings screen and `nexo settings` can edit, in display order. */
-export const EDITABLE_SETTINGS: readonly SettingDefinition[] = [
+const SETTING_LIST: readonly Omit<SettingDefinition, "group">[] = [
 	{ key: "models.s1", label: "Model s1", description: "Default model for most work (provider/model-id)", type: { kind: "model" } },
 	{ key: "models.s2", label: "Model s2", description: "Stronger model the router escalates to (provider/model-id)", type: { kind: "model" } },
 	{ key: "models.s1.effort", label: "Effort s1", description: "Default reasoning effort for s1", type: { kind: "enum", values: EFFORTS } },
@@ -88,7 +117,7 @@ export const EDITABLE_SETTINGS: readonly SettingDefinition[] = [
 		type: USD,
 	},
 	...Object.keys(DEFAULT_CONFIG.tools.policy).map(
-		(tool): SettingDefinition => ({
+		(tool): Omit<SettingDefinition, "group"> => ({
 			key: `tools.policy.${tool}`,
 			label: `Policy ${tool}`,
 			description: `Whether the agent may ${POLICY_DESCRIPTIONS[tool] ?? `use the ${tool} tool`}: allow, ask first, or deny`,
@@ -220,6 +249,12 @@ export const EDITABLE_SETTINGS: readonly SettingDefinition[] = [
 		type: { kind: "number", integer: false, min: 0, max: 10 },
 	},
 ];
+
+/** Every setting the settings screen and `nexo settings` can edit: group by group (SETTING_GROUPS), listed order within a group. */
+export const EDITABLE_SETTINGS: readonly SettingDefinition[] = (() => {
+	const grouped = SETTING_LIST.map((def): SettingDefinition => ({ ...def, group: groupOf(def.key) }));
+	return SETTING_GROUPS.flatMap((g) => grouped.filter((def) => def.group === g.id));
+})();
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);

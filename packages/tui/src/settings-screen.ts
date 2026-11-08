@@ -1,5 +1,5 @@
 import { type Component, Input, type SelectItem, truncateToWidth } from "@earendil-works/pi-tui";
-import { type KeyStatus, keyStatusLabel, ON_OFF, type SettingView, type Settings } from "@nexo/core";
+import { type KeyStatus, keyStatusLabel, ON_OFF, SETTING_GROUPS, type SettingView, type Settings } from "@nexo/core";
 import { toErrorPayload } from "@nexo/telemetry";
 import { isSearchProvider, SEARCH_PROVIDERS } from "@nexo/tools";
 import { fitLines, MaskedInput } from "./components.ts";
@@ -11,6 +11,8 @@ export type SettingsScreenMode = "settings" | "setup";
 
 const RESET = "\u0000reset";
 const BACK = "\u0000back";
+/** Value prefix of a group heading row in the menu; picking one does nothing. */
+const GROUP = "\u0000group:";
 
 /** A single-line text entry (plain or masked). */
 class EntryView implements View {
@@ -126,7 +128,14 @@ export class SettingsScreen implements Component {
 				description: escapeControl(keyStatusLabel(k)),
 			})),
 			{ value: "browser:add", label: "Add browser profile", description: "store a Chrome profile token from the Playwright Extension for the browser skill" },
-			...views.map((v) => ({ value: `set:${v.key}`, label: escapeControl(v.label), description: settingDescription(v) })),
+			...SETTING_GROUPS.flatMap((group) => {
+				const inGroup = views.filter((v) => v.group === group.id);
+				if (inGroup.length === 0) return [];
+				return [
+					{ value: `${GROUP}${group.id}`, label: style.bold(`── ${group.label}`), description: "" },
+					...inGroup.map((v) => ({ value: `set:${v.key}`, label: escapeControl(v.label), description: settingDescription(v) })),
+				];
+			}),
 		];
 		return new PickerView({
 			title: "Settings",
@@ -135,6 +144,7 @@ export class SettingsScreen implements Component {
 			hint: "type to filter · ↑↓ move · enter edit · esc close",
 			onPick: (value) => {
 				this.status = null;
+				if (value.startsWith(GROUP)) return;
 				if (value === "browser:add") this.show(this.browserProfileView(() => this.backToMenu(), () => this.backToMenu()));
 				else if (value.startsWith("key:")) this.show(this.keyActionsView(value.slice(4)));
 				else this.editSetting(value.slice(4));

@@ -34,6 +34,21 @@ describe("settings screen", () => {
 		await h.done;
 	});
 
+	it("shows settings under group headings in SETTING_GROUPS order", async () => {
+		const h = await startHarness({ userConfig: { ...FAUX_ROLES } });
+		await openSettings(h);
+		await until(() => {
+			const out = h.terminal.output();
+			expect(out).toContain("── Models");
+			expect(out).toContain("── Budgets");
+			expect(out.indexOf("── Models")).toBeLessThan(out.indexOf("── Budgets"));
+			expect(out.indexOf("── Budgets")).toBeLessThan(out.indexOf("Budget per run"));
+		});
+		h.terminal.send(KEY.escape);
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
 	it("edits a number setting through the user config and reports invalid input inline", async () => {
 		const h = await startHarness({ userConfig: { ...FAUX_ROLES } });
 		await openSettings(h);
