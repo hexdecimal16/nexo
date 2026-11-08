@@ -275,6 +275,7 @@ describe("config settings", () => {
 			"tools.policy.web_search",
 			"tools.policy.load_skill",
 			"tools.policy.spawn",
+			"tools.policy.ask_user",
 			"tools.webSearch.count",
 			"tools.nonInteractiveAsk",
 			"tools.autoApprove",

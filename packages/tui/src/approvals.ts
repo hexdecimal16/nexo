@@ -1,6 +1,7 @@
 import { type Component, Container, SelectList, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { ApprovalAnswer, ApprovalRequest, Prompter } from "@nexo/tools";
+import type { ApprovalAnswer, ApprovalRequest, Prompter, QuestionAnswer, QuestionRequest } from "@nexo/tools";
 import { fitLines } from "./components.ts";
+import { QuestionBox } from "./questions.ts";
 import { escapeControl } from "./text.ts";
 import { selectListTheme, style } from "./theme.ts";
 
@@ -96,10 +97,34 @@ export function createApprovalPrompter(host: ApprovalHost, options: ApprovalProm
 			list.onCancel = () => finish("deny");
 		});
 
+	const askQuestions = (request: QuestionRequest, signal: AbortSignal | undefined): Promise<QuestionAnswer | null> =>
+		new Promise<QuestionAnswer | null>((resolve) => {
+			if (signal?.aborted) return resolve(null);
+			let settled = false;
+			let hide = () => {};
+			const finish = (answer: QuestionAnswer | null) => {
+				if (settled) return;
+				settled = true;
+				signal?.removeEventListener("abort", onAbort);
+				hide();
+				resolve(answer);
+			};
+			const onAbort = () => finish(null);
+			const box = new QuestionBox(request, finish, { guardUntil: now() + guardMs, now, clean: (text) => escapeControl(redact(text)) });
+			hide = host.show(box);
+			signal?.addEventListener("abort", onAbort, { once: true });
+		});
+
 	return {
 		interactive: true,
 		approve(request, signal) {
 			const next = queue.then(() => ask(request, signal));
+			queue = next.catch(() => undefined);
+			return next;
+		},
+		// Shares the approval queue, so a question box and an approval box never overlap.
+		ask(request, signal) {
+			const next = queue.then(() => askQuestions(request, signal));
 			queue = next.catch(() => undefined);
 			return next;
 		},

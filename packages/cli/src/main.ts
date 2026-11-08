@@ -1,6 +1,7 @@
 import { parseArgs } from "node:util";
 import { judgeFamilyWarnings, type RunResult } from "@nexo/core";
 import { EFFORTS, type Effort } from "@nexo/router";
+import { parseSkillInvocation } from "@nexo/skills";
 import { type CostReport, costReport, ensureNexoDirs, openDb, reindex, resolveNexoPaths } from "@nexo/store";
 import { NexoError, toErrorPayload } from "@nexo/telemetry";
 import { nonInteractivePrompter, type Prompter } from "@nexo/tools";
@@ -139,12 +140,14 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 	});
 
 	for (const warning of judgeFamilyWarnings(runtime.config)) io.stderr.write(`warning: ${escapeControl(warning)}\n`);
+	// `nexo run "/impeccable init"` reads like `nexo run --skill impeccable init`, matching the TUI and SDK sessions.
+	const invoked = values.skill ? null : parseSkillInvocation(instruction, runtime.skills.skills.keys());
 	let result: Awaited<ReturnType<typeof runtime.engine.run>>;
 	try {
 		result = await runtime.engine.run(
 			{
-				instruction,
-				skill: values.skill,
+				instruction: invoked?.instruction ?? instruction,
+				skill: values.skill ?? invoked?.skill,
 				model: values.model,
 				effort: values.effort as Effort | undefined,
 				workspace: values.workspace,

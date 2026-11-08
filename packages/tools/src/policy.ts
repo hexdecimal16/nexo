@@ -29,9 +29,45 @@ export interface ApprovalRequest {
 	settled?: () => boolean;
 }
 
+export interface QuestionOption {
+	label: string;
+	description?: string;
+}
+
+export interface Question {
+	question: string;
+	/** Short tag shown above the question. */
+	header?: string;
+	/** 2-4 choices; front ends also offer a typed answer. */
+	options: QuestionOption[];
+	multiSelect?: boolean;
+}
+
+/** An `ask_user` call: 1-4 questions answered together. Text comes from the model and is not yet escaped or redacted. */
+export interface QuestionRequest {
+	questions: Question[];
+}
+
+export interface QuestionAnswerItem {
+	question: string;
+	/** Labels of the picked options, in option order. */
+	selected: string[];
+	/** The user's own typed answer, when they gave one. */
+	text?: string;
+}
+
+export interface QuestionAnswer {
+	answers: QuestionAnswerItem[];
+}
+
 export interface Prompter {
 	readonly interactive: boolean;
 	approve(request: ApprovalRequest, signal?: AbortSignal): Promise<ApprovalAnswer>;
+	/**
+	 * Answers an `ask_user` call; null when the user declines or the signal aborts. Optional: the engine offers the
+	 * `ask_user` tool only to root runs whose prompter is interactive and implements it.
+	 */
+	ask?(request: QuestionRequest, signal?: AbortSignal): Promise<QuestionAnswer | null>;
 }
 
 export const nonInteractivePrompter: Prompter = { interactive: false, approve: async () => "deny" };

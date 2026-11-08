@@ -287,7 +287,7 @@ export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 	instructions: [],
 	skills: { dirs: ["$NEXO_HOME/skills", "./.nexo/skills"], pins: {} },
 	tools: {
-		policy: { read: "allow", write: "allow", edit: "allow", bash: "ask", web_fetch: "ask", web_search: "allow", load_skill: "allow", spawn: "allow" },
+		policy: { read: "allow", write: "allow", edit: "allow", bash: "ask", web_fetch: "ask", web_search: "allow", load_skill: "allow", spawn: "allow", ask_user: "allow" },
 		rules: [],
 		nonInteractiveAsk: "deny",
 		autoApprove: "off",

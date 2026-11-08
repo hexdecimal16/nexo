@@ -23,6 +23,7 @@ import {
 	upsertSessionRow,
 	type Verdict,
 } from "@nexo/store";
+import { parseSkillInvocation } from "@nexo/skills";
 import { type BashOutcome, runBash, type SessionRule, sameSessionRule } from "@nexo/tools";
 import { createRedactor, type ErrorPayload, NexoError, type Redactor, toErrorPayload } from "@nexo/telemetry";
 import type { NexoConfig } from "../config/schema.ts";
@@ -90,6 +91,8 @@ export interface TurnOptions {
 	signal?: AbortSignal;
 	/** Receives this turn's engine events (subagents included). */
 	onEvent?: (event: EngineEvent) => void;
+	/** Pins a skill for this turn, as `nexo run --skill` does; an unknown name ends the turn with SKILL_NOT_FOUND. */
+	skill?: string;
 }
 
 export interface ShellOptions {
@@ -181,6 +184,11 @@ export class Session {
 		this.env = this.buildEnv(deps);
 		this.learner = new LearnWorker(this.env);
 		this.save();
+	}
+
+	/** The skills a turn can pin with `TurnOptions.skill`, as names and one-line descriptions. */
+	skills(): readonly { name: string; description: string }[] {
+		return [...this.deps.skills.skills.values()].map((s) => ({ name: s.name, description: s.description }));
 	}
 
 	get dirPath(): string {
@@ -375,7 +383,10 @@ export class Session {
 			const limit = runBudgetLimit(this.deps.db, config.budgets, this.env.now(), { run: config.budgets.perTurnShare * this.budgetUsd, session: remaining });
 			const turnIndex = this.state.turns + 1;
 			this.onEvent = options.onEvent;
-			const sent = withShellNotes(this.state.pendingShell ?? [], instruction);
+			// `/impeccable init` pins the skill like `nexo run --skill`, so SDK sessions and the TUI read it the same way.
+			const invoked = options.skill ? null : parseSkillInvocation(instruction, this.deps.skills.skills.keys());
+			const skill = options.skill ?? invoked?.skill;
+			const sent = withShellNotes(this.state.pendingShell ?? [], invoked?.instruction ?? instruction);
 			const workspace = this.state.workspace;
 			const previous = workspace === null ? latestSessionRunWorkspace(this.deps.db, this.id) : undefined;
 			const result = await executeRun(this.env, {
@@ -391,6 +402,7 @@ export class Session {
 					...(this.state.model ? { model: this.state.model } : {}),
 					...(this.continuesOnS2 ? { startOnS2: true } : {}),
 					...(this.effort ? { effort: this.effort } : {}),
+					...(skill ? { skill } : {}),
 					sessionRules: () => this.state.sessionRules ?? [],
 					addSessionRule: (rule) => this.addSessionRule(rule),
 					autoApprove: this.autoApprove,

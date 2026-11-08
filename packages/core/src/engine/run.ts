@@ -59,6 +59,7 @@ import { type ErrorPayload, type Logger, NexoError, type Redactor, toErrorPayloa
 import {
 	type ChangeTracker,
 	builtinToolDescriptions,
+	createAskUserTool,
 	createBuiltinTools,
 	createChangeTracker,
 	createPolicy,
@@ -922,6 +923,9 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			...(deps.fetch ? { fetch: deps.fetch } : {}),
 		});
 		if (webSearchTool) baseTools.push(webSearchTool);
+		// ask_user only where someone can answer: a root run (not a rollout) whose prompter is interactive and implements ask.
+		// Headless, eval and optimize runs never see it, so they cannot block waiting on a person.
+		if (depth === 0 && !rollout && deps.prompter.interactive && deps.prompter.ask) baseTools.push(createAskUserTool({ prompter: deps.prompter }));
 		const toolCtx: RunToolContext = {
 			env,
 			runId,

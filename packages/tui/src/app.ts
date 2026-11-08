@@ -20,7 +20,7 @@ import { type Db, getSessionRow, reviewQueue, type ScoreStatus, sessionNotFound,
 import { type ErrorPayload, toErrorPayload } from "@nexo/telemetry";
 import { describeSessionRule, type Prompter } from "@nexo/tools";
 import { createApprovalPrompter } from "./approvals.ts";
-import { helpText, parseSlashCommand, SLASH_COMMANDS } from "./commands.ts";
+import { helpText, isSkillCommand, parseSlashCommand, SLASH_COMMANDS, skillSlashCommands } from "./commands.ts";
 import { Block, DynamicLine, QueuedList, SafeContainer, SafeMarkdown, SubagentLine, Ticker, ToolLine, ViewMode } from "./components.ts";
 import { createSessionPickerScreen, type SessionChoice } from "./session-picker.ts";
 import { SettingsScreen, type SettingsScreenMode } from "./settings-screen.ts";
@@ -231,7 +231,7 @@ class InteractiveApp {
 				throw error;
 			}
 			this.refreshDefaults();
-			this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider([...SLASH_COMMANDS], this.session.cwd));
+			this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider([...SLASH_COMMANDS, ...skillSlashCommands(this.session.skills())], this.session.cwd));
 			this.renderHeader(this.session);
 			this.showEditor();
 			await this.exitRequested;
@@ -449,7 +449,8 @@ class InteractiveApp {
 		if (!text || !this.session) return;
 		this.editor.addToHistory(text);
 		const command = parseSlashCommand(text);
-		if (command) {
+		// `/<skill> …` is a turn (the session pins the skill), so it queues and runs like any message.
+		if (command && !isSkillCommand(command.name, this.session.skills())) {
 			this.runCommand(command.name, command.args);
 			return;
 		}
@@ -459,7 +460,8 @@ class InteractiveApp {
 		}
 		if (this.running) {
 			// Plain text goes into the running turn at its next step; `!` commands and anything typed during a command wait.
-			const steered = !this.runningShell && !text.startsWith("!") && this.session.steer(text);
+			// A skill command waits for its own turn: steering would drop the skill pin.
+			const steered = !this.runningShell && !text.startsWith("!") && !text.startsWith("/") && this.session.steer(text);
 			this.queued.push({ text, steered });
 			this.say(`queued (${this.queued.length}) · ${steered ? "sent to the agent at its next step" : `sent when the ${this.runningShell ? "command" : "turn"} ends`}`);
 			return;
@@ -729,7 +731,11 @@ class InteractiveApp {
 		try {
 			switch (name) {
 				case "help":
-					this.say(`${helpText()}\n\n${filesLine(session)}`);
+					{
+						const skills = skillSlashCommands(session.skills()).map((c) => `/${c.name}`);
+						const skillLine = skills.length > 0 ? `\n\nskills (/<name> [instruction] runs a turn with that skill): ${skills.join(" ")}` : "";
+						this.say(`${helpText()}${skillLine}\n\n${filesLine(session)}`);
+					}
 					break;
 				case "done":
 					session.review("done");
@@ -928,7 +934,7 @@ class InteractiveApp {
 		this.liveModel = null;
 		this.tools.clear();
 		this.subagents.clear();
-		this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider([...SLASH_COMMANDS], next.cwd));
+		this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider([...SLASH_COMMANDS, ...skillSlashCommands(next.skills())], next.cwd));
 		this.chat.clear();
 		this.renderHeader(next);
 		this.tui.requestRender(true);

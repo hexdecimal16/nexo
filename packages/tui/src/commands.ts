@@ -40,6 +40,22 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
 	{ name: "exit", description: "Leave nexo (the session can be resumed)" },
 ];
 
+/** True when `/name` should start a skill turn: `/skill:<name>` always, `/<name>` unless a built-in command has that name. */
+export function isSkillCommand(name: string, skills: readonly { name: string }[]): boolean {
+	const bare = name.startsWith("skill:") ? name.slice("skill:".length) : name;
+	if (!skills.some((s) => s.name === bare)) return false;
+	return bare !== name || !SLASH_COMMANDS.some((c) => c.name === name);
+}
+
+/** Autocomplete entries for skills; a skill whose name a built-in uses is offered as `/skill:<name>`. */
+export function skillSlashCommands(skills: readonly { name: string; description: string }[]): SlashCommand[] {
+	return skills.map((s) => ({
+		name: SLASH_COMMANDS.some((c) => c.name === s.name) ? `skill:${s.name}` : s.name,
+		description: `skill · ${s.description.split("\n")[0]?.slice(0, 120) ?? ""}`,
+		argumentHint: "[instruction]",
+	}));
+}
+
 export function helpText(): string {
 	const width = Math.max(...SLASH_COMMANDS.map((c) => `/${c.name}${c.argumentHint ? ` ${c.argumentHint}` : ""}`.length));
 	const lines = SLASH_COMMANDS.map((c) => `${`/${c.name}${c.argumentHint ? ` ${c.argumentHint}` : ""}`.padEnd(width)}  ${c.description ?? ""}`);
