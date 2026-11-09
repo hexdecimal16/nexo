@@ -52,6 +52,7 @@ import {
 	titleFrom,
 } from "./transcript.ts";
 import { SessionLock } from "./lock.ts";
+import { expandMentions } from "./mentions.ts";
 import { capShellOutput, withShellNotes } from "./shell.ts";
 
 const EPSILON = 1e-9;
@@ -386,7 +387,7 @@ export class Session {
 			// `/impeccable init` pins the skill like `nexo run --skill`, so SDK sessions and the TUI read it the same way.
 			const invoked = options.skill ? null : parseSkillInvocation(instruction, this.deps.skills.skills.keys());
 			const skill = options.skill ?? invoked?.skill;
-			const sent = withShellNotes(this.state.pendingShell ?? [], invoked?.instruction ?? instruction);
+			const sent = withShellNotes(this.state.pendingShell ?? [], expandMentions(invoked?.instruction ?? instruction, this.state.cwd).text);
 			const workspace = this.state.workspace;
 			const previous = workspace === null ? latestSessionRunWorkspace(this.deps.db, this.id) : undefined;
 			const result = await executeRun(this.env, {

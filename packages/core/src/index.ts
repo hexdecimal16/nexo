@@ -25,6 +25,7 @@ export * from "./providers/models.ts";
 export * from "./scoring/calibration.ts";
 export * from "./scoring/sources.ts";
 export { loadProjectInstructions, type ProjectInstructions } from "./session/project-instructions.ts";
+export { type ExpandedMentions, expandMentions, MENTION_FILE_CHARS } from "./session/mentions.ts";
 export { projectRoot, projectRoots, projectScope } from "./session/project-root.ts";
 export * from "./session/session.ts";
 export * from "./session/transcript.ts";
