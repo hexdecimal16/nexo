@@ -1,13 +1,13 @@
 {
   "name": "@nexo/skills",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "private": true,
   "type": "module",
   "exports": { ".": "./src/index.ts" },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.5.0",
-    "@nexo/router": "0.4.6",
-    "@nexo/telemetry": "0.4.6",
+    "@nexo/router": "0.4.7",
+    "@nexo/telemetry": "0.4.7",
     "typebox": "1.3.27",
     "yaml": "2.9.1"
   }
