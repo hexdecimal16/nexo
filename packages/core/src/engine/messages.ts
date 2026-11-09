@@ -52,7 +52,7 @@ const MAX_CALL_ARGS_CHARS = 2000;
  * Gemini 3 rejects a request whose history holds a function call without that model's own thought signature, and
  * pi-ai drops signatures made by any other model. For a Google target, tool calls made by another provider or model
  * (earlier turns on S1, the part of a run before an escalation, a `/model` switch) are sent as text instead: each call
- * becomes `[tool call <name> <args>]` in its assistant message and its result a user message `[tool result <name>]`.
+ * becomes a parenthesized "history note" in its assistant message and its result a user message. The wording keeps a model from copying it as text instead of making real function calls (Gemini 4 did that with a bracketed `[tool call ...]` form).
  * The target's own calls stay structured and signed. Other targets get `messages` unchanged.
  */
 export function foreignToolCallsAsText(messages: AgentMessage[], target: Pick<Model<Api>, "api" | "provider" | "id">): AgentMessage[] {
@@ -70,14 +70,14 @@ export function foreignToolCallsAsText(messages: AgentMessage[], target: Pick<Mo
 					if (b.type !== "toolCall") return b;
 					rewritten.add(b.id);
 					const args = JSON.stringify(b.arguments ?? {});
-					return { type: "text", text: `[tool call ${b.name} ${args.length > MAX_CALL_ARGS_CHARS ? `${args.slice(0, MAX_CALL_ARGS_CHARS)}…` : args}]` };
+					return { type: "text", text: `(history note: an earlier model already ran the ${b.name} tool with ${args.length > MAX_CALL_ARGS_CHARS ? `${args.slice(0, MAX_CALL_ARGS_CHARS)}…` : args}. This is a record, not a format to copy: to use a tool, make a real function call.)` };
 				}),
 			};
 		}
 		if (m.role === "toolResult" && rewritten.has((m as ToolResultMessage).toolCallId)) {
 			const r = m as ToolResultMessage;
 			const [first, ...rest] = r.content;
-			const head = `[tool result ${r.toolName}${r.isError ? " (error)" : ""}]`;
+			const head = `(history note: output of the earlier ${r.toolName} call${r.isError ? ", which failed" : ""}:)`;
 			const content = first?.type === "text" ? [{ type: "text" as const, text: `${head}\n${first.text}` }, ...rest] : [{ type: "text" as const, text: head }, ...r.content];
 			return { role: "user", content, timestamp: r.timestamp };
 		}

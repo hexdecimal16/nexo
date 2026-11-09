@@ -51,9 +51,9 @@ describe("foreignToolCallsAsText", () => {
 		const out = foreignToolCallsAsText(history, PRO);
 		expect(unsignedCalls(out, PRO)).toEqual([]);
 		expect(out.map((m) => m.role)).toEqual(["user", "assistant", "user", "assistant", "user", "user"]);
-		expect(out[1]).toMatchObject({ role: "assistant", content: [{ type: "text", text: "Looking." }, { type: "text", text: '[tool call bash {"command":"ls"}]' }] });
-		expect(out[2]).toMatchObject({ role: "user", content: [{ type: "text", text: "[tool result bash]\na.txt\nb.txt" }] });
-		expect(out[4]).toMatchObject({ content: [{ type: "text", text: "[tool result read (error)]\nENOENT" }] });
+		expect(out[1]).toMatchObject({ role: "assistant", content: [{ type: "text", text: "Looking." }, { type: "text", text: expect.stringContaining('ran the bash tool with {"command":"ls"}') }] });
+		expect(out[2]).toMatchObject({ role: "user", content: [{ type: "text", text: "(history note: output of the earlier bash call:)\na.txt\nb.txt" }] });
+		expect(out[4]).toMatchObject({ content: [{ type: "text", text: "(history note: output of the earlier read call, which failed:)\nENOENT" }] });
 		expect(history[1]).toMatchObject({ content: [{ type: "text" }, { type: "toolCall" }] });
 	});
 
@@ -86,8 +86,8 @@ describe("foreignToolCallsAsText", () => {
 			PRO,
 		);
 		const callText = (out[0] as AssistantMessage).content[0] as { text: string };
-		expect(callText.text.length).toBeLessThan(2100);
-		expect(callText.text).toMatch(/…\]$/);
-		expect(out[1]).toMatchObject({ role: "user", content: [{ type: "text", text: "[tool result write]\nok" }, { type: "image", mimeType: "image/png" }] });
+		expect(callText.text.length).toBeLessThan(2300);
+		expect(callText.text).toContain("…");
+		expect(out[1]).toMatchObject({ role: "user", content: [{ type: "text", text: "(history note: output of the earlier write call:)\nok" }, { type: "image", mimeType: "image/png" }] });
 	});
 });
