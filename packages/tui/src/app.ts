@@ -60,6 +60,14 @@ export interface InteractiveOptions {
 	now?: () => number;
 	/** How long exit waits for an aborted turn to finish before giving up on it (default 5000 ms). */
 	exitTimeoutMs?: number;
+	/**
+	 * Up-arrow history kept across runs: `recent` (oldest first) seeds the editor when the first session opens, `record`
+	 * saves each submitted prompt and each draft cleared with Esc twice. Without it the history lasts for this process only.
+	 */
+	promptHistory?: {
+		recent: (cwd: string) => readonly string[];
+		record: (entry: { text: string; cwd: string; sessionId: string }) => void;
+	};
 }
 
 const DOUBLE_CTRL_C_MS = 1000;
@@ -173,6 +181,8 @@ class InteractiveApp {
 	private loader: Loader | null = null;
 	private lastCtrlC = Number.NEGATIVE_INFINITY;
 	private lastEscape = Number.NEGATIVE_INFINITY;
+	/** Set after the first failed history write, so a read-only home reports once instead of on every prompt. */
+	private historySaveFailed = false;
 	private defaultModel = "";
 	/** Model and effort of the running turn's root run, from its run_start and escalation events; null between turns. */
 	private liveModel: { model: string; effort: string } | null = null;
@@ -231,6 +241,8 @@ class InteractiveApp {
 				throw error;
 			}
 			this.refreshDefaults();
+			// Only the first session seeds the editor; /resume keeps the history already loaded (see switchTo).
+			this.loadPromptHistory(this.session.cwd);
 			this.editor.setAutocompleteProvider(createAutocompleteProvider([...SLASH_COMMANDS, ...skillSlashCommands(this.session.skills())], this.session.cwd));
 			this.renderHeader(this.session);
 			this.showEditor();
@@ -416,7 +428,8 @@ class InteractiveApp {
 			const text = this.editor.getText();
 			const now = this.now();
 			if (text.trim() !== "" && now - this.lastEscape <= DOUBLE_ESC_MS) {
-				this.editor.addToHistory(text.trim());
+				// Saved to disk too, so a draft cleared by mistake is still recoverable after a restart.
+				this.remember(text.trim());
 				this.editor.setText("");
 				this.lastEscape = Number.NEGATIVE_INFINITY;
 				this.tui.requestRender();
@@ -447,7 +460,8 @@ class InteractiveApp {
 	private onSubmit(raw: string): void {
 		const text = raw.trim();
 		if (!text || !this.session) return;
-		this.editor.addToHistory(text);
+		// Before slash/shell/turn dispatch, so commands and `!` lines are recalled with Up as well as plain messages.
+		this.remember(text);
 		const command = parseSlashCommand(text);
 		// `/<skill> …` is a turn (the session pins the skill), so it queues and runs like any message.
 		if (command && !isSkillCommand(command.name, this.session.skills())) {
@@ -467,6 +481,31 @@ class InteractiveApp {
 			return;
 		}
 		this.dispatch(text);
+	}
+
+	/** Seeds the editor's up-arrow history from earlier runs. A history file that cannot be read is reported, not fatal. */
+	private loadPromptHistory(cwd: string): void {
+		const history = this.options.promptHistory;
+		if (!history) return;
+		try {
+			for (const text of history.recent(cwd)) this.editor.addToHistory(text);
+		} catch (error) {
+			this.sayError(toErrorPayload(error));
+		}
+	}
+
+	/** Adds a prompt to the editor's history and the saved history; a failed save is reported once per process. */
+	private remember(text: string): void {
+		this.editor.addToHistory(text);
+		const session = this.session;
+		if (!this.options.promptHistory || !session) return;
+		try {
+			this.options.promptHistory.record({ text, cwd: session.cwd, sessionId: session.id });
+		} catch (error) {
+			if (this.historySaveFailed) return;
+			this.historySaveFailed = true;
+			this.sayError(toErrorPayload(error));
+		}
 	}
 
 	/** Starts a `!` command or a turn for one message, whether typed just now or taken from the queue. */
@@ -925,6 +964,7 @@ class InteractiveApp {
 			this.tui.requestRender();
 			return;
 		}
+		// The editor's up-arrow history is deliberately not reloaded here: it belongs to the project nexo was started in.
 		this.session = next;
 		this.turnCost = 0;
 		this.lastTurnCost = 0;

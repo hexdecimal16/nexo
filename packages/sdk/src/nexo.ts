@@ -9,6 +9,7 @@ import {
 	type KeyStatus,
 	type NexoConfig,
 	nexoModels,
+	recentPrompts,
 	resumeSession,
 	type RunRequest,
 	type RunResult,
@@ -17,7 +18,7 @@ import {
 	type SessionDeps,
 	type SettingView,
 } from "@nexo/core";
-import { resolveNexoPaths, reviewQueue, type ReviewQueueItem, type ReviewQueueOptions } from "@nexo/store";
+import { type PromptHistoryEntry, resolveNexoPaths, reviewQueue, type ReviewQueueItem, type ReviewQueueOptions } from "@nexo/store";
 import { NexoError } from "@nexo/telemetry";
 import { nonInteractivePrompter, type Prompter, SEARCH_PROVIDER_IDS, type SearchOutcome, type SearchProviderId, webSearch } from "@nexo/tools";
 import { createRuntime } from "./runtime.ts";
@@ -70,6 +71,11 @@ export interface Nexo {
 	resumeSession(id: string): Session;
 	/** Recent runs without a human verdict, worst first (failed, over budget, aborted, low score, unscored). */
 	reviewQueue(options?: ReviewQueueOptions): ReviewQueueItem[];
+	/**
+	 * Prompts typed in interactive `nexo` sessions (the TUI's up-arrow history, also shown by `nexo history`), oldest
+	 * first. By default the last 100 from this instance's project (`cwd`); `all` covers every project.
+	 */
+	promptHistory(options?: { limit?: number; all?: boolean }): PromptHistoryEntry[];
 	/** Read-only setup checks (never prints key values). */
 	doctor(): DoctorReport;
 	/**
@@ -186,6 +192,10 @@ export function createNexo(options: NexoOptions = {}): Nexo {
 		reviewQueue(queueOptions) {
 			live();
 			return reviewQueue(runtime.db, queueOptions);
+		},
+		// Read-only, so it needs no live() check; scoped to this instance's cwd project unless `all` is set.
+		promptHistory(historyOptions = {}) {
+			return recentPrompts(runtime.paths, { cwd, ...historyOptions });
 		},
 		doctor() {
 			return runDoctor({ paths: runtime.paths, settings: runtime.settings, env, cwd });

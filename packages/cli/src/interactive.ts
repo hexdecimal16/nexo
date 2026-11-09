@@ -1,5 +1,5 @@
 import { parseArgs } from "node:util";
-import { createConfiguredMcpHub, createSession, createSettings, listSessions, nexoModels, projectRoots, resumeSession, type SessionDeps } from "@nexo/core";
+import { createConfiguredMcpHub, createSession, createSettings, listSessions, nexoModels, projectRoots, recentPrompts, recordPrompt, resumeSession, type SessionDeps } from "@nexo/core";
 import type { McpHub } from "@nexo/mcp";
 import { EFFORTS, type Effort } from "@nexo/router";
 import { BUNDLED_SKILLS_DIR, loadSkills } from "@nexo/skills";
@@ -154,6 +154,11 @@ export async function interactiveCommand(args: string[], io: CliIO, options: Cli
 				return createSession(deps, { cwd, workspace: parsed.workspace, model: parsed.model, effort: parsed.effort, allowAll: parsed.allowAll });
 			},
 			resumeSession: (id, prompter) => resumeSession(buildDeps(prompter), id),
+			// Up-arrow history shared with `nexo history` and the SDK; entries are redacted before they reach the file.
+			promptHistory: {
+				recent: (dir) => recentPrompts(paths, { cwd: dir }).map((e) => e.text),
+				record: (entry) => recordPrompt(paths, settings.redact, entry),
+			},
 		});
 		await mcp?.close();
 		return finish(options.signal?.aborted && code === 0 ? EXIT_SIGINT : code);

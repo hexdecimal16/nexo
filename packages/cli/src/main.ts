@@ -14,6 +14,7 @@ import { reviewQueueCommand } from "./review-queue.ts";
 import { createTtyLineAsker, isInteractiveTerminal, type LineAsker, promptReview } from "./review.ts";
 import { createRuntime } from "./runtime.ts";
 import { interactiveCommand, settingsScreenCommand } from "./interactive.ts";
+import { historyCommand } from "./history.ts";
 import { sessionsCommand } from "./sessions.ts";
 import { doctorCommand } from "./doctor.ts";
 import { initCommand } from "./init.ts";
@@ -255,6 +256,9 @@ export async function runCli(argv: string[], io: CliIO, options: CliOptions = {}
 				return await updateCommand(io, options);
 			case "sessions":
 				return sessionsCommand(rest, io, options);
+			// Read-only listing of the same file the TUI's Up key uses.
+			case "history":
+				return historyCommand(rest, io, options);
 			case "settings":
 				return rest.length === 0 ? await settingsScreenCommand(io, options, stdio) : await settingsCommand(rest, io, options, stdio);
 			case "ui": {

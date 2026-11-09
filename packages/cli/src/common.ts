@@ -47,6 +47,7 @@ export const USAGE = `Usage:
                                            without --workspace each turn works in its own run folder (files carried over
                                            from the previous turn); --workspace . works in the current folder
   nexo sessions [--limit <n>]
+  nexo history [--limit <n>] [--all]       prompts typed in this project's sessions (the ↑ history); --all for every project
   nexo --version                           print the installed version
   nexo settings                            open the settings screen (needs a terminal)
   nexo settings list                       every editable setting by group, with its value and source

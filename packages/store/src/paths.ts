@@ -13,6 +13,8 @@ export interface NexoPaths {
 	config: string;
 	credentials: string;
 	wikis: string;
+	/** Prompts typed in interactive sessions, for up-arrow recall across runs. */
+	promptHistory: string;
 }
 
 export function resolveNexoPaths(env: NodeJS.ProcessEnv = process.env): NexoPaths {
@@ -28,6 +30,7 @@ export function resolveNexoPaths(env: NodeJS.ProcessEnv = process.env): NexoPath
 		config: join(home, "config.json"),
 		credentials: join(home, "credentials.json"),
 		wikis: join(home, "wikis"),
+		promptHistory: join(home, "history.jsonl"),
 	};
 }
 
