@@ -1,7 +1,6 @@
 import { homedir } from "node:os";
 import { sep } from "node:path";
 import {
-	CombinedAutocompleteProvider,
 	type Component,
 	Container,
 	Editor,
@@ -22,6 +21,7 @@ import { describeSessionRule, type Prompter } from "@nexo/tools";
 import { createApprovalPrompter } from "./approvals.ts";
 import { helpText, isSkillCommand, parseSlashCommand, SLASH_COMMANDS, skillSlashCommands } from "./commands.ts";
 import { Block, DynamicLine, QueuedList, SafeContainer, SafeMarkdown, SubagentLine, Ticker, ToolLine, ViewMode } from "./components.ts";
+import { createAutocompleteProvider } from "./file-autocomplete.ts";
 import { createSessionPickerScreen, type SessionChoice } from "./session-picker.ts";
 import { SettingsScreen, type SettingsScreenMode } from "./settings-screen.ts";
 import { escapeControl, escapeControlKeepLines, formatError, oneLine, toolSummary, usd } from "./text.ts";
@@ -231,7 +231,7 @@ class InteractiveApp {
 				throw error;
 			}
 			this.refreshDefaults();
-			this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider([...SLASH_COMMANDS, ...skillSlashCommands(this.session.skills())], this.session.cwd));
+			this.editor.setAutocompleteProvider(createAutocompleteProvider([...SLASH_COMMANDS, ...skillSlashCommands(this.session.skills())], this.session.cwd));
 			this.renderHeader(this.session);
 			this.showEditor();
 			await this.exitRequested;
@@ -934,7 +934,7 @@ class InteractiveApp {
 		this.liveModel = null;
 		this.tools.clear();
 		this.subagents.clear();
-		this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider([...SLASH_COMMANDS, ...skillSlashCommands(next.skills())], next.cwd));
+		this.editor.setAutocompleteProvider(createAutocompleteProvider([...SLASH_COMMANDS, ...skillSlashCommands(next.skills())], next.cwd));
 		this.chat.clear();
 		this.renderHeader(next);
 		this.tui.requestRender(true);
