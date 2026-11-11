@@ -3,7 +3,6 @@ import {
 	type Api,
 	type AssistantMessage,
 	isContextOverflow,
-	isRetryableAssistantError,
 	type Message,
 	type Model,
 	type Models,
@@ -80,7 +79,7 @@ import { type BudgetLimit, budgetExhaustedError, checkAdmission, recordSpend, ru
 import { budgetLine, RunBudget } from "../cost/budget.ts";
 import { estimateCallCostUsd, priceUsage } from "../cost/pricing.ts";
 import { clearOldToolResults } from "./context-trim.ts";
-import { classifyProviderError, contextOverflowError, providerRetryDelayMs, toolErrorText, withToolErrorCodes } from "./errors.ts";
+import { classifyProviderError, contextOverflowError, isRetryableProviderMessage, providerRetryDelayMs, toolErrorText, withToolErrorCodes, withinRetryLimits } from "./errors.ts";
 import { assistantText, contentText, estimatePromptChars, foreignToolCallsAsText, lastAssistant, recordedContent, withBudgetLine } from "./messages.ts";
 import { DEFAULT_PLANNER_PROMPT, DEFAULT_SYSTEM_PROMPT, renderSystemPrompt } from "./prompts.ts";
 import { loadProjectInstructions } from "../session/project-instructions.ts";
@@ -1342,18 +1341,22 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			await runAgent.prompt(text);
 			// Retries are counted per streak of consecutive failures: a successful call since the last retry starts over.
 			let attempt = 0;
+			let waitedMs = 0;
 			let succeededCalls = completedCalls;
 			for (;;) {
 				const last = lastAssistant(runAgent.state.messages);
-				if (!last || last.stopReason !== "error" || isContextOverflow(last) || !isRetryableAssistantError(last)) break;
+				if (!last || last.stopReason !== "error" || isContextOverflow(last) || !isRetryableProviderMessage(last)) break;
 				if (completedCalls !== succeededCalls) {
 					attempt = 0;
+					waitedMs = 0;
 					succeededCalls = completedCalls;
 				}
 				attempt++;
 				const providerCfg = config.providers[active.model.provider] ?? {};
-				if (attempt > (providerCfg.maxRetries ?? 3) || input.signal?.aborted || budgetExceeded) break;
+				if (input.signal?.aborted || budgetExceeded) break;
 				const delay = providerRetryDelayMs(attempt, last.errorMessage ?? "", providerCfg);
+				if (!withinRetryLimits(attempt, waitedMs + delay, providerCfg)) break;
+				waitedMs += delay;
 				logger.warn("retrying provider error", { attempt, delay_ms: Math.round(delay), error_message: last.errorMessage });
 				await env.sleep(delay, input.signal);
 				runAgent.state.messages = runAgent.state.messages.slice(0, -1);

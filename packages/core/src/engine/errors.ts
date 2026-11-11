@@ -1,4 +1,5 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { type AssistantMessage, isRetryableAssistantError } from "@earendil-works/pi-ai";
 import { NexoError } from "@nexo/telemetry";
 
 /** Maps a provider error message (pi encodes failures as text) to a NexoError code and hint. */
@@ -41,6 +42,32 @@ export function retryAfterMs(errorMessage: string): number | undefined {
 }
 
 const RATE_LIMIT_MAX_DELAY_MS = 60_000;
+/** The longest single backoff for a non-rate-limit error before jitter. */
+const RETRY_MAX_DELAY_MS = 60_000;
+/** Backoff time a streak of consecutive provider failures may spend before the call gives up, when maxRetries is unset. */
+export const DEFAULT_RETRY_WINDOW_MS = 30 * 60_000;
+/** A hard cap on retries within the window, so zero-delay configs (tests) cannot loop forever. */
+const MAX_RETRY_ATTEMPTS = 200;
+
+// Transient failures pi's classifier does not know: Kiro's capacity message and the kiro-p idle stall.
+const EXTRA_TRANSIENT = /high traffic|try again|no output for \d+\s*s/i;
+const NOT_TRANSIENT = /quota|billing|usage limit/i;
+
+/** Whether a failed model call is worth retrying: pi's transient patterns plus the kiro-cli ones above. */
+export function isRetryableProviderMessage(message: AssistantMessage): boolean {
+	if (message.stopReason !== "error" || !message.errorMessage) return false;
+	if (isRetryableAssistantError(message)) return true;
+	return EXTRA_TRANSIENT.test(message.errorMessage) && !NOT_TRANSIENT.test(message.errorMessage);
+}
+
+/**
+ * Whether retry `attempt` (1-based, per failure streak) may run after `waitedMs` of backoff including its own delay.
+ * An explicit `maxRetries` is a plain count; otherwise retries continue until `retryWindowMs` (default 30 min) of backoff.
+ */
+export function withinRetryLimits(attempt: number, waitedMs: number, cfg: { maxRetries?: number; retryWindowMs?: number }): boolean {
+	if (cfg.maxRetries !== undefined) return attempt <= cfg.maxRetries;
+	return attempt <= MAX_RETRY_ATTEMPTS && waitedMs <= (cfg.retryWindowMs ?? DEFAULT_RETRY_WINDOW_MS);
+}
 
 /**
  * Backoff before retry `attempt` (1-based, counted per streak of consecutive failures) of a retryable provider error.
@@ -59,9 +86,9 @@ export function providerRetryDelayMs(
 	return Math.max(Math.round(base * (0.8 + 0.4 * random())), retryAfterMs(errorMessage) ?? 0);
 }
 
-/** Backoff before retry `attempt` (1-based) of a retryable provider error: full jitter on an exponential base, at least the provider's retry-after. */
+/** Backoff before retry `attempt` (1-based) of a retryable provider error: full jitter on an exponential base capped at a minute, at least the provider's retry-after. */
 export function retryDelayMs(attempt: number, baseDelayMs: number, errorMessage: string, random: () => number = Math.random): number {
-	return Math.max(random() * baseDelayMs * 2 ** (attempt - 1), retryAfterMs(errorMessage) ?? 0);
+	return Math.max(random() * Math.min(RETRY_MAX_DELAY_MS, baseDelayMs * 2 ** (attempt - 1)), retryAfterMs(errorMessage) ?? 0);
 }
 
 /** The text the model sees for a failed tool call: code, retryability, message and hint. */
