@@ -1,21 +1,21 @@
 {
   "name": "@nexo/cli",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "private": true,
   "type": "module",
   "bin": { "nexo": "./src/bin.ts" },
   "exports": { ".": "./src/main.ts" },
   "dependencies": {
     "@earendil-works/pi-ai": "1.5.0",
-    "@nexo/core": "0.4.7",
-    "@nexo/optimize": "0.4.7",
-    "@nexo/router": "0.4.7",
-    "@nexo/sdk": "0.4.7",
-    "@nexo/skills": "0.4.7",
-    "@nexo/store": "0.4.7",
-    "@nexo/telemetry": "0.4.7",
-    "@nexo/tools": "0.4.7",
-    "@nexo/tui": "0.4.7",
-    "@nexo/web": "0.4.7"
+    "@nexo/core": "0.4.8",
+    "@nexo/optimize": "0.4.8",
+    "@nexo/router": "0.4.8",
+    "@nexo/sdk": "0.4.8",
+    "@nexo/skills": "0.4.8",
+    "@nexo/store": "0.4.8",
+    "@nexo/telemetry": "0.4.8",
+    "@nexo/tools": "0.4.8",
+    "@nexo/tui": "0.4.8",
+    "@nexo/web": "0.4.8"
   }
 }
