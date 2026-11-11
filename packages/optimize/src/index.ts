@@ -1,5 +1,4 @@
 export * from "./engine.ts";
-export * from "./merge.ts";
 export * from "./novelty.ts";
 export * from "./pareto.ts";
 export * from "./proposer.ts";

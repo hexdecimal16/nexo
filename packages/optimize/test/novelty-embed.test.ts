@@ -50,7 +50,6 @@ async function run(embed: GepaAdapter["embed"] | undefined) {
 		feedback: ids("f", 3),
 		pareto: ids("p", 2),
 		patience: 1,
-		merge: false,
 		rng: mulberry32(1),
 		signal: new AbortController().signal,
 	});

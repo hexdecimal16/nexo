@@ -139,8 +139,6 @@ describe("report", () => {
 			spentUsd: 1.2,
 			rollouts: 30,
 			iterations: 6,
-			merges: 0,
-			mergeNote: null,
 			createdAt: "t",
 		});
 		expect(report.improved).toBe(true);

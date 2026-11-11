@@ -3,12 +3,8 @@ import { parseOptimTarget } from "@nexo/store";
 import {
 	bestCandidate,
 	caseDominates,
-	commonAncestor,
 	contentOf,
-	findMerge,
-	type LineageNode,
 	meanOf,
-	mergeTexts,
 	mulberry32,
 	paretoMembers,
 	pickWeighted,
@@ -112,41 +108,5 @@ describe("pareto", () => {
 		expect(bestCandidate(table, CASES)).toBe("cheaper");
 		expect(meanOf(table.get("old") ?? {}, CASES).quality).toBeCloseTo(2 / 3);
 		expect(meanOf({}, [])).toEqual({ quality: 0, costUsd: 0 });
-	});
-});
-
-describe("merge", () => {
-	const nodes = new Map<string, LineageNode>([
-		["seed", { id: "seed", parentIds: [] }],
-		["a", { id: "a", parentIds: ["seed"] }],
-		["b", { id: "b", parentIds: ["seed"] }],
-		["a2", { id: "a2", parentIds: ["a"] }],
-	]);
-
-	it("finds the latest common ancestor and merges disjoint component changes", () => {
-		expect(commonAncestor("a2", "b", nodes)).toBe("seed");
-		expect(commonAncestor("a", "a2", nodes)).toBe("seed");
-		expect(commonAncestor("seed", "a", nodes)).toBeNull();
-		expect(mergeTexts({ x: "1", y: "1" }, { x: "2", y: "1" }, { x: "1", y: "3" })).toEqual({ x: "2", y: "3" });
-		expect(mergeTexts({ x: "1", y: "1" }, { x: "2", y: "1" }, { x: "3", y: "1" })).toBeNull();
-		expect(mergeTexts({ x: "1", y: "1" }, { x: "2", y: "1" }, { x: "1", y: "1" })).toBeNull();
-	});
-
-	it("never merges single-component candidates or an ancestor with its descendant", () => {
-		const texts = new Map([
-			["seed", { body: "s" }],
-			["a", { body: "a" }],
-			["b", { body: "b" }],
-			["a2", { body: "a2" }],
-		]);
-		expect(findMerge(["a", "b", "a2"], nodes, texts, new Set())).toBeNull();
-		const two = new Map([
-			["seed", { x: "1", y: "1" }],
-			["a", { x: "2", y: "1" }],
-			["b", { x: "1", y: "3" }],
-			["a2", { x: "4", y: "1" }],
-		]);
-		expect(findMerge(["a", "a2", "b"], nodes, two, new Set())).toEqual({ a: "a", b: "b", ancestor: "seed", texts: { x: "2", y: "3" } });
-		expect(findMerge(["a", "a2", "b"], nodes, two, new Set(["a|b"]))).toEqual({ a: "a2", b: "b", ancestor: "seed", texts: { x: "4", y: "3" } });
 	});
 });

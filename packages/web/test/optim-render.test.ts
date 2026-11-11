@@ -83,8 +83,6 @@ const report: OptimReport = {
 	spentUsd: 0.4,
 	rollouts: 30,
 	iterations: 6,
-	merges: 0,
-	mergeNote: "skill:ci-fix has one component, so no merge is possible",
 	createdAt: "2026-10-12T00:10:00.000Z",
 };
 
@@ -110,7 +108,6 @@ describe("optimization view", () => {
 		expect(markup).toContain('<span class="diff-add">+ Then');
 		expect(markup).toContain('<span class="diff-del">- Stop.</span>');
 		expect(markup).toContain("0.200 → 0.800");
-		expect(markup).toContain("one component, so no merge is possible");
 		expect(markup).toContain("<strong>judge only</strong>");
 		expectInert(markup);
 		expect(renderOptimDetail(detail(), true).value).not.toContain("data-approve");

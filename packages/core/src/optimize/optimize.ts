@@ -70,7 +70,6 @@ export interface OptimizeOptions {
 	budgetUsd?: number;
 	/** Most rollouts (agent runs and judge-rubric judgements); unlimited when absent. */
 	maxRollouts?: number;
-	merge?: boolean;
 	/** Seed of the candidate-selection RNG; random when absent. */
 	seed?: number;
 	signal?: AbortSignal;
@@ -245,7 +244,7 @@ export async function startOptimization(baseEnv: EngineEnv, options: OptimizeOpt
 		budgetRollouts: options.maxRollouts ?? null,
 		spentUsd: 0,
 		rollouts: 0,
-		merge: options.merge ?? false,
+		merge: false,
 		seed,
 		baseArtifactId: base.id,
 		bestArtifactId: null,
@@ -339,7 +338,6 @@ export async function startOptimization(baseEnv: EngineEnv, options: OptimizeOpt
 			noveltySimilarity: config.optimize.noveltySimilarity,
 			...(seededPad ? { scratchpad: seededPad } : {}),
 			offspringAlpha: config.optimize.offspringAlpha,
-			merge: options.merge ?? false,
 			rng: mulberry32(seed),
 			signal,
 			callbacks: {
@@ -427,8 +425,6 @@ export async function startOptimization(baseEnv: EngineEnv, options: OptimizeOpt
 			spentUsd: ctx.budget.spentUsd,
 			rollouts: ctx.rollouts,
 			iterations: result.iterations,
-			merges: result.merges,
-			mergeNote: options.merge && result.merges === 0 && components.length === 1 ? `${target.key} has one component, so no merge is possible` : null,
 			createdAt: nowIso(),
 		});
 		writeFileSync(join(optimizer.runDir.root, "report.json"), `${JSON.stringify(redact(report), null, 2)}\n`);

@@ -353,8 +353,6 @@ export async function startClimb(baseEnv: EngineEnv, options: ClimbOptions): Pro
 				spentUsd: ctx.budget.spentUsd,
 				rollouts: ctx.rollouts,
 				iterations: childArtifactId ? 1 : 0,
-				merges: 0,
-				mergeNote: null,
 				createdAt: nowIso(),
 			}),
 			climb,

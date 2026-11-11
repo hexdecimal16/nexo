@@ -8,7 +8,6 @@ import {
 	type GepaAdapter,
 	type GepaCallbacks,
 	type GepaEvent,
-	MAX_MERGES,
 	MINIBATCH_SIZE,
 	mulberry32,
 	runGepa,
@@ -97,7 +96,7 @@ function seed(texts: ComponentTexts): { seed: CandidateRef; seedPareto: Record<s
 }
 
 const run = (h: Harness, texts: ComponentTexts, extra: Partial<Parameters<typeof runGepa>[0]> = {}) =>
-	runGepa({ adapter: h.adapter, callbacks: h.callbacks, ...seed(texts), components: Object.keys(texts), feedback: FEEDBACK, pareto: PARETO, patience: 2, merge: false, rng: mulberry32(1), signal: new AbortController().signal, ...extra });
+	runGepa({ adapter: h.adapter, callbacks: h.callbacks, ...seed(texts), components: Object.keys(texts), feedback: FEEDBACK, pareto: PARETO, patience: 2, rng: mulberry32(1), signal: new AbortController().signal, ...extra });
 
 describe("runGepa", () => {
 	it("accepts an improving child, evaluates it on the whole pareto split and makes it the best", async () => {
@@ -172,24 +171,6 @@ describe("runGepa", () => {
 		};
 		const result = await run(h, { body: "v1" }, { signal: controller.signal });
 		expect(result.stopReason).toBe("aborted");
-	});
-
-	it("merges two front members that changed different components, at most MAX_MERGES times", async () => {
-		const proposals: ComponentTexts[] = [];
-		for (let i = 0; i < 40; i++) proposals.push(i % 2 === 0 ? { a: `v${2 + i}` } : { b: `v${2 + i}` });
-		const h = harness(proposals, { stopBefore: (x) => (x.components.length >= 30 ? "budget_rollouts" : null) });
-		const result = await run(h, { a: "v1", b: "v1" }, { merge: true, patience: 100 });
-		const merges = h.created.filter((c) => c.origin === "merge");
-		expect(merges.length).toBeGreaterThan(0);
-		expect(merges.length).toBeLessThanOrEqual(MAX_MERGES);
-		expect(result.merges).toBe(merges.length);
-		expect(merges[0]?.parentIds).toHaveLength(2);
-	});
-
-	it("never merges single-component candidates", async () => {
-		const h = harness([{ body: "v2" }, { body: "v3" }, { body: "v4" }]);
-		const result = await run(h, { body: "v1" }, { merge: true, patience: 5 });
-		expect(result.merges).toBe(0);
 	});
 
 	it("throws when the adapter returns a different number of scores than cases, on the minibatch and on the pareto split", async () => {

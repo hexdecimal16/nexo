@@ -46,7 +46,7 @@ ${h.wins} win${h.wins === 1 ? "" : "s"}, ${h.losses} loss${h.losses === 1 ? "" :
 ${report.improved ? "" : html`<span class="muted">No candidate beat the starting version.</span>`}</p>
 <table class="runs holdout"><thead><tr><th>Case</th><th>Before</th><th>After</th><th>Outcome</th></tr></thead>
 <tbody>${h.cases.map((c) => html`<tr><td>${truncate(c.input, 120)}</td><td>${scoreCell(c.before)}</td><td>${scoreCell(c.after)}</td><td><span class="badge outcome-${c.outcome}">${c.outcome}</span></td></tr>`)}</tbody></table>
-<p class="muted">Stopped by ${report.stopReason} after ${report.iterations} iteration${report.iterations === 1 ? "" : "s"} and ${report.rollouts} rollouts (${formatUsd(report.spentUsd)}); ${report.merges} merge${report.merges === 1 ? "" : "s"}${report.mergeNote ? ` (${report.mergeNote})` : ""}.</p>`;
+<p class="muted">Stopped by ${report.stopReason} after ${report.iterations} iteration${report.iterations === 1 ? "" : "s"} and ${report.rollouts} rollouts (${formatUsd(report.spentUsd)}).</p>`;
 }
 
 /** The base → best text diff, one line per row. */

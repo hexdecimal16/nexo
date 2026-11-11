@@ -34,7 +34,6 @@ describe("scratchpad seed", () => {
 			feedback: cases("f", 3),
 			pareto: cases("p", 1),
 			patience: 1,
-			merge: false,
 			rng: mulberry32(1),
 			signal: new AbortController().signal,
 			scratchpad: given,

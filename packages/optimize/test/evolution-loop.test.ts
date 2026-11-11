@@ -60,7 +60,6 @@ async function run(proposals: (ComponentTexts | null)[], notes: (ProposalNotes |
 		feedback: cases("f", 3),
 		pareto: cases("p", 2),
 		patience,
-		merge: false,
 		rng: mulberry32(1),
 		signal: new AbortController().signal,
 	});

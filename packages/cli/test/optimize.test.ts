@@ -164,7 +164,7 @@ function climbReportFixture(): OptimReport {
 		optimRunId: "01OPTIM", target: "skill:ci-fix", baseArtifactId: "01BASE", bestArtifactId: "01BASE", improved: true,
 		holdout: { cases: [], before: score, after: score, wins: 0, losses: 0, ties: 0 }, diff: [], lineage: [],
 		evidence: { humanScored: false, judgeOnly: true, judgeKey: null, kappa: null } as OptimReport["evidence"],
-		stopReason: "completed", spentUsd: 0.5, rollouts: 4, iterations: 3, merges: 0, mergeNote: null,
+		stopReason: "completed", spentUsd: 0.5, rollouts: 4, iterations: 3,
 		climb: { caseId: "01CASE", guardIds: ["01G"], outcome: "improved", critique: "Run the tests\u001b[31m", comparisons: [{ label: "golden", winner: "B", votes: [] }, { label: "verify", winner: "A", votes: [] }, { label: "guard 01G", winner: "tie", votes: [] }] },
 		createdAt: "2026-10-16T00:00:00.000Z",
 	};

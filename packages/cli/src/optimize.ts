@@ -57,7 +57,7 @@ export function reportLines(db: Db, run: OptimRunRow, report: OptimReport | null
 	const h = report.holdout;
 	lines.push(`  holdout (${h.cases.length} cases): quality ${q(h.before.quality)} → ${q(h.after.quality)}, cost ${usd(h.before.costUsd)} → ${usd(h.after.costUsd)} per case; ${h.wins} wins, ${h.losses} losses, ${h.ties} ties`);
 	for (const c of h.cases) lines.push(`    ${c.outcome.padEnd(4)} ${q(c.before.quality)} → ${q(c.after.quality)}  ${escapeControl(c.input.replace(/\s+/g, " ").slice(0, 80))}`);
-	if (!report.climb) lines.push(`  ${report.iterations} iterations, ${report.lineage.length - 1} candidates, ${report.merges} merges${report.mergeNote ? ` (${escapeControl(report.mergeNote)})` : ""}`);
+	if (!report.climb) lines.push(`  ${report.iterations} iterations, ${report.lineage.length - 1} candidates`);
 	const e = report.evidence;
 	lines.push(
 		e.humanScored
@@ -104,8 +104,6 @@ export function optimizeEventLine(event: OptimizeEvent): string | null {
 			return `    minibatch ${q(event.parentQuality)} → ${q(event.childQuality)} ${event.accepted ? "✓ accepted" : "✗ not better"}${event.prediction ? ` · predicted fixes ${event.prediction.fixesHit}/${event.prediction.fixesPredicted}, risks ${event.prediction.atRiskHit}/${event.prediction.atRiskPredicted}${event.prediction.unpredictedRegressions > 0 ? `, ${event.prediction.unpredictedRegressions} unpredicted` : ""}` : ""}`;
 		case "pareto":
 			return `    pareto mean ${q(event.meanQuality)} at ${usd(event.meanCostUsd)}${event.newMember ? " · new Pareto member" : ""}`;
-		case "merge":
-			return `    merge of ${event.parents.join(" and ")} ${event.accepted ? "kept" : "dropped"}`;
 		case "reflection":
 			return event.problem ? `    reflection unusable: ${escapeControl(event.problem)}` : null;
 		default:
@@ -133,7 +131,7 @@ function rolloutNotice(config: NexoConfig): string | null {
 async function runOptimize(args: string[], io: CliIO, options: CliOptions): Promise<number> {
 	const { values } = parseArgs({
 		args,
-		options: { target: { type: "string" }, "budget-usd": { type: "string" }, "max-rollouts": { type: "string" }, merge: { type: "boolean" }, seed: { type: "string" } },
+		options: { target: { type: "string" }, "budget-usd": { type: "string" }, "max-rollouts": { type: "string" }, seed: { type: "string" } },
 	});
 	if (!values.target) throw usageError("nexo optimize needs --target skill:<name>|tool:<name>|system_prompt|planner_prompt|judge_rubric");
 	const seed = values.seed === undefined ? undefined : Number(values.seed);
@@ -146,7 +144,6 @@ async function runOptimize(args: string[], io: CliIO, options: CliOptions): Prom
 			target: values.target,
 			budgetUsd: positiveNumber("--budget-usd", values["budget-usd"], false),
 			maxRollouts: positiveNumber("--max-rollouts", values["max-rollouts"], true),
-			merge: values.merge ?? false,
 			...(seed !== undefined ? { seed } : {}),
 			signal: options.signal,
 			onEvent: (event) => {

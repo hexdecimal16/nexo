@@ -554,8 +554,6 @@ export interface OptimReport {
 	spentUsd: number;
 	rollouts: number;
 	iterations: number;
-	merges: number;
-	mergeNote: string | null;
 	climb?: { caseId: string; guardIds: string[]; outcome: string; critique: string | null; comparisons: { label: string; winner: "A" | "B" | "tie" }[] };
 	createdAt: string;
 }

@@ -105,9 +105,6 @@ export interface OptimReport {
 	spentUsd: number;
 	rollouts: number;
 	iterations: number;
-	merges: number;
-	/** Why merging did nothing, when `--merge` was given and no merge happened. */
-	mergeNote: string | null;
 	climb?: ClimbReport;
 	createdAt: string;
 }
@@ -153,8 +150,6 @@ export interface ReportInput {
 	spentUsd: number;
 	rollouts: number;
 	iterations: number;
-	merges: number;
-	mergeNote: string | null;
 	createdAt: string;
 }
 
@@ -200,8 +195,6 @@ export function buildReport(input: ReportInput): OptimReport {
 		spentUsd: input.spentUsd,
 		rollouts: input.rollouts,
 		iterations: input.iterations,
-		merges: input.merges,
-		mergeNote: input.mergeNote,
 		createdAt: input.createdAt,
 	};
 }

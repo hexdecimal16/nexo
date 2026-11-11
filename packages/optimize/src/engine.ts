@@ -1,5 +1,4 @@
 import type { CaseScore, MinibatchRecord, OptimStopReason } from "@nexo/store";
-import { findMerge, type LineageNode } from "./merge.ts";
 import { bestCandidate, meanOf, paretoMembers, type ScoreTable, selectCandidate } from "./pareto.ts";
 import { NOVELTY_MAX_JACCARD, NOVELTY_MAX_SIMILARITY, textCosine, wordJaccard } from "./novelty.ts";
 import { checkPrediction, emptyScratchpad, type Prediction, type PredictionCheck, type ProposalNotes, type ReflectiveExample, SCRATCHPAD_ENTRIES, type Scratchpad, scratchpadEntry } from "./proposer.ts";
@@ -8,8 +7,12 @@ import type { ComponentTexts } from "./target.ts";
 
 /** Feedback cases per minibatch (spec §8.2.2.3). */
 export const MINIBATCH_SIZE = 3;
-/** Most system-aware merges per optimization (spec §8.2.2.6). */
-export const MAX_MERGES = 5;
+
+/** A candidate in the lineage: its id and its parents' ids. */
+export interface LineageNode {
+	id: string;
+	parentIds: string[];
+}
 
 /** One eval case as the optimizer sees it. */
 export interface EvalCase {
@@ -61,13 +64,12 @@ export type GepaEvent =
 	| { type: "iteration"; iteration: number; parentId: string; component: string }
 	| { type: "rejected"; iteration: number; reason: string }
 	| { type: "minibatch"; iteration: number; candidateId: string; parentQuality: number; childQuality: number; accepted: boolean; prediction?: PredictionCheck }
-	| { type: "pareto"; candidateId: string; meanQuality: number; meanCostUsd: number; newMember: boolean }
-	| { type: "merge"; candidateId: string; parents: [string, string]; accepted: boolean };
+	| { type: "pareto"; candidateId: string; meanQuality: number; meanCostUsd: number; newMember: boolean };
 
 /** Persistence and budget hooks of the loop; `startOptimization` implements them with the store. */
 export interface GepaCallbacks {
 	/** Stores a new candidate (its artifact version and candidate row) and returns it. */
-	createCandidate(input: { parentIds: string[]; texts: ComponentTexts; iteration: number; origin: "reflect" | "merge"; component: string | null }): CandidateRef;
+	createCandidate(input: { parentIds: string[]; texts: ComponentTexts; iteration: number; origin: "reflect"; component: string }): CandidateRef;
 	/** Records a child's minibatch comparison with its parent and whether it was accepted. */
 	recordMinibatch(candidateId: string, record: MinibatchRecord, accepted: boolean): void;
 	/** Records a candidate's pareto-split results and whether it joined the candidate pool. */
@@ -95,7 +97,6 @@ export interface GepaOptions {
 	offspringAlpha?: number;
 	/** What earlier optimizations of this target learned; the loop starts from a copy and extends it. */
 	scratchpad?: Scratchpad;
-	merge: boolean;
 	rng: Rng;
 	signal: AbortSignal;
 }
@@ -106,7 +107,6 @@ export interface GepaResult {
 	bestId: string;
 	stopReason: OptimStopReason;
 	iterations: number;
-	merges: number;
 	/** The scratchpad at the end of the loop: the given one plus what this loop learned. */
 	scratchpad: Scratchpad;
 }
@@ -137,12 +137,10 @@ export async function runGepa(options: GepaOptions): Promise<GepaResult> {
 	const refs = new Map<string, CandidateRef>([[options.seed.id, options.seed]]);
 	const nodes = new Map<string, LineageNode>([[options.seed.id, { id: options.seed.id, parentIds: [] }]]);
 	const texts = new Map<string, ComponentTexts>([[options.seed.id, options.seed.texts]]);
-	const tried = new Set<string>();
 	const memberIds = () => new Set(paretoMembers(table, caseIds).map((m) => m.id));
 	const emit = (event: GepaEvent) => callbacks.onEvent?.(event);
 	let iterations = 0;
 	let stale = 0;
-	let merges = 0;
 	let componentIndex = 0;
 	const scratchpad = emptyScratchpad();
 	if (options.scratchpad) {
@@ -254,26 +252,13 @@ export async function runGepa(options: GepaOptions): Promise<GepaResult> {
 			stale = newMember ? 0 : stale + 1;
 			const mean = meanOf(perCase, caseIds);
 			emit({ type: "pareto", candidateId: child.id, meanQuality: mean.quality, meanCostUsd: mean.costUsd, newMember });
-			if (!options.merge || merges >= MAX_MERGES) continue;
-			const plan = findMerge([...after], nodes, texts, tried);
-			if (!plan) continue;
-			tried.add(`${plan.a}|${plan.b}`);
-			const merged = callbacks.createCandidate({ parentIds: [plan.a, plan.b], texts: plan.texts, iteration: iterations, origin: "merge", component: null });
-			remember(merged, [plan.a, plan.b]);
-			merges++;
-			const mergedCases = await evaluatePareto(merged);
-			table.set(merged.id, mergedCases);
-			const kept = memberIds().has(merged.id);
-			if (!kept) table.delete(merged.id);
-			callbacks.recordPareto(merged.id, mergedCases, kept);
-			emit({ type: "merge", candidateId: merged.id, parents: [plan.a, plan.b], accepted: kept });
 		}
 	} catch (error) {
 		if (error instanceof BudgetStop) stopReason = error.reason;
 		else if (signal.aborted) stopReason = "aborted";
 		else throw error;
 	}
-	return { table, bestId: bestCandidate(table, caseIds), stopReason: stopReason ?? "patience", iterations, merges, scratchpad };
+	return { table, bestId: bestCandidate(table, caseIds), stopReason: stopReason ?? "patience", iterations, scratchpad };
 }
 
 /** Children per candidate, counted from the lineage (rejected children count too). */
