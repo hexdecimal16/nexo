@@ -1,3 +1,4 @@
+import { parseWikiMeta } from "@nexo/tools";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,7 +34,7 @@ describe("wiki curator", () => {
 						wikiName: "distributed-systems",
 						path: "concepts/raft.md",
 						summary: "Raft is a leader-based consensus algorithm.",
-						content: "# Raft Consensus\n\nRaft elects a leader and replicates logs.",
+						content: "<p>Raft elects a leader and replicates logs.</p>",
 					},
 				],
 			}),
@@ -65,16 +66,16 @@ describe("wiki curator", () => {
 		expect(outcome.pagesCreated).toBe(1);
 		expect(outcome.wikisTouched).toEqual(["distributed-systems"]);
 
-		const pageFile = join(wikisDir, "distributed-systems", "concepts", "raft.md");
+		const pageFile = join(wikisDir, "distributed-systems", "concepts", "raft.html");
 		expect(existsSync(pageFile)).toBe(true);
 		const content = readFileSync(pageFile, "utf8");
-		expect(content).toContain("summary: Raft is a leader-based consensus algorithm.");
-		expect(content).toContain("sources: [run:" + runId + "]");
-		expect(content).toContain("# Raft Consensus");
+		expect(parseWikiMeta(content).summary).toBe("Raft is a leader-based consensus algorithm.");
+		expect(parseWikiMeta(content).sources).toBe("run:" + runId);
+		expect(content).toContain("<p>Raft elects a leader and replicates logs.</p>");
 
 		// Index & AGENTS should also be created
 		expect(existsSync(join(wikisDir, "distributed-systems", "AGENTS.md"))).toBe(true);
-		expect(existsSync(join(wikisDir, "distributed-systems", "index.md"))).toBe(true);
+		expect(existsSync(join(wikisDir, "distributed-systems", "index.html"))).toBe(true);
 		expect(existsSync(join(wikisDir, "distributed-systems", "log.md"))).toBe(true);
 	});
 });

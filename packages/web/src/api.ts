@@ -62,7 +62,7 @@ import {
 	resolveNexoPaths,
 } from "@nexo/store";
 import { NexoError, type Redactor } from "@nexo/telemetry";
-import { resolveConfined } from "@nexo/tools";
+import { resolveConfined, isWikiPageFile, parseWikiMeta, resolveWikiPagePath, wikiPageSlug } from "@nexo/tools";
 import type {
 	CostResponse,
 	DirListing,
@@ -673,6 +673,8 @@ export function reviewEvalCaseResponse(ctx: ApiContext, id: string, decision: "a
 }
 
 function parseSummary(content: string): string | undefined {
+	const metaSummary = parseWikiMeta(content).summary;
+	if (metaSummary) return metaSummary;
 	const head = content.slice(0, 2048);
 	const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(head);
 	if (!match || !match[1]) return undefined;
@@ -703,7 +705,7 @@ export function listWikisResponse(ctx: ApiContext): WikiListResponse {
 						const fst = statSync(fp);
 						if (fst.isDirectory()) {
 							if (!f.startsWith(".") && f !== ".git") scan(fp);
-						} else if (f.endsWith(".md")) {
+						} else if (isWikiPageFile(f)) {
 							pageCount++;
 							if (fst.mtime > maxModified) maxModified = fst.mtime;
 						}
@@ -750,9 +752,9 @@ export function listWikiPagesResponse(ctx: ApiContext, wikiName: string): WikiPa
 				const st = statSync(fp);
 				if (st.isDirectory()) {
 					walk(fp);
-				} else if (f.endsWith(".md")) {
+				} else if (isWikiPageFile(f)) {
 					const rel = relative(wikiDir, fp).split(sep).join("/");
-					const slug = rel.slice(0, -3);
+					const slug = wikiPageSlug(rel);
 					const folder = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : undefined;
 					const content = readFileSync(fp, "utf8");
 					const summary = parseSummary(content);
@@ -792,8 +794,10 @@ export function wikiPageResponse(ctx: ApiContext, wikiName: string, relPath: str
 		throw new NexoError({ code: "NOT_FOUND", message: `Wiki "${wikiName}" does not exist`, context: { wiki: wikiName } });
 	}
 	let target: string;
+	let resolvedPath = relPath;
 	try {
-		target = resolveConfined(wikiDir, relPath);
+		resolvedPath = resolveWikiPagePath(wikiDir, relPath);
+		target = resolveConfined(wikiDir, resolvedPath);
 	} catch (error) {
 		if (error instanceof NexoError && error.code === "TOOL_DENIED") {
 			throw new NexoError({ code: "FORBIDDEN", message: `Path "${relPath}" is outside the wiki directory`, context: { wiki: wikiName, path: relPath } });
@@ -808,7 +812,7 @@ export function wikiPageResponse(ctx: ApiContext, wikiName: string, relPath: str
 	const summary = parseSummary(content);
 	return {
 		wiki: wikiName,
-		path: relPath,
+		path: resolvedPath,
 		content,
 		summary,
 		size: st.size,

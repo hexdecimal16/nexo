@@ -1,10 +1,15 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { dataBlock } from "@nexo/scorers";
-import { resolveConfined } from "@nexo/tools";
+import { resolveConfined, wrapWikiHtml } from "@nexo/tools";
 import { type Static, Type } from "typebox";
 import type { RunRow, SpanRow } from "@nexo/store";
 import { type ChargedCallDeps, structuredLearnCall } from "./caller.ts";
+
+function titleFromPath(path: string): string {
+	const base = path.split("/").pop() ?? path;
+	return base.replace(/[.]html$/, "").replace(/-/g, " ");
+}
 
 export const WikiPageProposalSchema = Type.Object(
 	{
@@ -25,8 +30,8 @@ export const WikiCurationSchema = Type.Object(
 
 export type WikiCuration = Static<typeof WikiCurationSchema>;
 
-export const WIKI_CURATOR_SYSTEM = `You are a knowledge curator for an AI agent's persistent markdown wikis.
-Review the finished task and its output. Determine if the task produced substantive, durable subject knowledge (research results, domain concepts, entity profiles, method syntheses, technical facts) that should be recorded into a markdown wiki for future reference.
+export const WIKI_CURATOR_SYSTEM = `You are a knowledge curator for an AI agent's persistent wikis of HTML pages.
+Review the finished task and its output. Determine if the task produced substantive, durable subject knowledge (research results, domain concepts, entity profiles, method syntheses, technical facts) that should be recorded into a wiki for future reference.
 
 Do NOT create wiki pages for:
 - Routine code modifications, git operations or minor debugging
@@ -35,8 +40,8 @@ Do NOT create wiki pages for:
 
 If durable subject knowledge is present:
 - Select an appropriate wiki topic name in lowercase-with-hyphens (e.g. "ai", "finance", "distributed-systems").
-- Propose pages using appropriate subfolders: "concepts/<slug>.md", "entities/<slug>.md", "sources/<slug>.md", or "analyses/<slug>.md".
-- Provide a concise summary and clear markdown content (with [[wikilinks]] where relevant).
+- Propose pages using appropriate subfolders: "concepts/<slug>.html", "entities/<slug>.html", "sources/<slug>.html", or "analyses/<slug>.html".
+- Provide a concise summary and the page content as an HTML body fragment for a human reader: no html, head, body or script elements. Start with <div class="tldr"> giving the answer in two or three sentences, then h2 sections, tables, <details> for side detail, and inline SVG for diagrams where they help. Link other pages with relative hrefs such as <a href="../concepts/slug.html">. Escape text as HTML.
 If no substantive subject knowledge is worth saving, reply with {"pages": []}.`;
 
 export function wikiCuratorPrompt(input: {
@@ -123,22 +128,17 @@ export async function curateWikiKnowledge(
 					join(wikiDir, "AGENTS.md"),
 					`# ${p.wikiName} wiki\n\nKnowledge base for ${p.wikiName}.\n`,
 				);
-				writeFileSync(
-					join(wikiDir, "index.md"),
-					`# ${p.wikiName} index\n\n## Concepts\n\n## Entities\n\n## Sources\n\n## Analyses\n`,
-				);
+				writeFileSync(join(wikiDir, "index.html"), wrapWikiHtml({ title: `${p.wikiName} index`, summary: `Index of the ${p.wikiName} wiki`, updated: today, sources: [], body: "<p>No pages yet.</p>" }));
 				writeFileSync(join(wikiDir, "log.md"), `# Log\n\n## [${today}] create | Initialized wiki\n`);
-				writeFileSync(
-					join(wikiDir, "overview.md"),
-					`---\nsummary: Overview of ${p.wikiName}\nupdated: ${today}\nsources: []\n---\n\n# ${p.wikiName}\n`,
-				);
+				writeFileSync(join(wikiDir, "overview.html"), wrapWikiHtml({ title: `${p.wikiName} overview`, summary: `Overview of the ${p.wikiName} wiki`, updated: today, sources: [], body: "<p>No synthesis yet.</p>" }));
 			}
 
-			const targetFile = resolveConfined(wikiDir, p.path.endsWith(".md") ? p.path : `${p.path}.md`);
+			const pagePath = `${p.path.replace(/[.](md|html)$/, "")}.html`;
+			const targetFile = resolveConfined(wikiDir, pagePath);
 			mkdirSync(dirname(targetFile), { recursive: true });
 
-			const frontmatter = `---\nsummary: ${p.summary.replace(/\n/g, " ")}\nupdated: ${today}\nsources: [run:${run.id}]\n---\n\n`;
-			writeFileSync(targetFile, frontmatter + p.content.trim() + "\n");
+			const pageHtml = wrapWikiHtml({ title: titleFromPath(pagePath), summary: p.summary, updated: today, sources: [`run:${run.id}`], body: p.content });
+			writeFileSync(targetFile, pageHtml);
 			pagesCreated++;
 			wikisTouched.add(p.wikiName);
 

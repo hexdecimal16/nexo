@@ -1,4 +1,5 @@
 import { curateWikiKnowledge } from "./wiki.ts";
+import { assignRun } from "./areas.ts";
 import { existsSync } from "node:fs";
 import {
 	applyCuratorDelta,
@@ -121,6 +122,14 @@ export async function runLearnJob(env: EngineEnv, job: LearnJobRow, options: { w
 			output = "";
 		}
 		const feedback = latestFeedback(db, run.id);
+		const assignAreas = async () => {
+			try {
+				await assignRun(deps, { run, output, spans, scores, cwd: run.sessionId ? getSessionRow(db, run.sessionId)?.cwd : undefined });
+			} catch (err) {
+				if (options.signal.aborted) throw err;
+				logger.warn("area assignment failed; continuing without it", { run_id: run.id, error: err });
+			}
+		};
 		const reflectorUser = reflectorPrompt({
 			instruction: run.instruction,
 			status: run.status,
@@ -152,6 +161,7 @@ export async function runLearnJob(env: EngineEnv, job: LearnJobRow, options: { w
 
 		const reflection = await structuredLearnCall(deps, ReflectionSchema, { system: REFLECTOR_SYSTEM, user: reflectorUser, tier: "reflector" });
 		if (reflection.lessons.length === 0 && reflection.playbookTags.length === 0) {
+			await assignAreas();
 			markSucceeded();
 			return { lessons: 0, curation: null, costUsd, costUnknown };
 		}
@@ -217,6 +227,7 @@ export async function runLearnJob(env: EngineEnv, job: LearnJobRow, options: { w
 		} catch (err) {
 			logger.warn("wiki curation pass failed; continuing without it", { run_id: run.id, error: err });
 		}
+		await assignAreas();
 		return { lessons: reflection.lessons.length, curation, costUsd, costUnknown };
 	} catch (error) {
 		recorder.finish(learnSpan, { status: "error", costUsd: 0, attrs: { error: redact(toErrorPayload(error)), totalCostUsd: costUsd } });

@@ -35,3 +35,4 @@ export * from "./settings/credentials.ts";
 export * from "./settings/doctor.ts";
 export * from "./settings/settings.ts";
 import "./engine/spawn-tool.ts";
+export * from "./learn/areas.ts";

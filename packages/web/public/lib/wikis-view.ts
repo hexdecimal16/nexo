@@ -239,7 +239,9 @@ export function renderWikiTree(pages: readonly WikiPageItem[], activeWiki: strin
 
 /** Renders a full wiki page view with breadcrumbs, summary box, rendered content and metadata. */
 export function renderWikiPage(page: WikiPageResponse, activeWiki: string): SafeHtml {
-	const renderedContent = renderMarkdown(page.content, activeWiki);
+	const renderedContent = page.path.endsWith(".html")
+		? new SafeHtml(`<div class="wiki-html" id="wiki-html-body"></div>`)
+		: renderMarkdown(page.content, activeWiki);
 	return html`<article class="wiki-page">
 	<header class="wiki-page-header">
 		<div class="wiki-crumbs mono">

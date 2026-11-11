@@ -38,7 +38,7 @@ export const WEB_SEARCH_PROMPT = `Web research: your training data has a cutoff,
 
 /** The line that points the agent at the wikis directory; the wiki skill holds the rules for using it. */
 export function wikiPrompt(wikisDir: string): string {
-	return `Wikis: the user keeps persistent knowledge bases as markdown folders under ${wikisDir}. When a task produces durable subject knowledge worth keeping (research findings, a source you read, a topic the user keeps returning to), load the wiki skill with load_skill and file it in the wiki that fits, creating a new wiki when none fits. Do not create or edit wikis for one-off questions, small talk or routine code changes. Load the wiki skill first whenever the task is about a wiki.`;
+	return `Wikis: the user keeps persistent knowledge bases as folders of HTML pages under ${wikisDir}. When a task produces durable subject knowledge worth keeping (research findings, a source you read, a topic the user keeps returning to), load the wiki skill with load_skill and file it in the wiki that fits, creating a new wiki when none fits. Do not create or edit wikis for one-off questions, small talk or routine code changes. Load the wiki skill first whenever the task is about a wiki. The user's approved life areas are listed in ${wikisDir}/areas.json; file work in a wiki that belongs to the matching area, and never add or rename an area yourself, because new areas need the user's approval.`;
 }
 
 export function renderSystemPrompt(parts: SystemPromptParts): string {
