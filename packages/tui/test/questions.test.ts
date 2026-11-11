@@ -47,6 +47,22 @@ describe("question box", () => {
 		expect(h.shown).toHaveLength(0);
 	});
 
+	it("accepts a bracketed paste in the typed answer, even when split across chunks", async () => {
+		const h = host();
+		const prompter = createApprovalPrompter(h, { guardMs: 0 });
+		const answer = prompter.ask?.({ questions: [{ question: "Q?", options }] });
+		await Promise.resolve();
+		const box = h.shown[0] as Box;
+		for (let i = 0; i < options.length; i++) box.handleInput(DOWN);
+		box.handleInput("\r");
+		box.handleInput("\u001b[200~hello\nwor");
+		box.handleInput("ld\u001b[201~");
+		box.handleInput("!");
+		expect(render(box)).toContain("› hello world!");
+		box.handleInput("\r");
+		expect(await answer).toEqual({ answers: [{ question: "Q?", selected: [], text: "hello world!" }] });
+	});
+
 	it("esc declines, an abort closes the box, and input inside the guard is dropped", async () => {
 		const h = host();
 		let t = 0;

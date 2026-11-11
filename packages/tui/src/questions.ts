@@ -7,6 +7,8 @@ const UP = "\u001b[A";
 const DOWN = "\u001b[B";
 const ESC = "\u001b";
 const OTHER_LABEL = "Type your own answer";
+const PASTE_START = "\u001b[200~";
+const PASTE_END = "\u001b[201~";
 
 export interface QuestionBoxOptions {
 	/** Input before this time is dropped, so a keystroke typed ahead cannot answer. */
@@ -26,6 +28,8 @@ export class QuestionBox extends Container {
 	private picked = new Set<number>();
 	private typing = false;
 	private draft = "";
+	private inPaste = false;
+	private pasteBuffer = "";
 	private readonly answers: QuestionAnswerItem[] = [];
 	private readonly request: QuestionRequest;
 	private readonly onDone: (answer: QuestionAnswer | null) => void;
@@ -47,6 +51,10 @@ export class QuestionBox extends Container {
 		const q = this.question;
 		const other = q.options.length;
 		if (this.typing) {
+			if (this.inPaste || data.includes(PASTE_START)) {
+				this.paste(data);
+				return;
+			}
 			if (data === "\r" || data === "\n") {
 				if (this.draft.trim()) this.commit([], this.draft.trim());
 				else this.typing = false;
@@ -72,6 +80,26 @@ export class QuestionBox extends Container {
 		} else if (data === ESC) this.onDone(null);
 	}
 
+	/** Bracketed paste (the terminal wraps pasted text in ESC[200~ … ESC[201~), possibly split across chunks. */
+	private paste(data: string): void {
+		const start = data.indexOf(PASTE_START);
+		if (start !== -1) {
+			this.inPaste = true;
+			this.pasteBuffer = "";
+			data = data.slice(start + PASTE_START.length);
+		}
+		this.pasteBuffer += data;
+		const end = this.pasteBuffer.indexOf(PASTE_END);
+		if (end === -1) return;
+		const text = this.pasteBuffer.slice(0, end);
+		const rest = this.pasteBuffer.slice(end + PASTE_END.length);
+		this.inPaste = false;
+		this.pasteBuffer = "";
+		// One-line field: newlines and tabs become spaces, other control characters are dropped.
+		this.draft += text.replace(/[\r\n\t]+/g, " ").replace(/[\u0000-\u001f\u007f]/g, "");
+		if (rest) this.handleInput(rest);
+	}
+
 	private commit(selected: string[], text?: string): void {
 		this.answers.push({ question: this.question.question, selected, ...(text ? { text } : {}) });
 		this.index++;
@@ -79,6 +107,8 @@ export class QuestionBox extends Container {
 		this.picked = new Set();
 		this.typing = false;
 		this.draft = "";
+		this.inPaste = false;
+		this.pasteBuffer = "";
 		if (this.index >= this.request.questions.length) this.onDone({ answers: [...this.answers] });
 	}
 
