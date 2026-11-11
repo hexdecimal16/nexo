@@ -59,6 +59,9 @@ export function caseSplit(input: string): EvalSplit {
 	return evalSplitFor(normalizeCaseInput(input));
 }
 
+/** Final judge score below which a run becomes an eval case without human feedback. */
+export const LOW_JUDGE_SCORE = 0.6;
+
 /** Root runs that can be eval cases of `target`: finished, not optimization runs, not a session turn after the first. */
 export function targetRunFilter(target: OptimTarget): { sql: string; args: SQLInputValue[] } {
 	const base = "r.parent_run_id IS NULL AND r.optim_run_id IS NULL AND r.status != 'running' AND (r.session_id IS NULL OR r.turn_index = 1)";
@@ -85,9 +88,14 @@ function clip(text: string): string {
  */
 export function syncRunEvalCases(db: Db, target: OptimTarget, nowIso: string): { added: number; updated: number } {
 	const filter = targetRunFilter(target);
+	// A run is reviewed when a human gave feedback. For agent targets, a run whose final judge round scored below LOW_JUDGE_SCORE also counts.
+	const lowScore =
+		target.kind === "judge_rubric"
+			? ""
+			: " OR EXISTS (SELECT 1 FROM scores s WHERE s.run_id = r.id AND s.scorer_type = 'llm_judge' AND s.status = 'ok' AND s.value < ? AND s.round = (SELECT MAX(s2.round) FROM scores s2 WHERE s2.run_id = r.id))";
 	const ids = db
-		.prepare(`SELECT r.id FROM runs r WHERE ${filter.sql} AND EXISTS (SELECT 1 FROM feedback f WHERE f.run_id = r.id) ORDER BY r.started_at, r.id`)
-		.all(...filter.args)
+		.prepare(`SELECT r.id FROM runs r WHERE ${filter.sql} AND (EXISTS (SELECT 1 FROM feedback f WHERE f.run_id = r.id)${lowScore}) ORDER BY r.started_at, r.id`)
+		.all(...filter.args, ...(lowScore ? [LOW_JUDGE_SCORE] : []))
 		.map((row) => String(row.id));
 	let added = 0;
 	let updated = 0;
@@ -95,10 +103,10 @@ export function syncRunEvalCases(db: Db, target: OptimTarget, nowIso: string): {
 		for (const id of ids) {
 			const run = getRun(db, id);
 			const feedback = latestFeedback(db, id);
-			if (!run || !feedback) continue;
+			if (!run || (!feedback && target.kind === "judge_rubric")) continue;
 			let expected: string | null;
 			if (target.kind === "judge_rubric") {
-				expected = feedback.verdict;
+				expected = feedback?.verdict ?? null;
 			} else {
 				let output = "";
 				try {
@@ -106,9 +114,9 @@ export function syncRunEvalCases(db: Db, target: OptimTarget, nowIso: string): {
 				} catch {
 					output = "";
 				}
-				expected = feedback.verdict === "done" && output.trim() ? clip(output) : null;
+				expected = feedback?.verdict === "done" && output.trim() ? clip(output) : null;
 			}
-			const reference = feedback.comment.trim() ? clip(feedback.comment) : null;
+			const reference = feedback?.comment.trim() ? clip(feedback.comment) : null;
 			const rubric = target.kind === "judge_rubric";
 			const existing = db.prepare("SELECT id, expected, golden_source FROM eval_cases WHERE target = ? AND source_run_id = ?").get(target.key, id);
 			if (existing) {

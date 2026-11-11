@@ -106,6 +106,25 @@ describe("syncRunEvalCases", () => {
 		expect(listEvalCases(db, "skill:ci-fix").find((c) => c.sourceRunId === pinned.id)).toMatchObject({ expected: null, referenceFeedback: "Missed one error" });
 	});
 
+	it("turns runs whose final judge round scored below 0.6 into cases without feedback, for agent targets only", () => {
+		const db = openDb(":memory:");
+		const target = parseOptimTarget("system_prompt");
+		const low = finishedRun(db, { instruction: "Summarize the doc" }, "bad summary");
+		const high = finishedRun(db, { instruction: "Rename the file" });
+		const recovered = finishedRun(db, { instruction: "Fix the typo" });
+		const failedJudge = finishedRun(db, { instruction: "List the files" });
+		insertScore(db, scoreRow(low.id, { value: 0.3, passed: false }));
+		insertScore(db, scoreRow(high.id, { value: 0.9 }));
+		insertScore(db, scoreRow(recovered.id, { round: 0, value: 0.2, passed: false }));
+		insertScore(db, scoreRow(recovered.id, { round: 1, value: 0.8 }));
+		insertScore(db, scoreRow(failedJudge.id, { status: "failed", value: null, passed: null }));
+		expect(syncRunEvalCases(db, target, NOW)).toEqual({ added: 1, updated: 0 });
+		const cases = listEvalCases(db, "system_prompt");
+		expect(cases).toHaveLength(1);
+		expect(cases[0]).toMatchObject({ sourceRunId: low.id, input: "Summarize the doc", expected: null, referenceFeedback: null });
+		expect(syncRunEvalCases(db, parseOptimTarget("judge_rubric"), NOW)).toEqual({ added: 0, updated: 0 });
+	});
+
 	it("makes judge_rubric cases from judged, reviewed runs with the verdict as expected, and refreshes the phase 3 split", () => {
 		const db = openDb(":memory:");
 		const judged = finishedRun(db, { instruction: "Summarize the doc" });
