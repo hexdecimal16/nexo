@@ -341,8 +341,10 @@ export class Session {
 	/** Sends a message into the running turn, injected before the agent's next model call. False when no turn runs. */
 	steer(text: string): boolean {
 		if (!this.busy || !text.trim()) return false;
-		if (this.steerCtl) this.steerCtl.steer(text);
-		else this.steerPending.push(text);
+		// Same `@file` attachment as a typed turn, so the agent gets the contents instead of reading the file itself.
+		const sent = expandMentions(text, this.state.cwd).text;
+		if (this.steerCtl) this.steerCtl.steer(sent);
+		else this.steerPending.push(sent);
 		return true;
 	}
 

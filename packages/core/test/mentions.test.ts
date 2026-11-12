@@ -89,4 +89,35 @@ describe("session turns with @mentions", () => {
 		expect(session.title).toBe("summarise @src/a.ts");
 		session.close();
 	});
+
+	it("attaches mentioned files to a message steered into a running turn", async () => {
+		const cwd = realpathSync(project());
+		const env = makeEnv();
+		let release: () => void = () => {};
+		const gate = new Promise<void>((r) => {
+			release = r;
+		});
+		let sent = "";
+		env.faux.setResponses([
+			async () => {
+				await gate;
+				return fauxAssistantMessage("first");
+			},
+			async (ctx: TranscriptContext) => {
+				const user = ctx.messages.filter((m) => m.role === "user").pop();
+				sent = user ? (typeof user.content === "string" ? user.content : user.content.map((b) => ("text" in b ? b.text : "")).join("")) : "";
+				return fauxAssistantMessage("second");
+			},
+		]);
+		const session = createSession(env.deps, { cwd });
+		const running = session.turn("start");
+		while (env.faux.state.callCount < 1) await new Promise((r) => setTimeout(r, 5));
+		expect(session.steer("now check @src/a.ts")).toBe(true);
+		release();
+		const result = await running;
+		expect(result.status).toBe("succeeded");
+		expect(sent).toContain("now check @src/a.ts");
+		expect(sent).toContain("export const a = 1;");
+		session.close();
+	});
 });
