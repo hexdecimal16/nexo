@@ -60,6 +60,8 @@ export function wikiCuratorPrompt(input: {
 export interface WikiCurateResult {
 	pagesCreated: number;
 	wikisTouched: string[];
+	/** Created pages relative to the wikis dir, e.g. ai/concepts/raft.html. */
+	pages: string[];
 }
 
 /**
@@ -72,15 +74,15 @@ export async function curateWikiKnowledge(
 	spans: readonly SpanRow[],
 ): Promise<WikiCurateResult> {
 	const wikisDir = deps.env.deps.paths?.wikis;
-	if (!wikisDir) return { pagesCreated: 0, wikisTouched: [] };
+	if (!wikisDir) return { pagesCreated: 0, wikisTouched: [], pages: [] };
 	if (!existsSync(wikisDir)) mkdirSync(wikisDir, { recursive: true });
 
 	// Skip if the run itself explicitly loaded the wiki skill (it managed its own wiki edits)
 	const usedWikiSkill = spans.some((s) => s.kind === "skill_load" && s.status === "ok" && (s.attrs.args as { name?: string } | undefined)?.name === "wiki");
-	if (usedWikiSkill) return { pagesCreated: 0, wikisTouched: [] };
+	if (usedWikiSkill) return { pagesCreated: 0, wikisTouched: [], pages: [] };
 
 	// Only evaluate runs that have non-trivial instruction/output
-	if (!output || output.trim().length < 50) return { pagesCreated: 0, wikisTouched: [] };
+	if (!output || output.trim().length < 50) return { pagesCreated: 0, wikisTouched: [], pages: [] };
 
 	let existingWikis: string[] = [];
 	try {
@@ -108,9 +110,10 @@ export async function curateWikiKnowledge(
 		tier: "curator",
 	});
 
-	if (curation.pages.length === 0) return { pagesCreated: 0, wikisTouched: [] };
+	if (curation.pages.length === 0) return { pagesCreated: 0, wikisTouched: [], pages: [] };
 
 	let pagesCreated = 0;
+	const createdPages: string[] = [];
 	const wikisTouched = new Set<string>();
 	const today = deps.env.now().toISOString().slice(0, 10);
 
@@ -140,6 +143,7 @@ export async function curateWikiKnowledge(
 			const pageHtml = wrapWikiHtml({ title: titleFromPath(pagePath), summary: p.summary, updated: today, sources: [`run:${run.id}`], body: p.content });
 			writeFileSync(targetFile, pageHtml);
 			pagesCreated++;
+			createdPages.push(`${p.wikiName}/${pagePath}`);
 			wikisTouched.add(p.wikiName);
 
 			const logFile = join(wikiDir, "log.md");
@@ -152,5 +156,5 @@ export async function curateWikiKnowledge(
 		}
 	}
 
-	return { pagesCreated, wikisTouched: [...wikisTouched] };
+	return { pagesCreated, wikisTouched: [...wikisTouched], pages: createdPages };
 }

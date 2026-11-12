@@ -378,3 +378,30 @@ section[id] { scroll-margin-top: 96px; }
 .home-note { border-left: 4px solid var(--pen); padding: 6px 12px; background: var(--bg); }
 a.home-area { display: block; color: inherit; text-decoration: none; }
 a.home-area:hover, a.home-area:focus-visible { border-color: var(--pen); }
+
+/* Area page (pages/area.ts) */
+.area-stats { display: flex; flex-wrap: wrap; gap: 12px; margin: 14px 0 6px; }
+.area-stat { border: 1px solid var(--line); border-radius: 6px; padding: 10px 16px; min-width: 120px; }
+.area-stat b { display: block; font-size: 22px; line-height: 28px; }
+.area-stat span { font-size: 12px; }
+.area-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+a.area-card { display: block; border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; color: inherit; text-decoration: none; }
+a.area-card:hover, a.area-card:focus-visible { border-color: var(--pen); }
+.area-card .muted { display: block; font-size: 12px; margin-top: 2px; }
+.area-card-text { display: block; font-size: 13px; margin-top: 6px; }
+.area-timeline { list-style: none; margin: 8px 0 8px 6px; padding: 0; border-left: 2px solid var(--line); }
+.area-timeline li { position: relative; padding: 2px 0 14px 18px; }
+.area-timeline li::before { content: ""; position: absolute; left: -7px; top: 6px; width: 12px; height: 12px; border-radius: 50%; background: var(--pen); }
+.area-timeline time { display: block; font-size: 12px; color: var(--muted); }
+.area-decision { border: 1px solid var(--line); border-left: 4px solid var(--ok); border-radius: 4px; padding: 10px 14px; margin: 8px 0; }
+.area-decision span, .area-decision time { display: block; font-size: 13px; margin-top: 2px; }
+.area-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.area-table th, .area-table td { border-bottom: 1px solid var(--line); padding: 6px 10px; text-align: left; }
+
+/* Converted wiki pages: top-level bullets as cards, clearer sections */
+.wiki-html h2 { border-top: 1px solid var(--line); padding-top: 16px; margin-top: 24px; }
+.wiki-html > ul { list-style: none; padding-left: 0; }
+.wiki-html > ul > li { border: 1px solid var(--line); border-left: 3px solid var(--pen); border-radius: 4px; padding: 8px 12px; margin: 8px 0; background: var(--bg); }
+.wiki-html > ul > li > ul { margin-top: 6px; }
+.wiki-html tbody tr:nth-child(even) td { background: var(--bg); }
+.feed-page { font-size: 12px; border: 1px solid var(--line); border-radius: 3px; padding: 0 5px; text-decoration: none; }

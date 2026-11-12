@@ -5,7 +5,7 @@ import { asErrorBody, el, getJson } from "./api.ts";
 
 interface HomeWiki { name: string; summary?: string; pageCount: number }
 interface HomeArea { id: string; name: string; scope: string; wikis: HomeWiki[]; recent: number }
-interface HomeFeedItem { at: string; text: string; areaId: string | null; wiki: string | null; sessionId: string | null; runId: string; verified: boolean }
+interface HomeFeedItem { at: string; text: string; areaId: string | null; wiki: string | null; sessionId: string | null; runId: string; verified: boolean; pages?: string[] }
 interface HomeDecision { at: string; choice: string; reason: string; areaId: string | null; wiki: string | null; sessionId: string | null; runId: string }
 interface HomeSession { id: string; title: string; cwd: string; updatedAt: string; areaId: string | null }
 interface Home { areas: HomeArea[]; proposed: { id: string; name: string }[]; unsorted: number; feed: HomeFeedItem[]; decisions: HomeDecision[]; sessions: HomeSession[] }
@@ -18,9 +18,15 @@ let data: Home | null = null;
 const hit = (q: string, ...parts: (string | null | undefined)[]) => !q || parts.some((p) => (p ?? "").toLowerCase().includes(q));
 const areaName = (id: string | null) => data?.areas.find((a) => a.id === id)?.name ?? "unsorted";
 
+function pageLinks(f: { pages?: string[]; wiki: string | null }): SafeHtml {
+	const pages = (f.pages ?? []).filter((p) => p.endsWith(".html") && p.includes("/") && !p.includes(".."));
+	if (pages.length > 0) return html`${pages.map((p) => html`<a class="feed-page" href="/wikis.html#${p.slice(0, -5).split("/").map(encodeURIComponent).join("/")}">${p.slice(p.indexOf("/") + 1, -5)}</a> `)}`;
+	return f.wiki ? html`<a class="feed-page" href="/wikis.html#${encodeURIComponent(f.wiki)}/index">${f.wiki} wiki</a>` : html``;
+}
+
 function feedItem(f: HomeFeedItem): SafeHtml {
 	const link = f.sessionId ? html`<a href="/?session=${encodeURIComponent(f.sessionId)}">session</a>` : html`<a href="/run.html?id=${encodeURIComponent(f.runId)}">run</a>`;
-	return html`<li><span class="muted mono">${formatTime(f.at)}</span> ${f.text}${f.verified ? "" : html` <span class="home-tag">unverified</span>`} <span class="muted">· ${areaName(f.areaId)}${f.wiki ? ` · ${f.wiki}` : ""}</span> ${link}</li>`;
+	return html`<li><span class="muted mono">${formatTime(f.at)}</span> ${f.text}${f.verified ? "" : html` <span class="home-tag">unverified</span>`} <span class="muted">· ${areaName(f.areaId)}${f.wiki ? ` · ${f.wiki}` : ""}</span> ${pageLinks(f)} ${link}</li>`;
 }
 
 function list(items: SafeHtml[], empty: string): SafeHtml {

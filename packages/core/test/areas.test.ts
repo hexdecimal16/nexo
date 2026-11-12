@@ -1,3 +1,5 @@
+import type { SpanRow } from "@nexo/store";
+import { wikiPagesTouched } from "../src/learn/areas.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -78,5 +80,13 @@ describe("assignRun", () => {
 		expect(readRegistry(wikisDir).unsorted.map((u) => u.label)).toEqual(["travel"]);
 		expect(readRegistry(wikisDir).areas.map((a) => a.id)).toEqual(["software"]);
 		expect(existsSync(join(wikisDir, "decisions.jsonl"))).toBe(false);
+	});
+});
+
+describe("wikiPagesTouched", () => {
+	it("keeps only successful write and edit calls on HTML pages inside the wikis dir", () => {
+		const span = (name: string, path: string, status = "ok") => ({ kind: "tool_call", name, status, attrs: { args: { path } } }) as unknown as SpanRow;
+		const spans = [span("write", "/w/nexo/concepts/a.html"), span("edit", "/w/nexo/log.md"), span("write", "/other/x.html"), span("read", "/w/ai/b.html"), span("write", "/w/ai/c.html", "error")];
+		expect(wikiPagesTouched(spans, "/w")).toEqual(["nexo/concepts/a.html"]);
 	});
 });

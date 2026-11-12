@@ -122,9 +122,9 @@ export async function runLearnJob(env: EngineEnv, job: LearnJobRow, options: { w
 			output = "";
 		}
 		const feedback = latestFeedback(db, run.id);
-		const assignAreas = async () => {
+		const assignAreas = async (extraPages: string[] = []) => {
 			try {
-				await assignRun(deps, { run, output, spans, scores, cwd: run.sessionId ? getSessionRow(db, run.sessionId)?.cwd : undefined });
+				await assignRun(deps, { run, output, spans, scores, extraPages, cwd: run.sessionId ? getSessionRow(db, run.sessionId)?.cwd : undefined });
 			} catch (err) {
 				if (options.signal.aborted) throw err;
 				logger.warn("area assignment failed; continuing without it", { run_id: run.id, error: err });
@@ -222,12 +222,13 @@ export async function runLearnJob(env: EngineEnv, job: LearnJobRow, options: { w
 		}
 		recorder.finish(writeSpan, { status: "ok", attrs: { result: curation } });
 
+		let curated: string[] = [];
 		try {
-			await curateWikiKnowledge(deps, run, output, spans);
+			curated = (await curateWikiKnowledge(deps, run, output, spans)).pages;
 		} catch (err) {
 			logger.warn("wiki curation pass failed; continuing without it", { run_id: run.id, error: err });
 		}
-		await assignAreas();
+		await assignAreas(curated);
 		return { lessons: reflection.lessons.length, curation, costUsd, costUnknown };
 	} catch (error) {
 		recorder.finish(learnSpan, { status: "error", costUsd: 0, attrs: { error: redact(toErrorPayload(error)), totalCostUsd: costUsd } });

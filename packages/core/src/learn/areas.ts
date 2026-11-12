@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { dataBlock } from "@nexo/scorers";
 import type { RunRow, ScoreRow, SpanRow } from "@nexo/store";
 import { NexoError } from "@nexo/telemetry";
@@ -127,6 +127,20 @@ export function askUserAnswers(spans: readonly SpanRow[]): string[] {
 		.slice(-5);
 }
 
+/** HTML wiki pages (relative to the wikis dir) that the run's write and edit tool calls changed. */
+export function wikiPagesTouched(spans: readonly SpanRow[], wikisDir: string): string[] {
+	const out: string[] = [];
+	for (const s of spans) {
+		if (s.kind !== "tool_call" || s.status !== "ok" || (s.name !== "write" && s.name !== "edit")) continue;
+		const path = ((s.attrs ?? {}) as unknown as { args?: { path?: unknown } }).args?.path;
+		if (typeof path !== "string" || !isAbsolute(path)) continue;
+		const rel = relative(wikisDir, path);
+		if (!rel || rel.startsWith("..") || isAbsolute(rel) || !rel.endsWith(".html")) continue;
+		out.push(rel.split(sep).join("/"));
+	}
+	return out;
+}
+
 function listWikis(wikisDir: string): string[] {
 	try {
 		return readdirSync(wikisDir).filter((f) => !f.startsWith(".") && statSync(join(wikisDir, f)).isDirectory());
@@ -179,7 +193,7 @@ export interface AssignResult {
 /** After a scored run: files it into an approved area (or the unsorted queue), appends a feed line and, for verified runs, the user's decisions. Does nothing until an area is active. */
 export async function assignRun(
 	deps: ChargedCallDeps,
-	input: { run: RunRow; output: string; spans: readonly SpanRow[]; scores: readonly ScoreRow[]; cwd?: string },
+	input: { run: RunRow; output: string; spans: readonly SpanRow[]; scores: readonly ScoreRow[]; cwd?: string; extraPages?: readonly string[] },
 ): Promise<AssignResult> {
 	const none: AssignResult = { areaId: null, feed: false, decisions: 0, proposed: null, verified: false };
 	const wikisDir = deps.env.deps.paths?.wikis;
@@ -210,7 +224,8 @@ export async function assignRun(
 		}
 	}
 	const areaId = known?.id ?? null;
-	const base = { at: now, runId: input.run.id, sessionId: input.run.sessionId ?? null, areaId, wiki };
+	const pages = [...new Set([...wikiPagesTouched(input.spans, wikisDir), ...(input.extraPages ?? [])])].filter((x) => x.endsWith(".html")).slice(0, 5);
+	const base = { at: now, runId: input.run.id, sessionId: input.run.sessionId ?? null, areaId, wiki, pages };
 	let fed = false;
 	if (reply.feed.trim()) {
 		appendFileSync(join(wikisDir, FEED_FILE), `${JSON.stringify({ ...base, text: redact(reply.feed.trim()), verified })}\n`);
