@@ -17,8 +17,8 @@ describe("wiki prompt", () => {
 		expect(renderSystemPrompt(base)).not.toContain("Wikis:");
 	});
 
-	it("puts the wikis directory under the nexo home", () => {
+	it("puts the home folder under the nexo home", () => {
 		const paths = resolveNexoPaths({ NEXO_HOME: "/tmp/nexo-x" });
-		expect(paths.wikis).toBe("/tmp/nexo-x/wikis");
+		expect(paths.homeRoot).toBe("/tmp/nexo-x/home");
 	});
 });

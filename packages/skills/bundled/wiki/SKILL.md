@@ -9,9 +9,9 @@ metadata:
 
 A wiki is a folder of interlinked HTML pages that you build and keep current for the user. Knowledge is compiled once, when a source arrives, instead of being rediscovered on every question. You write and maintain the pages. The user brings sources and asks questions.
 
-The wikis directory is named in your system prompt. Each wiki is one folder in it, named for its topic in lowercase with hyphens: `<wikis>/<name>/`. Reach it with absolute paths in `read`, `write`, `edit` and `bash`. Never put wiki pages in the run workspace and never touch other nexo files.
+The wikis directory is named in your system prompt. Each wiki is one folder one level under its area, named for its topic in lowercase with hyphens: `<wikis>/<area>/<name>/` (for example `<wikis>/builds/nexo/`). Reach it with absolute paths in `read`, `write`, `edit` and `bash`. Never put wiki pages in the run workspace and never touch other nexo files.
 
-If the user does not name a wiki, list the wikis directory and pick the one that fits the topic. If none fits and the task produced durable subject knowledge worth keeping, create a new wiki without asking and tell the user its name and why. Do not create a wiki for a one-off question or for knowledge about how you should behave (that belongs to memories and playbooks).
+If the user does not name a wiki, list the area folders (`ls <wikis>/*/`) and pick the wiki that fits the topic. If none fits and the task produced durable subject knowledge worth keeping, create a new wiki without asking and tell the user its name and why. Do not create a wiki for a one-off question or for knowledge about how you should behave (that belongs to memories and playbooks).
 
 The wiki holds knowledge about a subject. Lessons about how you should behave next time belong to nexo's memories and playbooks, which you do not edit. Do not copy the same fact into both.
 
@@ -34,7 +34,7 @@ The wiki holds knowledge about a subject. Lessons about how you should behave ne
 
 `<wikis>/areas.json` lists the user's life areas (for example work, builds, research). Each area has a scope note, aliases and the wikis it holds. The user approves every area.
 
-- Before creating a wiki, read `areas.json` and pick the area whose scope fits. Put the new wiki's name in that area's `wikis` list.
+- Before creating a wiki, read `areas.json` and pick the area whose scope fits. Create the wiki at `<wikis>/<area>/<name>/` and put its name in that area's `wikis` list. If no area fits, use `<wikis>/unsorted/<name>/`.
 - Never add, rename, merge or approve an area. If nothing fits, say so in your answer; the post-run step queues it and proposes a new area once three tasks need it.
 - Do not write `feed.jsonl` or `decisions.jsonl`; the post-run step writes them after the run is scored.
 

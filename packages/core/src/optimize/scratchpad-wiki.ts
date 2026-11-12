@@ -1,7 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { emptyScratchpad, SCRATCHPAD_ENTRIES, type Scratchpad, scratchpadEntry } from "@nexo/optimize";
-import { resolveConfined } from "@nexo/tools";
+import { findHomeFolder, resolveConfined, UNSORTED_AREA } from "@nexo/tools";
+
+/** The scratchpad wiki folder: wherever it already lives under an area, else <root>/unsorted/optimization. */
+function scratchpadDir(root: string): string {
+	return findHomeFolder(root, SCRATCHPAD_WIKI)?.dir ?? resolveConfined(root, `${UNSORTED_AREA}/${SCRATCHPAD_WIKI}`);
+}
 
 /** The wiki that holds what optimizations learned: one page per target, readable and editable in the Wikis UI. */
 export const SCRATCHPAD_WIKI = "optimization";
@@ -28,7 +33,7 @@ export function parseScratchpad(markdown: string): Scratchpad {
 /** The saved scratchpad of a target, or undefined when there is no page, it has no entries or it cannot be read. */
 export function readScratchpad(wikisDir: string, targetKey: string): Scratchpad | undefined {
 	try {
-		const file = resolveConfined(resolveConfined(wikisDir, SCRATCHPAD_WIKI), scratchpadPagePath(targetKey));
+		const file = resolveConfined(scratchpadDir(wikisDir), scratchpadPagePath(targetKey));
 		if (!existsSync(file)) return undefined;
 		const pad = parseScratchpad(readFileSync(file, "utf8"));
 		return pad.patterns.length + pad.antiPatterns.length > 0 ? pad : undefined;
@@ -44,7 +49,7 @@ export function writeScratchpad(
 	pad: Scratchpad,
 	info: { optimRunId: string; baseVersion: number; today: string; redact: (text: string) => string },
 ): string {
-	const wikiDir = resolveConfined(wikisDir, SCRATCHPAD_WIKI);
+	const wikiDir = scratchpadDir(wikisDir);
 	const { today } = info;
 	if (!existsSync(wikiDir)) {
 		for (const d of ["concepts", "entities", "sources", "analyses", "raw"]) mkdirSync(join(wikiDir, d), { recursive: true });

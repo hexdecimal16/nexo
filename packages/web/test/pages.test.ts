@@ -13,7 +13,7 @@ afterAll(async () => {
 	await server.close();
 });
 
-const PAGES = ["/", "/run.html", "/cost.html", "/judge.html", "/learning.html", "/optim.html", "/sessions.html", "/home.html", "/area.html"];
+const PAGES = ["/", "/run.html", "/cost.html", "/judge.html", "/learning.html", "/optim.html", "/sessions.html", "/home.html", "/area.html", "/page.html"];
 
 /** Every browser module reachable from the pages, following static `from "./x.ts"` imports. */
 async function reachableModules(): Promise<Map<string, string>> {

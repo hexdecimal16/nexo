@@ -1,3 +1,4 @@
+import { homeCommand } from "./home-migrate.ts";
 import { areasCommand } from "./areas.ts";
 import { parseArgs } from "node:util";
 import { judgeFamilyWarnings, type RunResult } from "@nexo/core";
@@ -255,6 +256,8 @@ export async function runCli(argv: string[], io: CliIO, options: CliOptions = {}
 				return await initCommand(rest, io, options, stdio);
 			case "update":
 				return await updateCommand(io, options);
+			case "home":
+				return homeCommand(rest, io, options);
 			case "areas":
 				return areasCommand(rest, io, options);
 			case "sessions":

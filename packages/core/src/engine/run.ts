@@ -891,7 +891,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				bashTimeoutMs: config.tools.bashTimeoutMs,
 				nexoHome: deps.paths.home,
 				...(sharedWorkspace ? {} : { runWorkspace: runDir.workspaceDir }),
-				...(rollout ? {} : { wikiRoots: [deps.paths.wikis] }),
+				...(rollout ? {} : { wikiRoots: [deps.paths.homeRoot] }),
 				toolOutputsDir: runDir.toolOutputsDir,
 				// Large-output pointers in a session's history name files saved by earlier turns' runs.
 				earlierToolOutputsDirs: sessionId
@@ -986,7 +986,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			plannerPrompt: tools.some((t) => t.name === "spawn") ? plannerPromptText : null,
 			webSearch: tools.some((t) => t.name === "web_search"),
 			workspace,
-			...(rollout ? {} : { wikisDir: deps.paths.wikis }),
+			...(rollout ? {} : { wikisDir: deps.paths.homeRoot }),
 			skillIndex: formatSkillIndex(deps.skills),
 			...(rollout ? {} : { environment: environmentBlock({ ...(request.projectDir ? { projectDir: request.projectDir } : {}), now: new Date(), workspaceShared: sharedWorkspace !== null, ...(process.env.SHELL ? { shell: process.env.SHELL } : {}) }) }),
 			...(request.projectDir && !rollout ? { projectInstructions: loadProjectInstructions(request.projectDir, config.instructions).block } : {}),

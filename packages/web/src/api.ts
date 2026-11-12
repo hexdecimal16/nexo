@@ -688,7 +688,7 @@ function parseSummary(content: string): string | undefined {
 
 /** `GET /api/wikis`: lists all wiki directories under the wikis path. */
 export function listWikisResponse(ctx: ApiContext): WikiListResponse {
-	const dir = ctx.wikisDir ?? resolveNexoPaths().wikis;
+	const dir = ctx.wikisDir ?? resolveNexoPaths().homeRoot;
 	if (!existsSync(dir)) return { wikis: [] };
 	const wikis: WikiItem[] = [];
 	for (const entry of readdirSync(dir)) {
@@ -730,7 +730,7 @@ export function listWikisResponse(ctx: ApiContext): WikiListResponse {
 
 /** `GET /api/wikis/{name}/pages`: lists all markdown pages in a wiki with summary metadata. */
 export function listWikiPagesResponse(ctx: ApiContext, wikiName: string): WikiPagesResponse {
-	const root = ctx.wikisDir ?? resolveNexoPaths().wikis;
+	const root = ctx.wikisDir ?? resolveNexoPaths().homeRoot;
 	let wikiDir: string;
 	try {
 		wikiDir = resolveConfined(root, wikiName);
@@ -780,7 +780,7 @@ export function listWikiPagesResponse(ctx: ApiContext, wikiName: string): WikiPa
 /** `GET /api/wikis/{name}/page?path=`: returns the text and summary of a single wiki page. */
 export function wikiPageResponse(ctx: ApiContext, wikiName: string, relPath: string): WikiPageResponse {
 	if (relPath.includes("\0")) throw invalidRequest("Path contains a NUL byte");
-	const root = ctx.wikisDir ?? resolveNexoPaths().wikis;
+	const root = ctx.wikisDir ?? resolveNexoPaths().homeRoot;
 	let wikiDir: string;
 	try {
 		wikiDir = resolveConfined(root, wikiName);

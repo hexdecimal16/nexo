@@ -11,7 +11,7 @@ export function areasCommand(args: string[], io: CliIO, options: CliOptions): nu
 	if (extra.length > 0) throw usageError(AREAS_USAGE);
 	const paths = resolveNexoPaths(options.env ?? process.env);
 	ensureNexoDirs(paths);
-	const registry = readRegistry(paths.wikis);
+	const registry = readRegistry(paths.homeRoot);
 	if (sub === "list") {
 		if (registry.areas.length === 0) {
 			io.stdout.write("No areas yet.\n");
@@ -30,14 +30,14 @@ export function areasCommand(args: string[], io: CliIO, options: CliOptions): nu
 	}
 	if ((sub !== "approve" && sub !== "reject") || !id) throw usageError(AREAS_USAGE);
 	if (sub === "approve") {
-		writeRegistry(paths.wikis, approveArea(registry, id));
+		writeRegistry(paths.homeRoot, approveArea(registry, id));
 		io.stdout.write(`Approved area ${id}\n`);
 		return 0;
 	}
 	const area = registry.areas.find((a) => a.id === id);
 	if (!area) throw new NexoError({ code: "NOT_FOUND", message: `No area "${id}"`, context: { id } });
 	if (area.status !== "proposed") throw new NexoError({ code: "CONFLICT", message: `Area "${id}" is active; only proposed areas can be rejected`, context: { id } });
-	writeRegistry(paths.wikis, { ...registry, areas: registry.areas.filter((a) => a.id !== id) });
+	writeRegistry(paths.homeRoot, { ...registry, areas: registry.areas.filter((a) => a.id !== id) });
 	io.stdout.write(`Rejected area ${id}\n`);
 	return 0;
 }

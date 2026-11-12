@@ -325,7 +325,7 @@ export async function startOptimization(baseEnv: EngineEnv, options: OptimizeOpt
 		ctx.reserveUsd = cases.holdout.length * Math.min(config.budgets.perRunUsd, 2 * dearest);
 		ctx.phase = "loop";
 		options.onEvent?.({ type: "phase", phase: "loop" });
-		const wikisDir = env.deps.paths?.wikis;
+		const wikisDir = env.deps.paths?.homeRoot;
 		const seededPad = wikisDir ? readScratchpad(wikisDir, target.key) : undefined;
 		const result = await runGepa({
 			adapter,

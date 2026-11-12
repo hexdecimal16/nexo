@@ -26,7 +26,7 @@ describe("scratchpad wiki page", () => {
 		expect(readScratchpad(dir, "system_prompt")).toBeUndefined();
 		const file = writeScratchpad(dir, "system_prompt", { patterns: ["Ask for the path first."], antiPatterns: ["Longer bullet lists."] }, info);
 		expect(file.endsWith(join("optimization", "analyses", "optim-system-prompt.md"))).toBe(true);
-		for (const f of ["AGENTS.md", "index.md", "log.md", "overview.md"]) expect(existsSync(join(dir, "optimization", f))).toBe(true);
+		for (const f of ["AGENTS.md", "index.md", "log.md", "overview.md"]) expect(existsSync(join(dir, "unsorted", "optimization", f))).toBe(true);
 		expect(readFileSync(file, "utf8")).toContain("sources: [optim:o1]");
 		expect(readScratchpad(dir, "system_prompt")).toEqual({ patterns: ["Ask for the path first."], antiPatterns: ["Longer bullet lists."] });
 		expect(readScratchpad(dir, "planner_prompt")).toBeUndefined();

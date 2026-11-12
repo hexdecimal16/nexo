@@ -9,3 +9,4 @@ export * from "./read-only.ts";
 export * from "./session-rules.ts";
 export * from "./web-search.ts";
 export * from "./wiki-page.ts";
+export * from "./home-folders.ts";

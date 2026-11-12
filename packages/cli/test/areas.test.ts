@@ -7,7 +7,7 @@ import { areasCommand } from "../src/areas.ts";
 
 function setup() {
 	const home = mkdtempSync(join(tmpdir(), "nexo-areas-cli-"));
-	const wikis = join(home, "wikis");
+	const wikis = join(home, "home");
 	mkdirSync(wikis, { recursive: true });
 	const area = (id: string, status: "active" | "proposed") => ({ id, name: id, scope: `${id} scope`, examples: [], aliases: [], wikis: [], status, createdAt: "2026-11-11" });
 	writeRegistry(wikis, { ...emptyRegistry(), areas: [area("work", "active"), area("travel", "proposed"), area("media", "proposed")] });

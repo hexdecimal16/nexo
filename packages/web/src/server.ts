@@ -1,4 +1,4 @@
-import { homeResponse } from "./home-api.ts";
+import { homeFolderResponse, homePageResponse, homeResponse } from "./home-api.ts";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -302,6 +302,14 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 			return sendJson(res, 200, reviewEvalCaseResponse(ctx, m[1] as string, m[2] as "accept" | "dismiss"));
 		}
 		
+		if (path === "/api/home/folder") {
+			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
+			return sendJson(res, 200, homeFolderResponse(ctx, url.searchParams.get("area") ?? "", url.searchParams.get("name") ?? ""));
+		}
+		if (path === "/api/home/page") {
+			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
+			return sendJson(res, 200, homePageResponse(ctx, url.searchParams.get("path") ?? ""));
+		}
 		if (path === "/api/home") {
 			if (method !== "GET") throw methodNotAllowed(method, path, "GET");
 			return sendJson(res, 200, homeResponse(ctx));

@@ -13,9 +13,9 @@ let server: WebServer;
 beforeAll(async () => {
 	fx = buildFixture();
 	const wikis = join(fx.home, "wikis");
-	mkdirSync(join(wikis, "nexo", "concepts"), { recursive: true });
-	writeFileSync(join(wikis, "nexo", "overview.html"), '<!doctype html><html><head><meta name="summary" content="The nexo harness"></head><body></body></html>');
-	writeFileSync(join(wikis, "nexo", "concepts", "a.html"), "<!doctype html><html></html>");
+	mkdirSync(join(wikis, "builds", "nexo", "concepts"), { recursive: true });
+	writeFileSync(join(wikis, "builds", "nexo", "overview.html"), '<!doctype html><html><head><meta name="summary" content="The nexo harness"></head><body></body></html>');
+	writeFileSync(join(wikis, "builds", "nexo", "concepts", "a.html"), "<!doctype html><html></html>");
 	const area = (id: string, status: string, w: string[]) => ({ id, name: id, scope: `${id} scope`, examples: [], aliases: [], wikis: w, status, createdAt: "2026-11-11" });
 	writeFileSync(join(wikis, "areas.json"), JSON.stringify({ version: 1, areas: [area("builds", "active", ["nexo", "missing"]), area("travel", "proposed", [])], unsorted: [{ label: "travel" }] }));
 	const lines = [
@@ -40,12 +40,23 @@ describe("home API", () => {
 		expect(res.status).toBe(200);
 		const d = res.json() as HomeResponse;
 		expect(d.areas.map((a) => a.id)).toEqual(["builds"]);
-		expect(d.areas[0]?.wikis).toEqual([{ name: "nexo", summary: "The nexo harness", pageCount: 2 }]);
+		expect(d.areas[0]?.wikis).toEqual([{ name: "nexo", summary: "The nexo harness", pageCount: 2, path: "builds/nexo" }]);
 		expect(d.areas[0]?.recent).toBe(1);
 		expect(d.feed.map((f) => f.text)).toEqual(["Fixed the build", "Old work"]);
 		expect(d.decisions[0]?.choice).toBe("HTML pages");
 		expect(d.proposed).toEqual([{ id: "travel", name: "travel" }]);
 		expect(d.unsorted).toBe(1);
+	});
+
+	it("lists a folder's pages and serves one page, refusing paths outside the home", async () => {
+		const f = await raw(server.port, "/api/home/folder?area=builds&name=nexo");
+		expect(f.status).toBe(200);
+		expect((f.json() as { pages: { path: string }[] }).pages.map((p) => p.path)).toEqual(["builds/nexo/concepts/a.html", "builds/nexo/overview.html"]);
+		const p = await raw(server.port, "/api/home/page?path=builds/nexo/overview.html");
+		expect(p.status).toBe(200);
+		expect((p.json() as { summary?: string }).summary).toBe("The nexo harness");
+		for (const bad of ["../../etc/x.html", "areas.json", "builds/nexo/../../x.html", "builds/x.html"]) expect((await raw(server.port, `/api/home/page?path=${encodeURIComponent(bad)}`)).status, bad).not.toBe(200);
+		expect((await raw(server.port, "/api/home/folder?area=..&name=nexo")).status).not.toBe(200);
 	});
 
 	it("serves the home page", async () => {

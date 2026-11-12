@@ -24,7 +24,7 @@ describe("wiki curator", () => {
 	it("creates a new wiki and files a page when durable knowledge is proposed", async () => {
 		const baseEnv = makeEnv();
 		const wikisDir = mkdtempSync(join(tmpdir(), "nexo-test-wikis-"));
-		baseEnv.deps.paths = { ...baseEnv.deps.paths, wikis: wikisDir };
+		baseEnv.deps.paths = { ...baseEnv.deps.paths, homeRoot: wikisDir };
 
 		script(baseEnv, [
 			"Raft is a leader-based consensus algorithm that manages replicated logs across distributed nodes.",
@@ -66,7 +66,7 @@ describe("wiki curator", () => {
 		expect(outcome.pagesCreated).toBe(1);
 		expect(outcome.wikisTouched).toEqual(["distributed-systems"]);
 
-		const pageFile = join(wikisDir, "distributed-systems", "concepts", "raft.html");
+		const pageFile = join(wikisDir, "unsorted", "distributed-systems", "concepts", "raft.html");
 		expect(existsSync(pageFile)).toBe(true);
 		const content = readFileSync(pageFile, "utf8");
 		expect(parseWikiMeta(content).summary).toBe("Raft is a leader-based consensus algorithm.");
@@ -74,8 +74,8 @@ describe("wiki curator", () => {
 		expect(content).toContain("<p>Raft elects a leader and replicates logs.</p>");
 
 		// Index & AGENTS should also be created
-		expect(existsSync(join(wikisDir, "distributed-systems", "AGENTS.md"))).toBe(true);
-		expect(existsSync(join(wikisDir, "distributed-systems", "index.html"))).toBe(true);
-		expect(existsSync(join(wikisDir, "distributed-systems", "log.md"))).toBe(true);
+		expect(existsSync(join(wikisDir, "unsorted", "distributed-systems", "AGENTS.md"))).toBe(true);
+		expect(existsSync(join(wikisDir, "unsorted", "distributed-systems", "index.html"))).toBe(true);
+		expect(existsSync(join(wikisDir, "unsorted", "distributed-systems", "log.md"))).toBe(true);
 	});
 });

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { dataBlock } from "@nexo/scorers";
-import { resolveConfined, wrapWikiHtml } from "@nexo/tools";
+import { findHomeFolder, listHomeFolders, resolveConfined, UNSORTED_AREA, wrapWikiHtml } from "@nexo/tools";
 import { type Static, Type } from "typebox";
 import type { RunRow, SpanRow } from "@nexo/store";
 import { type ChargedCallDeps, structuredLearnCall } from "./caller.ts";
@@ -73,7 +73,7 @@ export async function curateWikiKnowledge(
 	output: string,
 	spans: readonly SpanRow[],
 ): Promise<WikiCurateResult> {
-	const wikisDir = deps.env.deps.paths?.wikis;
+	const wikisDir = deps.env.deps.paths?.homeRoot;
 	if (!wikisDir) return { pagesCreated: 0, wikisTouched: [], pages: [] };
 	if (!existsSync(wikisDir)) mkdirSync(wikisDir, { recursive: true });
 
@@ -98,6 +98,7 @@ export async function curateWikiKnowledge(
 		existingWikis = [];
 	}
 
+	existingWikis = listHomeFolders(wikisDir).map((f) => f.name);
 	const prompt = wikiCuratorPrompt({
 		instruction: run.instruction,
 		output,
@@ -119,7 +120,7 @@ export async function curateWikiKnowledge(
 
 	for (const p of curation.pages) {
 		try {
-			const wikiDir = resolveConfined(wikisDir, p.wikiName);
+			const wikiDir = findHomeFolder(wikisDir, p.wikiName)?.dir ?? resolveConfined(wikisDir, `${UNSORTED_AREA}/${p.wikiName}`);
 			if (!existsSync(wikiDir)) {
 				mkdirSync(wikiDir, { recursive: true });
 				mkdirSync(join(wikiDir, "concepts"), { recursive: true });
@@ -143,7 +144,7 @@ export async function curateWikiKnowledge(
 			const pageHtml = wrapWikiHtml({ title: titleFromPath(pagePath), summary: p.summary, updated: today, sources: [`run:${run.id}`], body: p.content });
 			writeFileSync(targetFile, pageHtml);
 			pagesCreated++;
-			createdPages.push(`${p.wikiName}/${pagePath}`);
+			createdPages.push(relative(wikisDir, targetFile).split(sep).join("/"));
 			wikisTouched.add(p.wikiName);
 
 			const logFile = join(wikiDir, "log.md");

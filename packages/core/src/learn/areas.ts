@@ -3,6 +3,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { dataBlock } from "@nexo/scorers";
 import type { RunRow, ScoreRow, SpanRow } from "@nexo/store";
 import { NexoError } from "@nexo/telemetry";
+import { listHomeFolders } from "@nexo/tools";
 import { type Static, Type } from "typebox";
 import { type ChargedCallDeps, structuredLearnCall } from "./caller.ts";
 
@@ -142,11 +143,7 @@ export function wikiPagesTouched(spans: readonly SpanRow[], wikisDir: string): s
 }
 
 function listWikis(wikisDir: string): string[] {
-	try {
-		return readdirSync(wikisDir).filter((f) => !f.startsWith(".") && statSync(join(wikisDir, f)).isDirectory());
-	} catch {
-		return [];
-	}
+	return listHomeFolders(wikisDir).map((f) => f.name);
 }
 
 export const AssignmentSchema = Type.Object(
@@ -196,7 +193,7 @@ export async function assignRun(
 	input: { run: RunRow; output: string; spans: readonly SpanRow[]; scores: readonly ScoreRow[]; cwd?: string; extraPages?: readonly string[] },
 ): Promise<AssignResult> {
 	const none: AssignResult = { areaId: null, feed: false, decisions: 0, proposed: null, verified: false };
-	const wikisDir = deps.env.deps.paths?.wikis;
+	const wikisDir = deps.env.deps.paths?.homeRoot;
 	if (!wikisDir || !existsSync(wikisDir)) return none;
 	if (!input.output || input.output.trim().length < 50) return none;
 	const registry = readRegistry(wikisDir);

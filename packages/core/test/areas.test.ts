@@ -46,8 +46,8 @@ describe("area registry", () => {
 async function setup(reply: object) {
 	const baseEnv = makeEnv();
 	const wikisDir = mkdtempSync(join(tmpdir(), "nexo-areas-"));
-	mkdirSync(join(wikisDir, "nexo"));
-	baseEnv.deps.paths = { ...baseEnv.deps.paths, wikis: wikisDir };
+	mkdirSync(join(wikisDir, "builds", "nexo"), { recursive: true });
+	baseEnv.deps.paths = { ...baseEnv.deps.paths, homeRoot: wikisDir };
 	writeRegistry(wikisDir, { ...emptyRegistry(), areas: [software] });
 	script(baseEnv, ["Fixed the nexo build: the failing import in the tools package now resolves and the tests pass.", JSON.stringify(reply)]);
 	const { result, learnEnv } = await finishedRun(baseEnv, { instruction: "Fix the nexo build" });

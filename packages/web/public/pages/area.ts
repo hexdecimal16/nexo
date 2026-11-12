@@ -3,7 +3,7 @@ import { formatTime } from "../lib/format.ts";
 import { html, type SafeHtml } from "../lib/html.ts";
 import { asErrorBody, el, getJson } from "./api.ts";
 
-interface HomeWiki { name: string; summary?: string; pageCount: number }
+interface HomeWiki { name: string; summary?: string; pageCount: number; path: string }
 interface HomeArea { id: string; name: string; scope: string; wikis: HomeWiki[]; recent: number }
 interface HomeFeedItem { at: string; text: string; areaId: string | null; wiki: string | null; sessionId: string | null; runId: string; verified: boolean; pages?: string[] }
 interface HomeDecision { at: string; choice: string; reason: string; areaId: string | null; wiki: string | null; sessionId: string | null; runId: string }
@@ -17,10 +17,10 @@ const errorBox = el<HTMLDivElement>("#error");
 const empty = (text: string): SafeHtml => html`<p class="muted">${text}</p>`;
 const stat = (n: number, label: string): SafeHtml => html`<div class="area-stat"><b>${String(n)}</b><span class="muted">${label}</span></div>`;
 
-function pageLinks(f: { pages?: string[]; wiki: string | null }): SafeHtml {
+function pageLinks(f: { pages?: string[]; wiki: string | null; areaId: string | null }): SafeHtml {
 	const pages = (f.pages ?? []).filter((p) => p.endsWith(".html") && p.includes("/") && !p.includes(".."));
-	if (pages.length > 0) return html`${pages.map((p) => html`<a class="feed-page" href="/wikis.html#${p.slice(0, -5).split("/").map(encodeURIComponent).join("/")}">${p.slice(p.indexOf("/") + 1, -5)}</a> `)}`;
-	return f.wiki ? html`<a class="feed-page" href="/wikis.html#${encodeURIComponent(f.wiki)}/index">${f.wiki} wiki</a>` : html``;
+	if (pages.length > 0) return html`${pages.map((p) => html`<a class="feed-page" href="/page.html?path=${encodeURIComponent(p)}">${p.slice(p.lastIndexOf("/") + 1, -5)}</a> `)}`;
+	return f.wiki && f.areaId ? html`<a class="feed-page" href="/page.html?path=${encodeURIComponent(`${f.areaId}/${f.wiki}/index.html`)}">${f.wiki}</a>` : html``;
 }
 
 function render(d: Home, id: string): void {
@@ -36,7 +36,7 @@ function render(d: Home, id: string): void {
 	const decisions = d.decisions.filter((x) => x.areaId === a.id);
 	const sessions = d.sessions.filter((s) => s.areaId === a.id);
 	const pages = a.wikis.reduce((n, w) => n + w.pageCount, 0);
-	const wikis = a.wikis.map((w) => html`<a class="area-card" href="/wikis.html#${encodeURIComponent(w.name)}/index"><strong>${w.name}</strong><span class="muted">${String(w.pageCount)} pages</span>${w.summary ? html`<span class="area-card-text">${w.summary}</span>` : ""}</a>`);
+	const wikis = a.wikis.map((w) => html`<a class="area-card" href="/page.html?path=${encodeURIComponent(`${w.path}/index.html`)}"><strong>${w.name}</strong><span class="muted">${String(w.pageCount)} pages</span>${w.summary ? html`<span class="area-card-text">${w.summary}</span>` : ""}</a>`);
 	const timeline = feed.map((f) => {
 		const link = f.sessionId ? html`<a href="/?session=${encodeURIComponent(f.sessionId)}">session</a>` : html`<a href="/run.html?id=${encodeURIComponent(f.runId)}">run</a>`;
 		return html`<li><time>${formatTime(f.at)}${f.wiki ? ` · ${f.wiki}` : ""}</time>${f.text}${f.verified ? "" : html` <span class="home-tag">unverified</span>`} ${pageLinks(f)} ${link}</li>`;
