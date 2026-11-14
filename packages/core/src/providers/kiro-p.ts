@@ -418,6 +418,10 @@ class AcpConnection {
 				// makes it call the actions below natively ("Tool X is not available"). Denying every capability empties the
 				// request's tool list, so the model cannot emit a tool call at all.
 				permissions: { rules: [{ capability: "all", effect: "deny" }] },
+				// Kiro's server-side `consolidate_disclosures` experiment (seen from 2026-11-13) adds a `load_resource` tool tagged
+				// `@mcp-disclosure`, which the allowlist always re-admits and no capability denies; only `excludedTools` drops it.
+				// The rest are its siblings in the deferred-tool path, excluded so the next variant cannot slip through the same way.
+				excludedTools: ["load_resource", "tool_load", "tool_call", "disclose_context", "kiro_powers"],
 				mcpServers: {},
 				includeMcpJson: false,
 				includePowers: false,
