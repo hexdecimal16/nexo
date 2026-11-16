@@ -86,6 +86,20 @@ export function foreignToolCallsAsText(messages: AgentMessage[], target: Pick<Mo
 	return changed ? out : messages;
 }
 
+/**
+ * Characters an image is counted as: about 1,600 visual tokens (a downscaled screenshot on Claude's standard tier) at
+ * 4 characters per token. Counting its base64 data instead would make one screenshot look like a million tokens.
+ */
+export const IMAGE_ESTIMATE_CHARS = 6400;
+
 export function estimatePromptChars(messages: readonly AgentMessage[]): number {
-	return JSON.stringify(messages).length;
+	let images = 0;
+	const json = JSON.stringify(messages, (_key, value: unknown) => {
+		if (value && typeof value === "object" && (value as { type?: unknown }).type === "image" && typeof (value as { data?: unknown }).data === "string") {
+			images++;
+			return { type: "image" };
+		}
+		return value;
+	});
+	return json.length + images * IMAGE_ESTIMATE_CHARS;
 }

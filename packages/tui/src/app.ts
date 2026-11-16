@@ -22,6 +22,7 @@ import { createApprovalPrompter } from "./approvals.ts";
 import { helpText, isSkillCommand, parseSlashCommand, SLASH_COMMANDS, skillSlashCommands } from "./commands.ts";
 import { Block, DynamicLine, QueuedList, SafeContainer, SafeMarkdown, SubagentLine, SubagentPanel, Ticker, ToolLine, ViewMode } from "./components.ts";
 import { createAutocompleteProvider } from "./file-autocomplete.ts";
+import { ImageAttachments, readClipboardImage, withImageLabels } from "./image-attachments.ts";
 import { createSessionPickerScreen, type SessionChoice } from "./session-picker.ts";
 import { SettingsScreen, type SettingsScreenMode } from "./settings-screen.ts";
 import { escapeControl, escapeControlKeepLines, formatError, oneLine, toolSummary, usd } from "./text.ts";
@@ -168,6 +169,9 @@ class InteractiveApp {
 	private runningShell = false;
 	/** Messages typed while a turn or command runs; sent one at a time once it ends, moved back to the editor on abort or failure. */
 	private queued: { text: string; steered: boolean }[] = [];
+	/** Images attached to drafts (dropped paths, ctrl+v); messages carry the ones whose `[Image #n]` markers they contain. */
+	private readonly images = new ImageAttachments();
+	private replacingPaths = false;
 	private readonly queueView = new QueuedList(() => this.queued.map((q) => q.text));
 	private turnCost = 0;
 	private lastTurnCost = 0;
@@ -209,6 +213,7 @@ class InteractiveApp {
 		this.editor = new Editor(this.tui, editorTheme);
 		this.editor.borderColor = (border) => (this.shellMode() ? shellBorder(border) : editorTheme.borderColor(border));
 		this.editor.onSubmit = (text) => this.onSubmit(text);
+		this.editor.onChange = (text) => this.onEditorChange(text);
 		this.prompter = createApprovalPrompter({ show: (box) => this.showApproval(box) }, { now: this.now, redact: (text) => this.settings.redact(text) });
 		const root = new SafeContainer();
 		root.addChild(this.chat);
@@ -447,6 +452,11 @@ class InteractiveApp {
 			this.tui.requestRender(true);
 			return { consume: true };
 		}
+		if (matchesKey(data, "ctrl+v") && this.screen === "chat" && this.session) {
+			if (isKeyRepeat(data)) return { consume: true };
+			this.pasteClipboardImage();
+			return { consume: true };
+		}
 		if (matchesKey(data, "ctrl+d") && this.screen === "chat" && this.session && !this.running && this.editor.getText() === "") {
 			this.requestExit();
 			return { consume: true };
@@ -458,6 +468,39 @@ class InteractiveApp {
 			});
 		}
 		return undefined;
+	}
+
+	/** A file dragged into the terminal arrives as its path: an image path becomes an `[Image #n]` attachment. */
+	private onEditorChange(text: string): void {
+		if (this.replacingPaths || !/\.(png|jpe?g|gif|webp)\b/i.test(text)) return;
+		// Replace in the expanded text: setText drops the editor's collapsed-paste markers, so their content is kept inline.
+		const replaced = this.images.replaceDroppedPaths(this.editor.getExpandedText());
+		if (!replaced) return;
+		if (replaced.attached.length > 0) {
+			this.replacingPaths = true;
+			try {
+				this.editor.setText(replaced.text);
+			} finally {
+				this.replacingPaths = false;
+			}
+		}
+		for (const path of replaced.failed) this.say(`could not attach ${path}`);
+		this.tui.requestRender();
+	}
+
+	/** ctrl+v: attaches the image on the clipboard (a screenshot) at the cursor. */
+	private pasteClipboardImage(): void {
+		const bytes = readClipboardImage();
+		if (!bytes) {
+			this.say(process.platform === "darwin" || process.platform === "linux" ? "no image on the clipboard" : "pasting images from the clipboard is not supported here; drag the file in instead");
+			return;
+		}
+		try {
+			this.editor.insertTextAtCursor(this.images.attachBytes(bytes, "clipboard image"));
+		} catch (error) {
+			this.say(`could not attach the clipboard image: ${error instanceof Error ? error.message : String(error)}`);
+		}
+		this.tui.requestRender();
 	}
 
 	private onSubmit(raw: string): void {
@@ -478,7 +521,8 @@ class InteractiveApp {
 		if (this.running) {
 			// Plain text goes into the running turn at its next step; `!` commands and anything typed during a command wait.
 			// A skill command waits for its own turn: steering would drop the skill pin.
-			const steered = !this.runningShell && !text.startsWith("!") && !text.startsWith("/") && this.session.steer(text);
+			const { images, labels } = this.images.resolve(text);
+			const steered = !this.runningShell && !text.startsWith("!") && !text.startsWith("/") && this.session.steer(withImageLabels(text, labels), images);
 			this.queued.push({ text, steered });
 			this.say(`queued (${this.queued.length}) · ${steered ? "sent to the agent at its next step" : `sent when the ${this.runningShell ? "command" : "turn"} ends`}`);
 			return;
@@ -571,7 +615,8 @@ class InteractiveApp {
 		this.startTicker();
 		let result: RunResult | null = null;
 		try {
-			result = await session.turn(text, { signal: abort.signal, onEvent: (event) => this.onEvent(event) });
+			const { images, labels } = this.images.resolve(text);
+			result = await session.turn(withImageLabels(text, labels), { signal: abort.signal, onEvent: (event) => this.onEvent(event), ...(images.length > 0 ? { images } : {}) });
 		} catch (error) {
 			this.sayError(toErrorPayload(error));
 		} finally {

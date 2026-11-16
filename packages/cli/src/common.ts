@@ -59,7 +59,7 @@ export const USAGE = `Usage:
   nexo settings remove-key <provider>      delete a key from the credentials file
   nexo settings keys                       key status of the model and web search providers (never the keys)
   nexo search <query...> [--count <n>] [--json]   search the web with the configured Brave/Tavily keys
-  nexo run <instruction...> [--skill <name>] [--model <s1|s2|provider/id>] [--effort <level>] [--workspace <dir>] [--budget <usd>] [--no-review] [--allow-all]
+  nexo run <instruction...> [--skill <name>] [--model <s1|s2|provider/id>] [--effort <level>] [--workspace <dir>] [--budget <usd>] [--image <path>]... [--no-review] [--allow-all]
   nexo cost [--by model|tier|day|run|skill] [--since YYYY-MM-DD]
   nexo reindex
   nexo review-queue [--limit <n>] [--days <n>]   recent runs without a verdict, worst first

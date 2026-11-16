@@ -203,6 +203,8 @@ pre.diff span { display: block; white-space: pre-wrap; padding: 0 12px; }
 .diff-meta { color: var(--muted); }
 .media { display: block; max-width: 100%; max-height: 480px; margin: 4px 0; background: #000; }
 audio.media { background: none; }
+.image-strip { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0; }
+.image-strip .thumb { display: block; max-width: 240px; max-height: 180px; border: 1px solid var(--line); border-radius: 2px; background: var(--panel); object-fit: contain; }
 
 /* Scores and sources */
 .score-pass, .crit-pass, .esc-applied strong { color: var(--ok); }

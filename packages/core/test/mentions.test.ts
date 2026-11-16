@@ -47,7 +47,7 @@ describe("expandMentions", () => {
 	it("leaves emails, packages, directories, missing, binary and secret files as plain text", () => {
 		const dir = project();
 		const message = "mail me@src/a.ts, use @scope/pkg, see @src @missing.ts @bin.dat @.env";
-		expect(expandMentions(message, dir)).toEqual({ text: message, files: [] });
+		expect(expandMentions(message, dir)).toEqual({ text: message, files: [], images: [] });
 	});
 
 	it("refuses paths outside the project root, including through symlinks", () => {

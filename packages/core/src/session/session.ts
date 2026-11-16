@@ -1,6 +1,6 @@
 import { realpathSync, statSync } from "node:fs";
 import { resolve } from "node:path";
-import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ImageContent, Message } from "@earendil-works/pi-ai";
 import { type Effort, EFFORTS, isEffort, parseModelRef } from "@nexo/router";
 import {
 	type Db,
@@ -39,6 +39,7 @@ import {
 	type HistoryPreparer,
 	type RunModelInfo,
 	type RunResult,
+	type SteeringControl,
 } from "../engine/run.ts";
 import type { RunMemoryContext } from "../learn/context.ts";
 import { LearnWorker } from "../learn/worker.ts";
@@ -94,6 +95,8 @@ export interface TurnOptions {
 	onEvent?: (event: EngineEvent) => void;
 	/** Pins a skill for this turn, as `nexo run --skill` does; an unknown name ends the turn with SKILL_NOT_FOUND. */
 	skill?: string;
+	/** Images sent with the message (see `loadImageFile`), after any the message attaches with `@path`. */
+	images?: ImageContent[];
 }
 
 export interface ShellOptions {
@@ -335,16 +338,17 @@ export class Session {
 	}
 
 	/** Messages steered before the run's agent exists; handed to it once it does. */
-	private steerPending: string[] = [];
-	private steerCtl: { steer(text: string): void; clear(): void } | null = null;
+	private steerPending: { text: string; images: ImageContent[] }[] = [];
+	private steerCtl: SteeringControl | null = null;
 
-	/** Sends a message into the running turn, injected before the agent's next model call. False when no turn runs. */
-	steer(text: string): boolean {
-		if (!this.busy || !text.trim()) return false;
+	/** Sends a message (and any images) into the running turn, injected before the agent's next model call. False when no turn runs. */
+	steer(text: string, images: readonly ImageContent[] = []): boolean {
+		if (!this.busy || (!text.trim() && images.length === 0)) return false;
 		// Same `@file` attachment as a typed turn, so the agent gets the contents instead of reading the file itself.
-		const sent = expandMentions(text, this.state.cwd).text;
-		if (this.steerCtl) this.steerCtl.steer(sent);
-		else this.steerPending.push(sent);
+		const expanded = expandMentions(text, this.state.cwd);
+		const all = [...expanded.images, ...images];
+		if (this.steerCtl) this.steerCtl.steer(expanded.text, all);
+		else this.steerPending.push({ text: expanded.text, images: all });
 		return true;
 	}
 
@@ -360,7 +364,7 @@ export class Session {
 	 * when the session cannot be saved.
 	 */
 	async turn(instruction: string, options: TurnOptions = {}): Promise<RunResult> {
-		if (!instruction.trim()) throw invalid("The message is empty");
+		if (!instruction.trim() && !options.images?.length) throw invalid("The message is empty");
 		if (this.state.status === "closed") throw invalid(`Session ${this.id} is closed`, "Resume it with `nexo --resume`");
 		if (this.busy) throw invalid("A turn is already running", "Wait for it to finish or abort it");
 		this.busy = true;
@@ -389,12 +393,15 @@ export class Session {
 			// `/impeccable init` pins the skill like `nexo run --skill`, so SDK sessions and the TUI read it the same way.
 			const invoked = options.skill ? null : parseSkillInvocation(instruction, this.deps.skills.skills.keys());
 			const skill = options.skill ?? invoked?.skill;
-			const sent = withShellNotes(this.state.pendingShell ?? [], expandMentions(invoked?.instruction ?? instruction, this.state.cwd).text);
+			const expanded = expandMentions(invoked?.instruction ?? instruction, this.state.cwd);
+			const sent = withShellNotes(this.state.pendingShell ?? [], expanded.text);
+			const images = [...expanded.images, ...(options.images ?? [])];
 			const workspace = this.state.workspace;
 			const previous = workspace === null ? latestSessionRunWorkspace(this.deps.db, this.id) : undefined;
 			const result = await executeRun(this.env, {
 				request: {
 					instruction: sent,
+					...(images.length > 0 ? { images } : {}),
 					history: buildHistory(this.lines, this.env.now().getTime()),
 					prepareHistory: this.compactionHook(turnIndex, limit.usd),
 					sessionId: this.id,
@@ -412,7 +419,7 @@ export class Session {
 					allowAll: this.allowAll,
 					onSteeringReady: (control) => {
 						this.steerCtl = control;
-						for (const text of this.steerPending.splice(0)) control.steer(text);
+						for (const pending of this.steerPending.splice(0)) control.steer(pending.text, pending.images);
 					},
 				},
 				budget: new RunBudget(limit.usd),
@@ -426,7 +433,7 @@ export class Session {
 							},
 						}),
 			});
-			if (result.trajectoryId !== null) this.recordTurn(turnIndex, instruction, sent, result);
+			if (result.trajectoryId !== null) this.recordTurn(turnIndex, instruction, sent, result, images);
 			this.learner.kick();
 			return result;
 		} finally {
@@ -637,10 +644,10 @@ export class Session {
 	}
 
 	/** `instruction` is what the user typed; `sent` is the message the run started from (with any `!` command notes). */
-	private recordTurn(turnIndex: number, instruction: string, sent: string, result: RunResult): void {
+	private recordTurn(turnIndex: number, instruction: string, sent: string, result: RunResult, images: readonly ImageContent[] = []): void {
 		// A run that ended before its first request returns no messages; the message is kept so it is not lost.
 		const messages: Message[] =
-			result.messages.length > 0 ? result.messages : [{ role: "user", content: [{ type: "text", text: sent }], timestamp: this.env.now().getTime() }];
+			result.messages.length > 0 ? result.messages : [{ role: "user", content: [{ type: "text", text: sent }, ...images], timestamp: this.env.now().getTime() }];
 		this.appendLines(messages.map((message) => ({ type: "message", turnIndex, message })));
 		this.state.turns = turnIndex;
 		this.state.costUsd += result.costUsd;

@@ -19,7 +19,7 @@ import {
 	type Usage,
 } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
-import { renderTranscript } from "./claude-p.ts";
+import { partsText, renderTranscriptParts } from "./claude-p.ts";
 import { type SpawnedProcess, type SpawnRequest, spawnGroup } from "./process-runner.ts";
 
 /** Provider id: models are referenced as `codex-p/<model>`, e.g. `codex-p/gpt-6-astra`. */
@@ -90,9 +90,12 @@ function codexPModels(): Model<string>[] {
 		api: CODEX_P_API,
 		provider: CODEX_P_PROVIDER,
 		baseUrl: "",
-		input: ["text"],
+		input: ["text", "image"],
 	}));
 }
+
+/** File extension for an attached image's type. */
+const IMAGE_EXTENSION: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" };
 
 function plainSchema(tool: Tool): JsonObject {
 	return JSON.parse(JSON.stringify(tool.parameters)) as JsonObject;
@@ -326,9 +329,19 @@ function streamCodexP(
 				await writeFile(file, JSON.stringify(codexReplySchema(tools)), "utf8");
 				args.push("--output-schema", file);
 			}
+			// Images are attached as files with --image (in the order they appear); the transcript marks where each one was.
+			const parts = renderTranscriptParts(context.messages);
+			let imageCount = 0;
+			for (const part of parts) {
+				if (part.type !== "image") continue;
+				const file = join(dir, `image-${++imageCount}.${IMAGE_EXTENSION[part.mimeType] ?? "png"}`);
+				await writeFile(file, Buffer.from(part.data, "base64"));
+				args.push(`--image=${file}`);
+			}
 			args.push("-");
+			const prompt = partsText(parts, (n) => `[attached image ${n} of ${imageCount}]`);
 
-			const proc = run({ args, stdin: renderTranscript(context.messages), cwd: dir, ...(signal ? { signal } : {}) });
+			const proc = run({ args, stdin: prompt, cwd: dir, ...(signal ? { signal } : {}) });
 			stream.push({ type: "start", partial: snapshot() });
 
 			let rawUsage: CodexUsage | undefined;

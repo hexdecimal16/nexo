@@ -5,6 +5,7 @@ import {
 	type AssistantMessage,
 	type AssistantMessageEventStream,
 	calculateCost,
+	type ImageContent,
 	createAssistantMessageEventStream,
 	createProvider,
 	getCurrentSystemPrompt,
@@ -73,7 +74,7 @@ function claudePModels(): Model<string>[] {
 		api: CLAUDE_P_API,
 		provider: CLAUDE_P_PROVIDER,
 		baseUrl: "",
-		input: ["text"],
+		input: ["text", "image"],
 	});
 	const out = anthropic.map((m) => rehome(m, m.id, `${m.name} (claude -p)`));
 	for (const alias of ALIASES) {
@@ -86,21 +87,42 @@ function claudePModels(): Model<string>[] {
 	return out;
 }
 
-function contentText(content: string | readonly { type: string; text?: string }[]): string {
-	if (typeof content === "string") return content;
-	return content.map((b) => (b.type === "text" ? (b.text ?? "") : "[image omitted]")).join("\n");
+/** A piece of a rendered conversation: text, or an image that sits at that point in it. */
+export type PromptPart = TextContent | ImageContent;
+
+type Block = { type: string; text?: string; data?: string; mimeType?: string };
+
+/** Appends text to `parts`, joining it to a trailing text part. */
+export function pushText(parts: PromptPart[], text: string): void {
+	if (!text) return;
+	const last = parts.at(-1);
+	if (last?.type === "text") last.text += text;
+	else parts.push({ type: "text", text });
+}
+
+function pushContent(parts: PromptPart[], content: string | readonly Block[]): void {
+	if (typeof content === "string") return pushText(parts, content);
+	content.forEach((b, i) => {
+		if (i > 0) pushText(parts, "\n");
+		if (b.type === "text") pushText(parts, b.text ?? "");
+		else if (b.type === "image" && b.data && b.mimeType) parts.push({ type: "image", data: b.data, mimeType: b.mimeType });
+	});
 }
 
 function attr(value: string): string {
 	return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
-/** The conversation's entries as tagged blocks, in order; system messages are left out. */
-export function renderEntries(messages: readonly Message[]): string {
-	const parts: string[] = [];
-	for (const m of messages) {
-		if (m.role === "user") parts.push(`<user>\n${contentText(m.content)}\n</user>`);
-		else if (m.role === "assistant") {
+/** The conversation's entries as tagged blocks, in order, with images left in place; system messages are left out. */
+export function renderEntryParts(messages: readonly Message[]): PromptPart[] {
+	const parts: PromptPart[] = [];
+	messages.forEach((m, i) => {
+		if (i > 0) pushText(parts, "\n\n");
+		if (m.role === "user") {
+			pushText(parts, "<user>\n");
+			pushContent(parts, m.content);
+			pushText(parts, "\n</user>");
+		} else if (m.role === "assistant") {
 			const body = m.content
 				.map((b) => {
 					if (b.type === "text") return b.text;
@@ -109,23 +131,56 @@ export function renderEntries(messages: readonly Message[]): string {
 				})
 				.filter((s) => s.length > 0)
 				.join("\n");
-			parts.push(`<assistant>\n${body}\n</assistant>`);
+			pushText(parts, `<assistant>\n${body}\n</assistant>`);
 		} else if (m.role === "toolResult") {
-			parts.push(`<tool_result id="${attr(m.toolCallId)}" name="${attr(m.toolName)}"${m.isError ? ' is_error="true"' : ""}>\n${contentText(m.content)}\n</tool_result>`);
+			pushText(parts, `<tool_result id="${attr(m.toolCallId)}" name="${attr(m.toolName)}"${m.isError ? ' is_error="true"' : ""}>\n`);
+			pushContent(parts, m.content);
+			pushText(parts, "\n</tool_result>");
 		}
-	}
-	return parts.join("\n\n");
+	});
+	return parts;
+}
+
+/** Text of `parts` with each image replaced by `marker(n)` (n counts from 1). */
+export function partsText(parts: readonly PromptPart[], marker: (n: number) => string = () => "[image]"): string {
+	let n = 0;
+	return parts.map((p) => (p.type === "text" ? p.text : marker(++n))).join("");
+}
+
+/** The conversation's entries as tagged blocks, in order, as text: images become `[image]`. Used where only text goes (hashing). */
+export function renderEntries(messages: readonly Message[]): string {
+	return partsText(renderEntryParts(messages));
 }
 
 /** Closes a rendered transcript (or the new entries of one) with the request for the next turn. */
 export const NEXT_TURN_NOTE = "Write the assistant's next turn, continuing from the last entry above.";
 
-/** Renders the conversation for stdin. A lone user message goes as-is; anything longer becomes a tagged transcript. */
-export function renderTranscript(messages: readonly Message[]): string {
+/** Renders the conversation as parts. A lone user message goes as-is; anything longer becomes a tagged transcript. */
+export function renderTranscriptParts(messages: readonly Message[]): PromptPart[] {
 	const turns = messages.filter((m) => m.role !== "system");
 	const only = turns[0];
-	if (turns.length === 1 && only?.role === "user") return contentText(only.content);
-	return `${renderEntries(turns)}\n\n${NEXT_TURN_NOTE}`;
+	if (turns.length === 1 && only?.role === "user") {
+		const parts: PromptPart[] = [];
+		pushContent(parts, only.content);
+		return parts;
+	}
+	const parts = renderEntryParts(turns);
+	pushText(parts, `\n\n${NEXT_TURN_NOTE}`);
+	return parts;
+}
+
+/** Renders the conversation for stdin as text, images as `[image]`. */
+export function renderTranscript(messages: readonly Message[]): string {
+	return partsText(renderTranscriptParts(messages));
+}
+
+/**
+ * The stdin line for `claude -p --input-format stream-json`: one user message whose content blocks are the parts in
+ * order, images as base64 sources.
+ */
+export function streamJsonInput(parts: readonly PromptPart[]): string {
+	const content = parts.map((p) => (p.type === "text" ? { type: "text", text: p.text } : { type: "image", source: { type: "base64", media_type: p.mimeType, data: p.data } }));
+	return `${JSON.stringify({ type: "user", message: { role: "user", content } })}\n`;
 }
 
 function plainSchema(tool: Tool): JsonObject {
@@ -276,7 +331,12 @@ function streamClaudeP(run: ClaudePRunner, model: Model<string>, context: Transc
 			if (effort) args.push("--effort", effort);
 			if (useTools) args.push("--json-schema", JSON.stringify(replySchema(tools)));
 
-			const proc = run({ args, stdin: renderTranscript(context.messages), cwd: dir, ...(signal ? { signal } : {}) });
+			// Images go as content blocks of a stream-json user message; a text-only prompt stays plain stdin.
+			const parts = renderTranscriptParts(context.messages);
+			const withImages = parts.some((p) => p.type === "image");
+			if (withImages) args.push("--input-format", "stream-json");
+			const stdin = withImages ? streamJsonInput(parts) : partsText(parts);
+			const proc = run({ args, stdin, cwd: dir, ...(signal ? { signal } : {}) });
 			stream.push({ type: "start", partial: snapshot() });
 
 			let result: ResultEvent | undefined;

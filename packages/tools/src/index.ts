@@ -10,3 +10,4 @@ export * from "./session-rules.ts";
 export * from "./web-search.ts";
 export * from "./wiki-page.ts";
 export * from "./home-folders.ts";
+export * from "./images.ts";

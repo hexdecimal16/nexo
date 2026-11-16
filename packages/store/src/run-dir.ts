@@ -172,6 +172,17 @@ export class RunDir {
 		return `tool_outputs/${spanId}.txt`;
 	}
 
+	/**
+	 * Saves a base64 image the run saw (an attached input, a screenshot a tool returned) and returns its path relative to
+	 * the run directory, e.g. `inputs/image-1.png`. Image bytes are not redacted.
+	 */
+	writeImage(relPath: string, base64: string): string {
+		const target = confine(this.root, relPath);
+		mkdirSync(dirname(target), { recursive: true });
+		writeFileSync(target, Buffer.from(base64, "base64"));
+		return relPath;
+	}
+
 	resolveFile(relPath: string): string {
 		return confine(this.root, relPath);
 	}

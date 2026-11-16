@@ -56,6 +56,31 @@ describe("nexo run", () => {
 		expect(t.err()).toMatch(/succeeded · \$\d+\.\d{4} · trajectory \w+/);
 	});
 
+	it("sends --image files with the instruction and refuses a file that is not an image", async () => {
+		const h = home({ ...config, learning: { enabled: false } });
+		const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAAEUlEQVR4nGP4z8DAwMDAAAAZ8AL+8V3m9wAAAABJRU5ErkJggg==", "base64");
+		writeFileSync(join(h.cwd, "dot.png"), png);
+		writeFileSync(join(h.cwd, "notes.txt"), "hi");
+		let content: { type: string; text?: string }[] = [];
+		const faux = fauxProvider({ models: [{ id: "fast", cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } }] });
+		faux.setResponses([
+			(context) => {
+				content = structuredClone(context.messages.find((m) => m.role === "user")!.content) as typeof content;
+				return fauxAssistantMessage("a dot");
+			},
+		]);
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const code = await runCli(["run", "--no-review", "--image", "dot.png", "what", "is", "it"], io(), { ...h, models });
+		expect(code).toBe(0);
+		expect(content[0]!.text).toBe("what is it\n\n[nexo] Attached images, in order: dot.png (2×1 PNG).");
+		expect(content[1]).toEqual({ type: "image", data: png.toString("base64"), mimeType: "image/png" });
+
+		const t = io();
+		expect(await runCli(["run", "--image", "notes.txt", "x"], t, { ...h, models: fauxModels([]) })).toBe(2);
+		expect(t.err()).toContain("--image notes.txt: Not a supported image");
+	});
+
 	it("prints an auto-allowed line on stderr when the approver allows a tool", async () => {
 		const h = home({ ...config, tools: { policy: { bash: "ask" }, autoApprove: "on" } });
 		const t = io();

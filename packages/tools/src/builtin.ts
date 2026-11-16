@@ -3,11 +3,13 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { dirname, relative, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { NexoError } from "@nexo/telemetry";
 import { Type } from "typebox";
 import type { ChangeTracker } from "./change-tracker.ts";
 import { canonicalPath, nexoHomeGuard, resolveConfined, SECRET_PATH } from "./confine.ts";
 import { htmlToText, looksLikeHtml } from "./html-text.ts";
+import { describeImage, isImageFile, loadImageFile, MAX_IMAGE_EDGE } from "./images.ts";
 import type { FileLeases } from "./leases.ts";
 
 export const MAX_BASH_OUTPUT_BYTES = 1_000_000;
@@ -225,36 +227,64 @@ export function createBuiltinTools(ctx: ToolContext): AgentTool<any>[] {
 		throw new Error(`File not found: ${path}`);
 	};
 
-	const readOne = (path: string, offset?: number, limit?: number): string => {
+	/** A read path made absolute: saved tool outputs, or a file anywhere outside the secret-file rule. */
+	const locateRead = (path: string): string => {
 		const outputs = ctx.toolOutputsDir;
 		const savedOutput = outputs !== undefined && path.startsWith(TOOL_OUTPUT_PREFIX);
 		const abs = savedOutput ? resolveSavedOutput(outputs, path) : resolveReadPath(path);
 		guard?.checkRead(abs);
 		if (!existsSync(abs)) throw new Error(`File not found: ${path}`);
+		return abs;
+	};
+
+	const readText = (abs: string, offset?: number, limit?: number): string => {
 		const lines = readFileSync(abs, "utf8").split("\n");
 		const start = (offset ?? 1) - 1;
 		return lines.slice(start, start + (limit ?? MAX_READ_LINES)).join("\n");
 	};
 
+	/** A file's content blocks: its lines as text, or for an image a line describing it and the image itself. */
+	const readOne = (path: string, offset?: number, limit?: number): (TextContent | ImageContent)[] => {
+		const abs = locateRead(path);
+		if (isImageFile(abs)) {
+			const loaded = loadImageFile(abs);
+			return [{ type: "text", text: `Image ${describeImage(path, loaded)}:` }, loaded.image];
+		}
+		return [{ type: "text", text: readText(abs, offset, limit) }];
+	};
+
 	const read: AgentTool<typeof ReadParams> = {
 		name: "read",
 		label: "Read file",
-		description: `Read text files. Relative paths start at the workspace; absolute paths are read where they are, except key, token and credential files (use bash for those). Pass paths to read several files in one call. Paths starting with ${TOOL_OUTPUT_PREFIX} open saved large tool outputs.`,
+		description: `Read text files and images (PNG, JPEG, GIF, WebP; large images are scaled down to ${MAX_IMAGE_EDGE} px). Relative paths start at the workspace; absolute paths are read where they are, except key, token and credential files (use bash for those). Pass paths to read several files in one call. Paths starting with ${TOOL_OUTPUT_PREFIX} open saved large tool outputs.`,
 		parameters: ReadParams,
 		execute: async (_id, params) => {
 			if (params.paths !== undefined) {
 				if (params.path !== undefined) throw new Error("Give either path or paths, not both");
-				const parts = params.paths.map((p) => {
+				const content: (TextContent | ImageContent)[] = [];
+				let failures = 0;
+				for (const p of params.paths) {
 					try {
-						return { failed: false, text: `==> ${p.path} <==\n${readOne(p.path, p.offset, p.limit)}` };
+						const blocks = readOne(p.path, p.offset, p.limit);
+						const first = blocks[0];
+						if (first?.type === "text") content.push({ type: "text", text: `${content.length > 0 ? "\n" : ""}==> ${p.path} <==\n${first.text}` }, ...blocks.slice(1));
+						else content.push({ type: "text", text: `==> ${p.path} <==` }, ...blocks);
 					} catch (error) {
-						return { failed: true, text: `==> ${p.path} <==\n[error] ${error instanceof Error ? error.message : String(error)}` };
+						failures++;
+						content.push({ type: "text", text: `${content.length > 0 ? "\n" : ""}==> ${p.path} <==\n[error] ${error instanceof Error ? error.message : String(error)}` });
 					}
-				});
-				return textResult(parts.map((p) => p.text).join("\n\n"), parts.every((p) => p.failed));
+				}
+				// Adjacent text blocks are joined so text-only reads keep their single-block shape.
+				const merged: (TextContent | ImageContent)[] = [];
+				for (const block of content) {
+					const last = merged.at(-1);
+					if (block.type === "text" && last?.type === "text") last.text += `\n${block.text}`;
+					else merged.push(block.type === "text" ? { ...block } : block);
+				}
+				return { content: merged, details: undefined, ...(failures === params.paths.length ? { isError: true } : {}) };
 			}
 			if (params.path === undefined) throw new Error("Give path or paths");
-			return textResult(readOne(params.path, params.offset, params.limit));
+			return { content: readOne(params.path, params.offset, params.limit), details: undefined };
 		},
 	};
 

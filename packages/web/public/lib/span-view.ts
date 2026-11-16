@@ -1,6 +1,7 @@
 import type { Span, SpanNode } from "./api-types.ts";
 import { statusBadge } from "./common-view.ts";
 import { durationMs, formatDuration, formatUsd, shortId } from "./format.ts";
+import { filePath } from "./files-view.ts";
 import { html, prettyJson, type SafeHtml } from "./html.ts";
 
 export function findSpan(roots: SpanNode[], id: string): SpanNode | undefined {
@@ -55,7 +56,22 @@ function renderContentBlocks(content: unknown): SafeHtml {
 	})}`;
 }
 
-const SHOWN_ATTRS = new Set(["content", "args", "result", "reason", "trigger", "instruction", "errorMessage", "firstChunkMs", "firstTextMs"]);
+const SHOWN_ATTRS = new Set(["content", "args", "result", "reason", "trigger", "instruction", "errorMessage", "firstChunkMs", "firstTextMs", "images"]);
+
+/** Paths of the images a span saved in its run folder (`attrs.images`): a run's attached inputs or a tool's returned images. */
+export function spanImages(span: Span): string[] {
+	const images = span.attrs.images;
+	return Array.isArray(images) ? images.filter((p): p is string => typeof p === "string") : [];
+}
+
+/** Thumbnails of images in a run folder; each opens full size in a new tab. */
+export function renderImageStrip(runId: string, paths: readonly string[], label: string): SafeHtml {
+	if (paths.length === 0) return html``;
+	return html`<div class="msg msg-images"><div class="msg-label">${label}</div><div class="image-strip">${paths.map((p) => {
+		const src = filePath(runId, p);
+		return html`<a href="${src}" target="_blank" rel="noopener noreferrer" title="${p}"><img class="thumb" alt="${p}" src="${src}" loading="lazy"></a>`;
+	})}</div></div>`;
+}
 
 /** Fields, messages, tool input and output, and remaining attributes of one span. */
 export function renderSpanDetail(span: Span, attrsTruncated: boolean, nowMs: number): SafeHtml {
@@ -87,6 +103,7 @@ export function renderSpanDetail(span: Span, attrsTruncated: boolean, nowMs: num
 	${a.content !== undefined ? renderContentBlocks(a.content) : ""}
 	${a.args !== undefined ? html`<div class="msg msg-tool"><div class="msg-label">input</div><pre>${prettyJson(a.args)}</pre></div>` : ""}
 	${typeof a.result === "string" ? html`<div class="msg msg-result"><div class="msg-label">output</div><pre>${a.result}</pre></div>` : ""}
+	${renderImageStrip(span.runId, spanImages(span), span.kind === "run" ? "attached images" : "images returned")}
 	${span.payloadRef ? html`<p class="note">Full payload stored in ${fileButton(span.runId, span.payloadRef, span.payloadRef)}</p>` : ""}
 	${Object.keys(rest).length ? html`<details><summary>attributes</summary><pre>${prettyJson(rest)}</pre></details>` : ""}
 </div>`;

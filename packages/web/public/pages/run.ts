@@ -14,12 +14,14 @@ import { html, type SafeHtml } from "../lib/html.ts";
 import { createPoller } from "../lib/poller.ts";
 import { renderChildren, renderFeedbackForm, renderInjectedMemories, renderRunHeader, shouldPoll } from "../lib/run-view.ts";
 import { renderEscalations, renderScores } from "../lib/score-view.ts";
-import { findSpan, renderSpanDetail, renderSpanTree } from "../lib/span-view.ts";
+import { findSpan, renderImageStrip, renderSpanDetail, renderSpanTree, spanImages } from "../lib/span-view.ts";
 import { renderTimeline, timelineRows } from "../lib/timeline.ts";
 import { asErrorBody, el, getJson, getText, postJson } from "./api.ts";
 
 const runId = new URLSearchParams(location.search).get("id") ?? "";
 const header = el<HTMLElement>("#header");
+const imagesSection = el<HTMLElement>("#sec-images");
+const inputImages = el<HTMLElement>("#input-images");
 const review = el<HTMLElement>("#review");
 const scores = el<HTMLElement>("#scores");
 const escalations = el<HTMLElement>("#escalations");
@@ -144,6 +146,11 @@ async function load(): Promise<boolean> {
 	setHtml(injected, renderInjectedMemories(run.injectedMemories, run.run.id));
 	setHtml(children, renderChildren(run.children, now, readOnly ?? null, run.childFeedback));
 	roots = spans.roots;
+	// The run span holds the images sent with the instruction.
+	const attached = roots.find((r) => r.span.kind === "run")?.span;
+	const attachedPaths = attached ? spanImages(attached) : [];
+	imagesSection.hidden = attachedPaths.length === 0;
+	setHtml(inputImages, renderImageStrip(runId, attachedPaths, `${attachedPaths.length} sent with the instruction`));
 	setHtml(timeline, renderTimeline(timelineRows(roots, now), selectedSpanId));
 	setHtml(tree, html`${spans.truncated ? html`<p class="warn">This run has ${spans.total} spans; only the earliest are shown.</p>` : ""}${renderSpanTree(roots, now, 2, selectedSpanId)}`);
 	restoreState(state);

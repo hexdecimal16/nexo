@@ -6,7 +6,9 @@ import { EFFORTS, type Effort } from "@nexo/router";
 import { parseSkillInvocation } from "@nexo/skills";
 import { type CostReport, costReport, ensureNexoDirs, openDb, reindex, resolveNexoPaths } from "@nexo/store";
 import { NexoError, toErrorPayload } from "@nexo/telemetry";
-import { nonInteractivePrompter, type Prompter } from "@nexo/tools";
+import { describeImage, loadImageFile, nonInteractivePrompter, type Prompter, withAttachedImagesNote } from "@nexo/tools";
+import type { ImageContent } from "@earendil-works/pi-ai";
+import { basename, resolve as resolvePath } from "node:path";
 import { type CliIO, type CliOptions, EXIT_SIGINT, EXIT_SIGTERM, exitCodeFor, printError, USAGE, usageError } from "./common.ts";
 import { evalCommand } from "./eval.ts";
 import { learnCommand, learnEventLine, memoryCommand, playbookCommand } from "./learn.ts";
@@ -109,10 +111,22 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 			budget: { type: "string" },
 			"no-review": { type: "boolean" },
 			"allow-all": { type: "boolean" },
+			image: { type: "string", multiple: true },
 		},
 	});
 	const instruction = positionals.join(" ").trim();
 	if (!instruction) throw usageError("nexo run needs an instruction");
+	const images: ImageContent[] = [];
+	const imageLabels: string[] = [];
+	for (const path of values.image ?? []) {
+		try {
+			const loaded = loadImageFile(resolvePath(options.cwd ?? process.cwd(), path));
+			images.push(loaded.image);
+			imageLabels.push(describeImage(basename(path), loaded));
+		} catch (error) {
+			throw usageError(`--image ${path}: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
 	if (values.effort !== undefined && !(EFFORTS as readonly string[]).includes(values.effort)) {
 		throw usageError(`--effort must be one of ${EFFORTS.join(", ")}`);
 	}
@@ -149,7 +163,8 @@ async function runCommand(args: string[], io: CliIO, options: CliOptions): Promi
 	try {
 		result = await runtime.engine.run(
 			{
-				instruction: invoked?.instruction ?? instruction,
+				instruction: withAttachedImagesNote(invoked?.instruction ?? instruction, imageLabels),
+				...(images.length > 0 ? { images } : {}),
 				skill: values.skill ?? invoked?.skill,
 				model: values.model,
 				effort: values.effort as Effort | undefined,

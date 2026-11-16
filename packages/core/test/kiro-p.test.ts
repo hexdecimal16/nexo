@@ -29,6 +29,7 @@ function fakeAcp(options: FakeOptions, ...scripts: Script[]) {
 	const spawns: KiroPRequest[] = [];
 	const sessions: { cwd: string; meta: { modeId?: string; modelId?: string; effortLevel?: string }; agent: { tools?: unknown; permissions?: unknown } }[] = [];
 	const prompts: string[] = [];
+	const promptBlocks: { type: string; text?: string; data?: string; mimeType?: string }[][] = [];
 	const cancels: string[] = [];
 
 	const run: KiroPRunner = (request) => {
@@ -75,6 +76,7 @@ function fakeAcp(options: FakeOptions, ...scripts: Script[]) {
 				emit({ id: msg.id, result: { sessionId: `s${sessions.length}`, modes: { currentModeId: late ? "vibe" : (options.mode ?? meta.modeId) } } });
 			} else if (msg.method === "session/prompt") {
 				prompts.push(msg.params!.prompt[0].text);
+				promptBlocks.push(msg.params!.prompt);
 				const script = scripts[prompts.length - 1] ?? scripts.at(-1) ?? {};
 				if (script.die) return stop(1, "boom");
 				if (script.hang) {
@@ -94,7 +96,7 @@ function fakeAcp(options: FakeOptions, ...scripts: Script[]) {
 		};
 		return { write, lines, exit, kill: () => stop(null) };
 	};
-	return { run, spawns, sessions, prompts, cancels };
+	return { run, spawns, sessions, prompts, promptBlocks, cancels };
 }
 
 const chunk = (text: string, kind = "agent_message_chunk") => ({ sessionUpdate: kind, content: { type: "text", text } });
@@ -144,6 +146,21 @@ describe("kiro-p provider", () => {
 		expect(fake.spawns[0]!.args).toEqual(["acp", "--agent-engine=v3"]);
 		expect(fake.sessions[0]!.meta).toEqual({ modeId: expect.stringMatching(/^nexo-[0-9a-f]{12}$/), modelId: "claude-haiku-4.5", effortLevel: "low" });
 		expect(fake.prompts[0]).toBe("hi");
+	});
+
+	it("sends images as ACP image blocks in place, and declares image input", async () => {
+		const fake = fakeAcp({}, { updates: [chunk("Red.")] });
+		const models = modelsWith(fake.run);
+		const model = models.getModel(KIRO_P_PROVIDER, "claude-haiku-4.5")!;
+		expect(model.input).toContain("image");
+		await models.completeSimple(model, {
+			messages: [{ role: "user", content: [{ type: "text", text: "What color?" }, { type: "image", data: "AAAA", mimeType: "image/png" }, { type: "text", text: "One word." }], timestamp: 1 }],
+		});
+		expect(fake.promptBlocks[0]).toEqual([
+			{ type: "text", text: "What color?\n" },
+			{ type: "image", data: "AAAA", mimeType: "image/png" },
+			{ type: "text", text: "\nOne word." },
+		]);
 	});
 
 	it("turns the JSON reply into tool calls when tools are passed", async () => {

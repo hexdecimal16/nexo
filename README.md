@@ -28,6 +28,8 @@ nexo doctor                                     # check Node, config, keys and t
 
 `nexo --help` lists every command. Data lives in `~/.nexo`. Set `NEXO_HOME` to move it.
 
+Images (PNG, JPEG, GIF, WebP) work with every vision model, including the `claude-p`, `codex-p` and `kiro-p` CLI providers. In the chat, drag an image file into the terminal or press ctrl+v to paste a screenshot; it shows as `[Image #1]`. `@shot.png` attaches an image in the project, `nexo run "…" --image shot.png` attaches one to a task, and the agent's `read` tool opens image files. Large images are scaled down to 2000 px, older images in a long run are replaced by a note (the file can be read again), and `nexo ui` shows the images each run saw.
+
 ## Settings and keys
 
 Every option is in `/settings` inside a chat, or in `nexo settings` from the shell:
@@ -76,6 +78,7 @@ try {
 - `nexo.keys()`, `nexo.setKey()` and `nexo.removeKey()` manage stored keys. `nexo.webSearch(query)` searches without a model.
 - The SDK denies every tool approval by default, so a backend never waits on a person. Pass `allowAll: true` to `createNexo` or `run` to auto-approve tool actions in sandboxed environments. Always pass `budgetUsd`.
 - `checkSetup()` runs the doctor checks without starting the engine, for a start-up pre-flight.
+- Send images with `run({ instruction, images: [loadImageFile("shot.png").image] })`, `session.turn(text, { images })` or `session.steer(text, images)`.
 
 ## Security
 

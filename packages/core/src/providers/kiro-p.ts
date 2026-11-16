@@ -25,8 +25,15 @@ import {
 	type Usage,
 } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
-import { NEXT_TURN_NOTE, renderEntries, renderTranscript } from "./claude-p.ts";
+import { NEXT_TURN_NOTE, type PromptPart, pushText, renderEntries, renderEntryParts, renderTranscriptParts } from "./claude-p.ts";
 import { ReplyTextExtractor } from "./reply-text.ts";
+
+/** Entries a kept session has not seen yet, closed with the request for the next turn. */
+function newEntries(turns: readonly Message[]): PromptPart[] {
+	const parts = renderEntryParts(turns);
+	pushText(parts, `\n\n${NEXT_TURN_NOTE}`);
+	return parts;
+}
 
 /** Provider id: models are referenced as `kiro-p/<kiro model id>`, e.g. `kiro-p/claude-sonnet-5.5` or `kiro-p/auto`. */
 export const KIRO_P_PROVIDER = "kiro-p";
@@ -182,7 +189,7 @@ function kiroPModels(): Model<string>[] {
 			api: KIRO_P_API,
 			provider: KIRO_P_PROVIDER,
 			baseUrl: "",
-			input: ["text"],
+			input: ["text", "image"],
 			contextWindow,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		} as Model<string>;
@@ -596,7 +603,9 @@ function streamKiroP(
 		 * One prompt on a session. Thinking and text stream into `partial` as they arrive; on a tools turn the text shown
 		 * is the reply's `text` field, read out of the JSON while it is still being written (`streamText` off: none).
 		 */
-		const runOnce = async (session: Session, text: string, streamText = true): Promise<RunOutcome> => {
+		const runOnce = async (session: Session, input: string | readonly PromptPart[], streamText = true): Promise<RunOutcome> => {
+			// ACP content blocks: text, and images as base64 (Kiro advertises promptCapabilities.image).
+			const prompt = typeof input === "string" ? [{ type: "text", text: input }] : input.map((p) => (p.type === "text" ? { type: "text", text: p.text } : { type: "image", data: p.data, mimeType: p.mimeType }));
 			const { conn, id } = session;
 			const outcome: RunOutcome = { text: "" };
 			const replyText = useTools ? new ReplyTextExtractor() : undefined;
@@ -661,7 +670,7 @@ function streamKiroP(
 			arm();
 			try {
 				const settled = await Promise.race([
-					conn.request("session/prompt", { sessionId: id, prompt: [{ type: "text", text }] }).then(
+					conn.request("session/prompt", { sessionId: id, prompt }).then(
 						(r) => ({ r: r as { stopReason?: string } | undefined }),
 						(e: Error) => ({ e }),
 					),
@@ -692,11 +701,11 @@ function streamKiroP(
 
 			const turns = context.messages.filter((m) => m.role !== "system");
 			const key = `${agentName}|${model.id}|${effort ?? ""}`;
-			const prompt = renderTranscript(context.messages);
+			const prompt = renderTranscriptParts(context.messages);
 			const reused = sessions?.take(key, turns);
 			let session = reused?.session ?? (await startSession());
 			if (signal?.aborted) return fail("aborted", "Request was aborted");
-			let outcome = await runOnce(session, reused ? `${renderEntries(turns.slice(reused.count))}\n\n${NEXT_TURN_NOTE}` : prompt);
+			let outcome = await runOnce(session, reused ? newEntries(turns.slice(reused.count)) : prompt);
 			// A kept session that fails before anything streamed is dropped for a fresh one holding the whole transcript.
 			if (reused && outcome.error && !outcome.aborted && !signal?.aborted && partial.content.length === 0) {
 				session = await startSession();

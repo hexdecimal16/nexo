@@ -1,9 +1,12 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider, type FauxResponseStep, fauxToolCall, getSystemMessageText } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import { checkSetup, createNexo, type EngineEvent, SETTING_GROUPS } from "../src/index.ts";
+import { checkSetup, createNexo, type EngineEvent, loadImageFile, SETTING_GROUPS } from "../src/index.ts";
+
+/** A 2×1 PNG. */
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAAEUlEQVR4nGP4z8DAwMDAAAAZ8AL+8V3m9wAAAABJRU5ErkJggg==", "base64");
 
 const config = {
 	models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "fast" } },
@@ -51,6 +54,39 @@ describe("createNexo", () => {
 			const result = await session.turn("Hi");
 			expect(result.output).toContain("turn one");
 			expect(session.turns).toBe(1);
+			session.close();
+		} finally {
+			await nexo.close();
+		}
+	});
+
+	it("sends images with run requests and session turns, and keeps them in the session history", async () => {
+		const seen: unknown[][] = [];
+		const capture: FauxResponseStep = (context) => {
+			const user = context.messages.filter((m) => m.role === "user").at(-1)!;
+			seen.push(structuredClone(user.content as unknown[]));
+			return fauxAssistantMessage("a red pixel");
+		};
+		const h = setup([capture, capture, capture]);
+		writeFileSync(join(h.root, "dot.png"), PNG);
+		// Background learn jobs would take the scripted replies meant for the turns.
+		const nexo = createNexo({ home: h.home, cwd: h.root, env: h.env, models: h.models, config: { learning: { enabled: false } } });
+		try {
+			const image = loadImageFile(join(h.root, "dot.png")).image;
+			const run = await nexo.run({ instruction: "What is this?", images: [image], budgetUsd: 0.5 });
+			// The run folder keeps what the model saw, for the web UI.
+			expect(readFileSync(join(run.runDir!, "inputs", "image-1.png"))).toEqual(PNG);
+			expect(seen[0]!.slice(0, 2)).toEqual([{ type: "text", text: "What is this?" }, image]);
+
+			const session = nexo.createSession({ cwd: h.root });
+			await session.turn("And this?", { images: [image] });
+			expect(seen[1]!.slice(0, 2)).toEqual([{ type: "text", text: "And this?" }, image]);
+			// `@dot.png` attaches the file the same way.
+			await session.turn("compare with @dot.png");
+			expect((seen[2] as { type: string }[]).filter((b) => b.type === "image")).toHaveLength(1);
+			// The saved history keeps the images, so a resumed session still has them.
+			const users = session.transcript().flatMap((l) => (l.type === "message" && (l.message as { role: string }).role === "user" ? [l.message as { content: { type: string }[] }] : []));
+			expect(users.map((m) => m.content.filter((b) => b.type === "image").length)).toEqual([1, 1]);
 			session.close();
 		} finally {
 			await nexo.close();

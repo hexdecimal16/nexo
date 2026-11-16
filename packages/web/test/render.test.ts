@@ -9,7 +9,7 @@ import { createPoller, MAX_POLL_BACKOFF_MS, POLL_MS, pollDelay } from "../public
 import { renderChildren, renderFeedbackForm, renderRunHeader, shouldPoll } from "../public/lib/run-view.ts";
 import { renderSessionRows, sessionsQuery } from "../public/lib/sessions-view.ts";
 import { readRunFilters, renderRunRows, renderRunsNote, renderSessionFilter, renderStatusOptions, runsPageSearch, runsQuery } from "../public/lib/runs-view.ts";
-import { findSpan, renderSpanDetail, renderSpanTree } from "../public/lib/span-view.ts";
+import { findSpan, renderImageStrip, renderSpanDetail, renderSpanTree, spanImages } from "../public/lib/span-view.ts";
 import { renderTimeline, timelineRows } from "../public/lib/timeline.ts";
 
 const XSS = `<img src=x onerror="alert(1)"><script>alert('x')</script>\``;
@@ -242,6 +242,17 @@ describe("span views", () => {
 		const offloaded = renderSpanDetail(span({ payloadRef: "tool_outputs/x.txt" }), false, NOW).value;
 		expect(offloaded).toContain(`data-file-path="tool_outputs/x.txt"`);
 		expect(renderSpanDetail(span(), false, NOW).value).toContain("<dt>model source</dt><dd>skill</dd>");
+	});
+
+	it("shows a span's saved images as thumbnails linked to the run's files, with hostile paths escaped", () => {
+		const withImages = span({ kind: "tool_call", attrs: { images: ["tool_outputs/s1-image-1.png", XSS, 7] } });
+		expect(spanImages(withImages)).toEqual(["tool_outputs/s1-image-1.png", XSS]);
+		const markup = renderSpanDetail(withImages, false, NOW).value;
+		expect(markup).toContain("images returned");
+		expect(markup).toContain(`src="/api/runs/${withImages.runId}/files/tool_outputs/s1-image-1.png"`);
+		expect(markup).not.toContain("<script");
+		expect(markup).not.toContain(`onerror="`);
+		expect(renderImageStrip("r1", [], "none").value).toBe("");
 	});
 });
 

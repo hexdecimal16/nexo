@@ -2,6 +2,7 @@ import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@eare
 import {
 	type Api,
 	type AssistantMessage,
+	type ImageContent,
 	isContextOverflow,
 	type Message,
 	type Model,
@@ -80,7 +81,7 @@ import type { NexoConfig } from "../config/schema.ts";
 import { type BudgetLimit, budgetExhaustedError, checkAdmission, recordSpend, runBudgetLimit } from "../cost/admission.ts";
 import { budgetLine, RunBudget } from "../cost/budget.ts";
 import { estimateCallCostUsd, priceUsage } from "../cost/pricing.ts";
-import { clearOldToolResults } from "./context-trim.ts";
+import { clearOldToolResults, limitImages } from "./context-trim.ts";
 import {
 	classifyProviderError,
 	contextOverflowError,
@@ -240,6 +241,8 @@ function stableJson(value: unknown): string {
 
 export interface RunRequest {
 	instruction: string;
+	/** Images sent with the instruction (PNG, JPEG, GIF or WebP, base64). Models without image input get a note instead. */
+	images?: ImageContent[];
 	/** Session rules in force; read on every approval, so rules added during the turn apply to its next calls. */
 	sessionRules?: () => readonly SessionRule[];
 	/** Called when the user picks "Always allow" (chat sessions only). */
@@ -280,7 +283,7 @@ export interface RunRequest {
 
 /** Injects user messages into a running agent; `clear` drops the ones it has not taken yet. */
 export interface SteeringControl {
-	steer(text: string): void;
+	steer(text: string, images?: ImageContent[]): void;
 	clear(): void;
 }
 
@@ -798,7 +801,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			kind: "run",
 			name: request.skill ? `skill:${request.skill}` : "run",
 			parentSpanId: null,
-			attrs: { instruction: deps.redact(request.instruction), parentSpanId: parent?.spanId ?? null, depth },
+			attrs: { instruction: deps.redact(request.instruction), parentSpanId: parent?.spanId ?? null, depth, ...(request.images?.length ? { images: saveImages(runDir, "inputs/image", request.images) } : {}) },
 		});
 		const rootSpan = runSpan;
 		runDir.writeRunJson(runJson("running", "", null));
@@ -1171,6 +1174,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 					lastTrimCleared = Math.max(lastTrimCleared, trimmed.cleared);
 					current = trimmed.messages;
 				}
+				current = limitImages(current).messages;
 				return withBudgetLine(foreignToolCallsAsText(current, active.model), budgetLine(budget));
 			},
 			beforeToolCall: async ({ toolCall, args, assistantMessage }, signal) => {
@@ -1271,9 +1275,9 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		const pendingSteer: string[] = [];
 		let sawPrompt = false;
 		request.onSteeringReady?.({
-			steer: (text) => {
+			steer: (text, images) => {
 				pendingSteer.push(text);
-				runAgent.steer({ role: "user", content: [{ type: "text", text }], timestamp: Date.now() } as AgentMessage);
+				runAgent.steer({ role: "user", content: [{ type: "text", text }, ...(images ?? [])], timestamp: Date.now() } as AgentMessage);
 			},
 			clear: () => {
 				pendingSteer.length = 0;
@@ -1378,7 +1382,12 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 						recorder.finish(spanId, {
 							status: event.isError ? "error" : "ok",
 							payloadRef,
-							attrs: { durationMs: event.durationMs, result: payloadRef ? undefined : output, approvedBy: approvedBy.get(event.toolCallId) },
+							attrs: {
+								durationMs: event.durationMs,
+								result: payloadRef ? undefined : output,
+								approvedBy: approvedBy.get(event.toolCallId),
+								...imagesAttr(runDir, `tool_outputs/${spanId}-image`, (event.result as { content?: unknown } | undefined)?.content),
+							},
 						});
 					}
 					const failures = monitor.toolResult(event.isError);
@@ -1403,8 +1412,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		});
 
 		/** Sends one prompt (the instruction, or a continuation), retries retryable provider errors, and sets status and output. */
-		const drive = async (text: string): Promise<void> => {
-			await runAgent.prompt(text);
+		const drive = async (text: string, images?: ImageContent[]): Promise<void> => {
+			await runAgent.prompt(text, images && images.length > 0 ? images : undefined);
 			// Retries are counted per streak of consecutive failures: a successful call since the last retry starts over.
 			let attempt = 0;
 			let waitedMs = 0;
@@ -1457,7 +1466,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		if (input.signal?.aborted) {
 			status = "aborted";
 		} else {
-			await drive(request.instruction);
+			await drive(request.instruction, request.images);
 			// Scoring (spec §7.1 step 5): each failing round may start one S2 continuation, up to router.maxEscalations.
 			const selfCheckOn = policy.triggers.self_check.enabled;
 			if (status === "succeeded" && (plan.specs.length > 0 || plan.specError !== null || selfCheckOn)) {
@@ -1620,4 +1629,26 @@ function modelInfo(model: Model<Api>, resolved: ResolvedModel): RunModelInfo {
 /** The pi messages appended after the seeded system prompt and history, without system messages. */
 function newMessages(messages: readonly AgentMessage[], seededCount: number): Message[] {
 	return messages.slice(seededCount).filter((m): m is Message => m.role === "user" || m.role === "assistant" || m.role === "toolResult");
+}
+
+const IMAGE_FILE_EXTENSIONS: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" };
+
+/** Saves images into the run directory as `<prefix>-<n>.<ext>` and returns their relative paths; a failed write is skipped. */
+function saveImages(runDir: RunDir, prefix: string, images: readonly { data: string; mimeType: string }[]): string[] {
+	return images.flatMap((image, i) => {
+		try {
+			return [runDir.writeImage(`${prefix}-${i + 1}.${IMAGE_FILE_EXTENSIONS[image.mimeType] ?? "png"}`, image.data)];
+		} catch {
+			return [];
+		}
+	});
+}
+
+/** `{ images: [paths] }` for a tool result that returned images (saved under `prefix`), else nothing. */
+function imagesAttr(runDir: RunDir, prefix: string, content: unknown): { images?: string[] } {
+	if (!Array.isArray(content)) return {};
+	const images = content.filter((b): b is { type: "image"; data: string; mimeType: string } => b?.type === "image" && typeof b.data === "string");
+	if (images.length === 0) return {};
+	const paths = saveImages(runDir, prefix, images);
+	return paths.length > 0 ? { images: paths } : {};
 }
