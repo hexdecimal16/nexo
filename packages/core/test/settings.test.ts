@@ -283,6 +283,7 @@ describe("config settings", () => {
 			"tools.autoApprove",
 			"session.compactAt",
 			"session.compactAtBudgetShare",
+			"session.reuseKiroSession",
 			"loop.maxToolCalls",
 			"loop.repeatLimit",
 			"spawn.maxParallelSubagents",

@@ -53,10 +53,20 @@ const MAX_RETRY_ATTEMPTS = 200;
 const EXTRA_TRANSIENT = /high traffic|try again|no output for \d+\s*s/i;
 const NOT_TRANSIENT = /quota|billing|usage limit/i;
 
-/** Whether a failed model call is worth retrying: pi's transient patterns plus the kiro-cli ones above. */
+// The model answered outside the reply format: it called a tool natively, or its JSON reply could not be used.
+const FORMAT_FAILURE = /native tool call|reply was not a JSON object/i;
+/** Retries a streak of format failures gets: the same request usually comes back right, but a model that keeps derailing must not loop. */
+export const FORMAT_RETRIES = 2;
+
+/** Whether a failed model call ended on a reply the provider could not use, as opposed to a transport or capacity error. */
+export function isFormatFailure(message: AssistantMessage): boolean {
+	return message.stopReason === "error" && FORMAT_FAILURE.test(message.errorMessage ?? "");
+}
+
+/** Whether a failed model call is worth retrying: pi's transient patterns, the kiro-cli ones above and format failures. */
 export function isRetryableProviderMessage(message: AssistantMessage): boolean {
 	if (message.stopReason !== "error" || !message.errorMessage) return false;
-	if (isRetryableAssistantError(message)) return true;
+	if (isRetryableAssistantError(message) || isFormatFailure(message)) return true;
 	return EXTRA_TRANSIENT.test(message.errorMessage) && !NOT_TRANSIENT.test(message.errorMessage);
 }
 

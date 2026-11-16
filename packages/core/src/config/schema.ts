@@ -119,6 +119,8 @@ export const ConfigSchema = Type.Object(
 				compactAt: Type.Number({ exclusiveMinimum: 0, maximum: 1 }),
 				/** Also compact when one S2 request with the history would cost more than this share of the turn's budget; 0 turns it off. */
 				compactAtBudgetShare: Type.Number({ minimum: 0, maximum: 1 }),
+				/** kiro-p keeps a run's Kiro session open between model calls and sends only the new entries (see `SessionCache`). */
+				reuseKiroSession: Type.Boolean(),
 			},
 			{ additionalProperties: false },
 		),
@@ -282,7 +284,7 @@ export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 		escalationCutoff: 0.8,
 		estimateOutputTokens: 4096,
 	},
-	session: { compactAt: 0.8, compactAtBudgetShare: 0.2 },
+	session: { compactAt: 0.8, compactAtBudgetShare: 0.2, reuseKiroSession: false },
 	loop: { maxToolCalls: 200, repeatLimit: 3 },
 	spawn: { maxParallelSubagents: 4, maxDepth: 4 },
 	instructions: [],

@@ -59,6 +59,35 @@ describe("approvals in the engine", () => {
 		expect(result.approvalCostUsd).toBe(0);
 	});
 
+	it("starts the approver for every call of one assistant message at once, and still authorizes them in order", async () => {
+		const env = makeEnv({ config: { tools: { policy: { bash: "ask" }, autoApprove: "on" } } });
+		env.deps.prompter = prompter("deny");
+		let inFlight = 0;
+		let peak = 0;
+		let approverCalls = 0;
+		let agentCalls = 0;
+		const factory: FauxResponseFactory = async (ctx: TranscriptContext) => {
+			const system = ctx.messages.flatMap((m) => (m.role === "system" ? [getSystemMessageText(m)] : [])).join("\n");
+			if (!system.startsWith("You decide whether an AI agent may run one tool action")) {
+				return agentCalls++ === 0 ? fauxAssistantMessage([fauxToolCall("bash", { command: "touch a" }), fauxToolCall("bash", { command: "touch b" }), fauxToolCall("bash", { command: "pwd" }), fauxToolCall("bash", { command: "touch c" })]) : fauxAssistantMessage("done");
+			}
+			approverCalls++;
+			peak = Math.max(peak, ++inFlight);
+			await new Promise((r) => setTimeout(r, 20));
+			inFlight--;
+			return fauxAssistantMessage('{"decision":"allow","reason":"writes inside the workspace"}');
+		};
+		env.faux.setResponses(Array.from({ length: 30 }, () => factory));
+		const result = await createEngine(env.deps).run({ instruction: "make files" });
+
+		expect(result.status).toBe("succeeded");
+		// One approver call per writing command (the read-only `pwd` needs none), all three in flight together.
+		expect(approverCalls).toBe(3);
+		expect(peak).toBe(3);
+		const tools = listSpans(env.deps.db, result.trajectoryId as string).filter((x) => x.kind === "tool_call");
+		expect(tools.map((t) => t.attrs.approvedBy)).toEqual(["auto", "auto", "auto", "auto"]);
+	});
+
 	it("approver spend is reported apart and never counts against the run budget or ledgers", async () => {
 		const env = makeEnv({ config: { tools: { policy: { bash: "ask" }, autoApprove: "on" }, models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "slow" }, approver: { provider: "faux", id: "pricey" } } } });
 		env.deps.prompter = prompter("deny");

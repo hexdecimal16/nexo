@@ -64,6 +64,8 @@ import {
 	createPolicy,
 	createWebSearchTool,
 	FileLeases,
+	isReadOnlyCommand,
+	matchesSessionRule,
 	type Prompter,
 	SEARCH_PROVIDER_IDS,
 	type SearchProviderId,
@@ -73,18 +75,29 @@ import {
 } from "@nexo/tools";
 import { realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { createApprovalClassifier } from "../approval/classifier.ts";
+import { type ApprovalVerdict, createApprovalClassifier } from "../approval/classifier.ts";
 import type { NexoConfig } from "../config/schema.ts";
 import { type BudgetLimit, budgetExhaustedError, checkAdmission, recordSpend, runBudgetLimit } from "../cost/admission.ts";
 import { budgetLine, RunBudget } from "../cost/budget.ts";
 import { estimateCallCostUsd, priceUsage } from "../cost/pricing.ts";
 import { clearOldToolResults } from "./context-trim.ts";
-import { classifyProviderError, contextOverflowError, isRetryableProviderMessage, providerRetryDelayMs, toolErrorText, withToolErrorCodes, withinRetryLimits } from "./errors.ts";
+import {
+	classifyProviderError,
+	contextOverflowError,
+	FORMAT_RETRIES,
+	isFormatFailure,
+	isRetryableProviderMessage,
+	providerRetryDelayMs,
+	toolErrorText,
+	withToolErrorCodes,
+	withinRetryLimits,
+} from "./errors.ts";
 import { assistantText, contentText, estimatePromptChars, foreignToolCallsAsText, lastAssistant, recordedContent, withBudgetLine } from "./messages.ts";
 import { DEFAULT_PLANNER_PROMPT, DEFAULT_SYSTEM_PROMPT, renderSystemPrompt } from "./prompts.ts";
 import { loadProjectInstructions } from "../session/project-instructions.ts";
 import { projectScope } from "../session/project-root.ts";
 import { environmentBlock } from "./environment.ts";
+import { KIRO_P_PROVIDER, KIRO_P_REUSE_META } from "../providers/kiro-p.ts";
 import { type ApiKeyResolver, createGatedStreamFn } from "./provider-gate.ts";
 import { Recorder } from "./recorder.ts";
 import type { ChargedCallDeps } from "../learn/caller.ts";
@@ -94,6 +107,8 @@ import { planScoring, runScoringRound, runSelfCheck, type ScoringDeps, summarize
 import { judgeFamilyWarnings, loadJudgeRubric, loadRouterPolicy } from "../scoring/sources.ts";
 
 const TOOL_RESULT_INLINE_LIMIT = 32_768;
+/** Approver calls that may be started ahead of their tool call at once (one assistant message with many calls). */
+const APPROVAL_PREFETCH_MAX = 6;
 const TOOL_RESULT_EXCERPT_CHARS = 8_000;
 
 /** The head and tail of a large tool result, with a note pointing at the saved full text. */
@@ -447,7 +462,9 @@ export function createEngineEnv(deps: EngineDeps): EngineEnv {
 		sleep: deps.sleep ?? defaultSleep,
 		registry: createModelRegistry(deps.models),
 		policy: createPolicy(deps.config.tools),
-		streamFn: createGatedStreamFn(deps.models, limits, deps.resolveApiKey),
+		streamFn: createGatedStreamFn(deps.models, limits, deps.resolveApiKey, (provider) =>
+			provider === KIRO_P_PROVIDER ? { [KIRO_P_REUSE_META]: deps.config.session.reuseKiroSession } : undefined,
+		),
 	};
 	const recovered = recoverCrashedRuns(deps.db, isPidAlive, now().toISOString());
 	if (recovered.length > 0) deps.logger.warn("marked crashed runs as aborted", { run_ids: recovered });
@@ -768,6 +785,10 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	let runSpan: string | null = null;
 	let turnSpan: string | null = null;
 	let llmSpan: string | null = null;
+	/** When the open model call started, and how long its first output and first answer text took (null until seen). */
+	let llmStartedAt = 0;
+	let llmFirstChunkMs: number | null = null;
+	let llmFirstTextMs: number | null = null;
 	let agent: Agent | null = null;
 	let budgetExceeded = false;
 	let seededCount = 0;
@@ -1091,6 +1112,30 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 
 		const approvedBy = new Map<string, string>();
 		let classify: ReturnType<typeof createApprovalClassifier> | null = null;
+		/** Tool calls whose `beforeToolCall` has begun, and approver verdicts started ahead of theirs, by tool call id. */
+		const startedCalls = new Set<string>();
+		const earlyVerdicts = new Map<string, { signature: string; verdict: Promise<ApprovalVerdict> }>();
+		/**
+		 * pi authorizes the tool calls of one assistant message one after another, so a message with several calls would
+		 * wait for one approver call per tool in sequence. While the first is being authorized, the approver is started
+		 * for the rest that will need it; each call's own authorization then picks its verdict up. Policy, session rules
+		 * and the loop guards still run per call, in order, and a verdict nobody collects is only a wasted approver call.
+		 */
+		const prefetchApprovals = (message: AssistantMessage, signal?: AbortSignal): void => {
+			const classifier = classify;
+			if (!classifier || !approvals || approvals.allowAll) return;
+			const rules = approvals.sessionRules();
+			for (const block of message.content) {
+				if (earlyVerdicts.size >= APPROVAL_PREFETCH_MAX) return;
+				if (block.type !== "toolCall" || startedCalls.has(block.id) || earlyVerdicts.has(block.id)) continue;
+				const args: unknown = block.arguments;
+				if (env.policy.decide(block.name, args).action !== "ask") continue;
+				if (rules.some((rule) => matchesSessionRule(rule, block.name, args))) continue;
+				const command = block.name === "bash" && typeof block.arguments.command === "string" ? block.arguments.command : null;
+				if (command !== null && isReadOnlyCommand(command)) continue;
+				earlyVerdicts.set(block.id, { signature: `${block.name}:${stableJson(args)}`, verdict: classifier(block.name, args, block.id, signal) });
+			}
+		};
 		let lastTrimCleared = 0;
 		/** completedCalls when the tool-call cap was first passed; tool calls from a later model reply end the run. */
 		let loopCapWarnedAt: number | null = null;
@@ -1128,7 +1173,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				}
 				return withBudgetLine(foreignToolCallsAsText(current, active.model), budgetLine(budget));
 			},
-			beforeToolCall: async ({ toolCall, args }, signal) => {
+			beforeToolCall: async ({ toolCall, args, assistantMessage }, signal) => {
+				startedCalls.add(toolCall.id);
 				if (budget.isExhausted()) {
 					budgetExceeded = true;
 					return { block: true, reason: "BUDGET_EXCEEDED: the run budget is exhausted", terminate: true };
@@ -1154,6 +1200,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 					return { block: true, reason: `LOOP_REPEAT: ${toolCall.name} was called ${repeatCount} times in a row with identical arguments (loop.repeatLimit ${repeatLimit}). Change your approach or report the blocker.` };
 				}
 				const classifier = classify;
+				prefetchApprovals(assistantMessage, signal);
 				const auth = await env.policy.authorize(
 					deps.prompter,
 					toolCall.name,
@@ -1164,7 +1211,16 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 						? {
 								sessionRules: approvals.sessionRules,
 								...(approvals.addSessionRule ? { addSessionRule: approvals.addSessionRule } : {}),
-								...(classifier ? { classify: (name: string, a: unknown, s?: AbortSignal) => classifier(name, a, toolCall.id, s) } : {}),
+								...(classifier
+									? {
+											classify: (name: string, a: unknown, s?: AbortSignal) => {
+												const early = earlyVerdicts.get(toolCall.id);
+												earlyVerdicts.delete(toolCall.id);
+												// Only for the arguments it judged: validation may have changed them since.
+												return early && early.signature === `${name}:${stableJson(a)}` ? early.verdict : classifier(name, a, toolCall.id, s);
+											},
+										}
+									: {}),
 								allowAll: approvals.allowAll,
 							}
 						: undefined,
@@ -1242,6 +1298,9 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 					}
 					if (event.message.role === "assistant") {
 						if (llmSpan) recorder.finish(llmSpan, { status: "error", attrs: { reason: "superseded by a new assistant message" } });
+						llmStartedAt = now().getTime();
+						llmFirstChunkMs = null;
+						llmFirstTextMs = null;
 						llmSpan = recorder.start({
 							kind: "llm_call",
 							name: active.model.id,
@@ -1254,11 +1313,15 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 						});
 					}
 					break;
-				case "message_update":
+				case "message_update": {
+					const kind = event.assistantMessageEvent.type;
+					if (kind === "text_delta" || kind === "thinking_delta" || kind === "toolcall_delta") llmFirstChunkMs ??= now().getTime() - llmStartedAt;
 					if (event.assistantMessageEvent.type === "text_delta") {
+						llmFirstTextMs ??= now().getTime() - llmStartedAt;
 						deps.onEvent?.({ type: "text_delta", runId, depth, delta: event.assistantMessageEvent.delta });
 					}
 					break;
+				}
 				case "message_end": {
 					if (event.message.role !== "assistant" || !llmSpan) break;
 					const msg = event.message as AssistantMessage;
@@ -1280,6 +1343,9 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 							stopReason: msg.stopReason,
 							errorMessage: msg.errorMessage,
 							responseModel: msg.responseModel,
+							// Time to the first streamed output (thinking included) and to the first answer text; absent when nothing streamed.
+							firstChunkMs: llmFirstChunkMs ?? undefined,
+							firstTextMs: llmFirstTextMs ?? undefined,
 							content: contentRef ? undefined : content,
 						},
 					});
@@ -1342,6 +1408,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			// Retries are counted per streak of consecutive failures: a successful call since the last retry starts over.
 			let attempt = 0;
 			let waitedMs = 0;
+			let formatFailures = 0;
 			let succeededCalls = completedCalls;
 			for (;;) {
 				const last = lastAssistant(runAgent.state.messages);
@@ -1349,8 +1416,10 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				if (completedCalls !== succeededCalls) {
 					attempt = 0;
 					waitedMs = 0;
+					formatFailures = 0;
 					succeededCalls = completedCalls;
 				}
+				if (isFormatFailure(last) && ++formatFailures > FORMAT_RETRIES) break;
 				attempt++;
 				const providerCfg = config.providers[active.model.provider] ?? {};
 				if (input.signal?.aborted || budgetExceeded) break;

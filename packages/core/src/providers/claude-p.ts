@@ -23,6 +23,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { spawnGroup } from "./process-runner.ts";
+import { ReplyTextExtractor } from "./reply-text.ts";
 
 /** Provider id: models are referenced as `claude-p/<model>`, e.g. `claude-p/opus` or `claude-p/claude-sonnet-5-5`. */
 export const CLAUDE_P_PROVIDER = "claude-p";
@@ -94,13 +95,10 @@ function attr(value: string): string {
 	return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
-/** Renders the conversation for stdin. A lone user message goes as-is; anything longer becomes a tagged transcript. */
-export function renderTranscript(messages: readonly Message[]): string {
-	const turns = messages.filter((m) => m.role !== "system");
-	const only = turns[0];
-	if (turns.length === 1 && only?.role === "user") return contentText(only.content);
+/** The conversation's entries as tagged blocks, in order; system messages are left out. */
+export function renderEntries(messages: readonly Message[]): string {
 	const parts: string[] = [];
-	for (const m of turns) {
+	for (const m of messages) {
 		if (m.role === "user") parts.push(`<user>\n${contentText(m.content)}\n</user>`);
 		else if (m.role === "assistant") {
 			const body = m.content
@@ -116,7 +114,18 @@ export function renderTranscript(messages: readonly Message[]): string {
 			parts.push(`<tool_result id="${attr(m.toolCallId)}" name="${attr(m.toolName)}"${m.isError ? ' is_error="true"' : ""}>\n${contentText(m.content)}\n</tool_result>`);
 		}
 	}
-	return `${parts.join("\n\n")}\n\nWrite the assistant's next turn, continuing from the last entry above.`;
+	return parts.join("\n\n");
+}
+
+/** Closes a rendered transcript (or the new entries of one) with the request for the next turn. */
+export const NEXT_TURN_NOTE = "Write the assistant's next turn, continuing from the last entry above.";
+
+/** Renders the conversation for stdin. A lone user message goes as-is; anything longer becomes a tagged transcript. */
+export function renderTranscript(messages: readonly Message[]): string {
+	const turns = messages.filter((m) => m.role !== "system");
+	const only = turns[0];
+	if (turns.length === 1 && only?.role === "user") return contentText(only.content);
+	return `${renderEntries(turns)}\n\n${NEXT_TURN_NOTE}`;
 }
 
 function plainSchema(tool: Tool): JsonObject {
@@ -257,8 +266,7 @@ function streamClaudeP(run: ClaudePRunner, model: Model<string>, context: Transc
 		let dir: string | undefined;
 		try {
 			dir = await mkdtemp(join(tmpdir(), "nexo-claude-p-"));
-			const args = ["-p", "--output-format", "stream-json", "--verbose", "--model", model.id, "--tools", "", "--no-session-persistence", "--setting-sources", "", "--strict-mcp-config", "--disable-slash-commands"];
-			if (!useTools) args.push("--include-partial-messages");
+			const args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", model.id, "--tools", "", "--no-session-persistence", "--setting-sources", "", "--strict-mcp-config", "--disable-slash-commands"];
 			if (systemPrompt) {
 				const file = join(dir, "system-prompt.md");
 				await writeFile(file, systemPrompt, "utf8");
@@ -274,6 +282,17 @@ function streamClaudeP(run: ClaudePRunner, model: Model<string>, context: Transc
 			let result: ResultEvent | undefined;
 			/** Open streamed block per API content index, for the current API message. */
 			const open = new Map<number, number>();
+			// A tools turn arrives as one StructuredOutput call; its `text` field is shown while the call's JSON is still
+			// being written. Only the first call streams: a second one (the CLI asking again) would repeat it.
+			const replyText = useTools ? new ReplyTextExtractor() : undefined;
+			let replyStarted = false;
+			let replyIndex: number | undefined;
+			let replyBlock: number | undefined;
+			const closeReply = (): void => {
+				if (replyBlock === undefined) return;
+				stream.push({ type: "text_end", contentIndex: replyBlock, content: (partial.content[replyBlock] as TextContent).text, partial: snapshot() });
+				replyBlock = undefined;
+			};
 			for await (const line of proc.lines) {
 				if (!line.trim()) continue;
 				let event: { type?: string; parent_tool_use_id?: string | null; event?: Record<string, unknown> } & Partial<ResultEvent>;
@@ -286,8 +305,34 @@ function streamClaudeP(run: ClaudePRunner, model: Model<string>, context: Transc
 					result = event as ResultEvent;
 					continue;
 				}
-				if (useTools || event.type !== "stream_event" || event.parent_tool_use_id || !event.event) continue;
-				const e = event.event as { type: string; index?: number; content_block?: { type: string }; delta?: { type: string; text?: string; thinking?: string } };
+				if (event.type !== "stream_event" || event.parent_tool_use_id || !event.event) continue;
+				const e = event.event as {
+					type: string;
+					index?: number;
+					content_block?: { type: string; name?: string };
+					delta?: { type: string; text?: string; thinking?: string; partial_json?: string };
+				};
+				if (replyText) {
+					if (e.type === "content_block_start" && e.content_block?.type === "tool_use" && e.content_block.name === "StructuredOutput") {
+						if (replyIndex === undefined && !replyStarted) replyIndex = e.index;
+						replyStarted = true;
+					} else if (e.type === "content_block_delta" && e.index === replyIndex && e.delta?.type === "input_json_delta" && e.delta.partial_json) {
+						const delta = replyText.push(e.delta.partial_json);
+						if (delta) {
+							if (replyBlock === undefined) {
+								replyBlock = partial.content.length;
+								partial.content.push({ type: "text", text: "" });
+								stream.push({ type: "text_start", contentIndex: replyBlock, partial: snapshot() });
+							}
+							(partial.content[replyBlock] as TextContent).text += delta;
+							stream.push({ type: "text_delta", contentIndex: replyBlock, delta, partial: snapshot() });
+						}
+					} else if (e.type === "content_block_stop" && e.index === replyIndex) {
+						closeReply();
+						replyIndex = undefined;
+					}
+					continue;
+				}
 				if (e.type === "message_start") open.clear();
 				else if (e.type === "content_block_start" && e.index !== undefined) {
 					const kind = e.content_block?.type;
@@ -326,8 +371,14 @@ function streamClaudeP(run: ClaudePRunner, model: Model<string>, context: Transc
 			partial.content = partial.content.filter((b) => b.type !== "thinking" || b.thinking.length > 0);
 			let stopReason: "stop" | "length" | "toolUse" = result?.stop_reason === "max_tokens" ? "length" : "stop";
 			if (useTools) {
+				closeReply();
 				const { text, calls } = parseStructured(result?.structured_output);
-				if (text) {
+				// The structured output is the answer. Text that streamed is normally the same; where it is not, the block takes it.
+				const streamed = partial.content.findIndex((b) => b.type === "text");
+				if (streamed >= 0) {
+					if (text) (partial.content[streamed] as TextContent).text = text;
+					else partial.content.splice(streamed, 1);
+				} else if (text) {
 					const contentIndex = partial.content.length;
 					partial.content.push({ type: "text", text: "" });
 					stream.push({ type: "text_start", contentIndex, partial: snapshot() });
@@ -368,7 +419,7 @@ function streamClaudeP(run: ClaudePRunner, model: Model<string>, context: Transc
  * Runs Claude through the local Claude Code CLI (`claude -p`), authenticated by whatever login the CLI has (a Claude
  * subscription or its own API key), so no nexo key is needed. Claude's built-in tools are disabled; when the request
  * carries nexo tools, the reply is constrained by `--json-schema` to `{ text, tool_calls }` and returned as real tool
- * calls, so those turns arrive whole rather than streamed.
+ * calls; the reply's `text` streams as it is written.
  */
 export function claudePProvider(options: ClaudePProviderOptions = {}): Provider {
 	const run = options.run ?? spawnRunner(options.command ?? process.env[CLAUDE_P_COMMAND_ENV] ?? "claude");

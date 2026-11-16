@@ -137,6 +137,28 @@ describe("engine run", () => {
 		expect(getRun(env.deps.db, result.trajectoryId as string)?.costUsd).toBeCloseTo(result.costUsd, 10);
 	});
 
+	it("retries a reply outside the format twice, then fails the run", async () => {
+		const bad = () => fauxAssistantMessage("", { stopReason: "error", errorMessage: 'kiro-cli failed: stopped: native tool call "bash" (the nexo agent offers no tools)' });
+		const env = makeEnv({ config: { providers: { faux: { retryBaseDelayMs: 0 } } } });
+		env.faux.setResponses([bad(), bad(), fauxAssistantMessage("Recovered.")]);
+		expect(await createEngine(env.deps).run({ instruction: "derail twice" })).toMatchObject({ status: "succeeded", output: "Recovered." });
+
+		const stuck = makeEnv({ config: { providers: { faux: { retryBaseDelayMs: 0 } } } });
+		stuck.faux.setResponses([bad(), bad(), bad(), fauxAssistantMessage("never reached")]);
+		const result = await createEngine(stuck.deps).run({ instruction: "derail forever" });
+		expect(result.status).toBe("failed");
+		expect(listSpans(stuck.deps.db, result.trajectoryId as string).filter((s) => s.kind === "llm_call")).toHaveLength(3);
+	});
+
+	it("records how long the first streamed output of a model call took", async () => {
+		const env = makeEnv();
+		env.faux.setResponses([fauxAssistantMessage("Hello there.")]);
+		const result = await createEngine(env.deps).run({ instruction: "greet" });
+		const llm = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.kind === "llm_call");
+		expect(llm?.attrs.firstChunkMs).toEqual(expect.any(Number));
+		expect(llm?.attrs.firstTextMs).toEqual(expect.any(Number));
+	});
+
 	it("counts retries per failure streak, so a rate limit after progress gets the full retry allowance", async () => {
 		const env = makeEnv({ config: { providers: { faux: { maxRetries: 3, rateLimitBaseDelayMs: 5000 } } } });
 		const sleeps: number[] = [];

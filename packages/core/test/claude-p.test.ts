@@ -91,7 +91,35 @@ describe("claude-p provider", () => {
 		const schema = JSON.parse(req.args[req.args.indexOf("--json-schema") + 1]!);
 		expect(schema.properties.tool_calls.items.anyOf[0].properties.name).toEqual({ const: "read" });
 		expect(schema.properties.tool_calls.items.anyOf[0].properties.arguments.properties.path.type).toBe("string");
-		expect(req.args).not.toContain("--include-partial-messages");
+		expect(req.args).toContain("--include-partial-messages");
+	});
+
+	it("streams the text field of the StructuredOutput call while it is being written", async () => {
+		const ev = (event: object) => ({ type: "stream_event", parent_tool_use_id: null, event });
+		const json = (partial_json: string) => ev({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json } });
+		const { run } = fakeRun([
+			ev({ type: "message_start" }),
+			ev({ type: "content_block_start", index: 1, content_block: { type: "tool_use", name: "StructuredOutput", input: {} } }),
+			json('{"text": "Read'),
+			json('ing it.", "tool_calls": [{"name": "read", "arguments": {"path": "a.ts"}}]}'),
+			ev({ type: "content_block_stop", index: 1 }),
+			result({ stop_reason: "tool_use", structured_output: { text: "Reading it.", tool_calls: [{ name: "read", arguments: { path: "a.ts" } }] } }),
+		]);
+		const models = modelsWith(run);
+		const context: Context = {
+			systemPrompt: "Agent.",
+			tools: [{ name: "read", description: "Read a file", parameters: Type.Object({ path: Type.String() }) }],
+			messages: [{ role: "user", content: "open a.ts", timestamp: 1 }],
+		};
+		const s = models.streamSimple(models.getModel(CLAUDE_P_PROVIDER, "sonnet")!, context);
+		const deltas: string[] = [];
+		for await (const e of s) if (e.type === "text_delta") deltas.push(e.delta);
+		const msg = await s.result();
+
+		expect(deltas).toEqual(["Read", "ing it."]);
+		expect(msg.content).toHaveLength(2);
+		expect(msg.content[0]).toEqual({ type: "text", text: "Reading it." });
+		expect(msg.content[1]).toMatchObject({ type: "toolCall", name: "read" });
 	});
 
 	it("reports a failed result as an error the rate-limit classifier recognises", async () => {

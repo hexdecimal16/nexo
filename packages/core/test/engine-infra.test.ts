@@ -10,6 +10,9 @@ import { runRow } from "../../store/test/fixtures.ts";
 import { classifyProviderError, providerRetryDelayMs, retryAfterMs } from "../src/engine/errors.ts";
 import { assistantText, withBudgetLine } from "../src/engine/messages.ts";
 import { createGatedStreamFn } from "../src/engine/provider-gate.ts";
+import { createEngineEnv } from "../src/engine/run.ts";
+import { KIRO_P_PROVIDER, KIRO_P_REUSE_META } from "../src/providers/kiro-p.ts";
+import { makeEnv } from "./helpers.ts";
 import { Recorder } from "../src/engine/recorder.ts";
 import { Semaphore } from "../src/engine/semaphore.ts";
 
@@ -94,6 +97,40 @@ describe("createGatedStreamFn", () => {
 		const streams = await Promise.all([1, 2, 3].map(() => streamFn(model, { messages: [] } as never)));
 		await Promise.all(streams.map((s) => s.result()));
 		expect(maxActive).toBe(1);
+	});
+});
+
+describe("createGatedStreamFn request metadata", () => {
+	const capture = () => {
+		const seen: { provider: string; options: Record<string, unknown> | undefined }[] = [];
+		const models = {
+			streamSimple: (model: { provider: string }, _context: unknown, options?: Record<string, unknown>) => {
+				seen.push({ provider: model.provider, options });
+				return { result: () => Promise.resolve() } as unknown;
+			},
+		} as unknown as Models;
+		return { seen, models };
+	};
+
+	it("adds the provider's metadata under the request's own and leaves other providers' requests alone", async () => {
+		const { seen, models } = capture();
+		const streamFn = createGatedStreamFn(models, {}, undefined, (provider) => (provider === "p" ? { flag: true, shared: "config" } : undefined));
+		await streamFn({ provider: "p" } as never, { messages: [] } as never, { metadata: { shared: "request" }, maxTokens: 5 } as never);
+		await streamFn({ provider: "q" } as never, { messages: [] } as never, { maxTokens: 5 } as never);
+		expect(seen[0]!.options).toEqual({ maxTokens: 5, metadata: { flag: true, shared: "request" } });
+		expect(seen[1]!.options).toEqual({ maxTokens: 5 });
+	});
+
+	it("the engine passes session.reuseKiroSession to kiro-p requests only", async () => {
+		for (const on of [true, false]) {
+			const env = makeEnv({ config: { session: { reuseKiroSession: on } } });
+			const { seen, models } = capture();
+			const { streamFn } = createEngineEnv({ ...env.deps, models });
+			await streamFn({ provider: KIRO_P_PROVIDER } as never, { messages: [] } as never);
+			await streamFn({ provider: "faux" } as never, { messages: [] } as never);
+			expect(seen[0]!.options).toEqual({ metadata: { [KIRO_P_REUSE_META]: on } });
+			expect(seen[1]!.options).toBeUndefined();
+		}
 	});
 });
 

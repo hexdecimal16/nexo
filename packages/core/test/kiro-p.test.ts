@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { createModels, type Context } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
-import { KIRO_P_IDLE_ENV, KIRO_P_PROVIDER, kiroPProvider, type KiroPRequest, type KiroPRunner, nexoModels, parseReply } from "../src/index.ts";
+import { KIRO_P_IDLE_ENV, KIRO_P_PROVIDER, KIRO_P_REUSE_ENV, KIRO_P_REUSE_META, kiroPProvider, type KiroPRequest, type KiroPRunner, nexoModels, parseReply } from "../src/index.ts";
 
 /** What the fake agent does for one `session/prompt`. */
 interface Script {
@@ -99,9 +99,9 @@ function fakeAcp(options: FakeOptions, ...scripts: Script[]) {
 
 const chunk = (text: string, kind = "agent_message_chunk") => ({ sessionUpdate: kind, content: { type: "text", text } });
 
-function modelsWith(run: KiroPRunner) {
+function modelsWith(run: KiroPRunner, reuseSessions = false) {
 	const models = createModels();
-	models.setProvider(kiroPProvider({ run }));
+	models.setProvider(kiroPProvider({ run, reuseSessions }));
 	return models;
 }
 
@@ -114,6 +114,7 @@ const toolContext = (): Context => ({
 });
 
 afterEach(() => {
+	delete process.env[KIRO_P_REUSE_ENV];
 	delete process.env[KIRO_P_IDLE_ENV];
 });
 
@@ -154,6 +155,92 @@ describe("kiro-p provider", () => {
 		expect(msg.content[0]).toEqual({ type: "text", text: "Reading it." });
 		expect(msg.content[1]).toMatchObject({ type: "toolCall", name: "read", arguments: { path: "a.ts" } });
 		expect(msg.content).toHaveLength(2);
+	});
+
+	it("streams thinking and the reply's text field while a tools reply is still being written", async () => {
+		const fake = fakeAcp({}, { updates: [chunk("plan", "agent_thought_chunk"), chunk('{"text":"Read'), chunk('ing \\"it\\".","tool_'), chunk('calls":[{"name":"read","arguments":{"path":"a.ts"}}]}')] });
+		const models = modelsWith(fake.run);
+		const s = models.streamSimple(models.getModel(KIRO_P_PROVIDER, "claude-sonnet-5.5")!, toolContext());
+		const seen: string[] = [];
+		for await (const e of s) if (e.type === "text_delta" || e.type === "thinking_delta") seen.push(`${e.type}:${e.delta}`);
+		const msg = await s.result();
+
+		expect(seen).toEqual(["thinking_delta:plan", "text_delta:Read", 'text_delta:ing "it".']);
+		expect(msg.stopReason).toBe("toolUse");
+		expect(msg.content).toHaveLength(3);
+		expect(msg.content[1]).toEqual({ type: "text", text: 'Reading "it".' });
+		expect(msg.content[2]).toMatchObject({ type: "toolCall", name: "read" });
+	});
+
+	it("keeps the parsed text when the model writes the reply twice", async () => {
+		const fake = fakeAcp({}, { updates: [chunk('{"text":"first","tool_calls":[]}\nNo fence:\n{"text":"second","tool_calls":[]}')] });
+		const models = modelsWith(fake.run);
+		const msg = await models.completeSimple(models.getModel(KIRO_P_PROVIDER, "auto")!, toolContext());
+		expect(msg.content).toEqual([{ type: "text", text: "second" }]);
+	});
+
+	it("fails with a retryable format error when the reply is still a botched JSON object after the correction", async () => {
+		const bad = { updates: [chunk('{"text":"x","tool_calls":[{"name":"nope","arguments":{}}]}')] };
+		const fake = fakeAcp({}, bad, bad);
+		const models = modelsWith(fake.run);
+		const msg = await models.completeSimple(models.getModel(KIRO_P_PROVIDER, "auto")!, toolContext());
+
+		expect(fake.prompts).toHaveLength(2);
+		expect(msg.stopReason).toBe("error");
+		expect(msg.errorMessage).toBe("kiro-cli failed: reply was not a JSON object in the required format");
+	});
+
+	it("with session reuse on, sends only the new entries to the session that wrote the previous turn", async () => {
+		const fake = fakeAcp(
+			{},
+			{ updates: [chunk('{"text":"Reading.","tool_calls":[{"name":"read","arguments":{"path":"a.ts"}}]}')] },
+			{ updates: [chunk('{"text":"It is empty.","tool_calls":[]}')] },
+			{ updates: [chunk('{"text":"Fresh.","tool_calls":[]}')] },
+		);
+		const models = modelsWith(fake.run, true);
+		const model = models.getModel(KIRO_P_PROVIDER, "claude-sonnet-5.5")!;
+		const context = toolContext();
+		const first = await models.completeSimple(model, context);
+		const call = first.content.find((b) => b.type === "toolCall")!;
+		const next: Context = { ...context, messages: [...context.messages, first, { role: "toolResult", toolCallId: call.id, toolName: "read", content: [{ type: "text", text: "(empty file)" }], isError: false, timestamp: 2 }] };
+		const second = await models.completeSimple(model, next);
+
+		expect(second.content).toEqual([{ type: "text", text: "It is empty." }]);
+		expect(fake.sessions).toHaveLength(1);
+		expect(fake.prompts[1]).toContain("(empty file)");
+		expect(fake.prompts[1]).not.toContain("open a.ts");
+		expect(fake.prompts[1]).toContain("Write the assistant's next turn");
+
+		// A conversation whose earlier entries changed (compaction, trimming) gets a fresh session and the whole transcript.
+		const rewritten: Context = { ...next, messages: [{ role: "user", content: "summary of earlier turns", timestamp: 1 }, ...next.messages.slice(1)] };
+		await models.completeSimple(model, rewritten);
+		expect(fake.sessions).toHaveLength(2);
+		expect(fake.prompts[2]).toContain("summary of earlier turns");
+	});
+
+	it("takes the session reuse switch per call from the request metadata, and the environment variable overrides it", async () => {
+		const reply = (text: string) => ({ updates: [chunk(`{"text":"${text}","tool_calls":[]}`)] });
+		const fake = fakeAcp({}, reply("one"), reply("two"), reply("three"), reply("four"));
+		const models = modelsWith(fake.run);
+		const model = models.getModel(KIRO_P_PROVIDER, "auto")!;
+		const context = toolContext();
+		const follow = (previous: Awaited<ReturnType<typeof models.completeSimple>>, base: Context): Context => ({ ...base, messages: [...base.messages, previous, { role: "user", content: "and then?", timestamp: 2 }] });
+		const on = { metadata: { [KIRO_P_REUSE_META]: true } };
+
+		const first = await models.completeSimple(model, context, on);
+		const second = follow(first, context);
+		const secondReply = await models.completeSimple(model, second, on);
+		expect(fake.sessions).toHaveLength(1);
+
+		// Switched off for the call (the setting changed): a fresh session with the whole transcript.
+		const third = follow(secondReply, second);
+		const thirdReply = await models.completeSimple(model, third, { metadata: { [KIRO_P_REUSE_META]: false } });
+		expect(fake.sessions).toHaveLength(2);
+		expect(fake.prompts[2]).toContain("open a.ts");
+
+		process.env[KIRO_P_REUSE_ENV] = "0";
+		await models.completeSimple(model, follow(thirdReply, third), on);
+		expect(fake.sessions).toHaveLength(3);
 	});
 
 	it("corrects once on the same session when the tools reply is not JSON, then keeps the text", async () => {

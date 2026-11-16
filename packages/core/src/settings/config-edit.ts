@@ -155,6 +155,12 @@ const SETTING_LIST: readonly Omit<SettingDefinition, "group">[] = [
 		type: { kind: "number", integer: false, min: 0, max: 1 },
 	},
 	{
+		key: "session.reuseKiroSession",
+		label: "Reuse Kiro session",
+		description: "kiro-p models: keep one Kiro session per conversation and send only new messages, instead of the whole transcript on every model call (on/off; faster on long sessions)",
+		type: { kind: "boolean" },
+	},
+	{
 		key: "optimize.reflectionTier",
 		label: "Optimizer edit model",
 		description: "Which model tier writes candidate edits in `nexo optimize` (s1 is cheaper; edit quality barely depends on model size)",

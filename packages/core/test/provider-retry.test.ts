@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isRetryableProviderMessage, providerRetryDelayMs, withinRetryLimits } from "../src/engine/errors.ts";
+import { isFormatFailure, isRetryableProviderMessage, providerRetryDelayMs, withinRetryLimits } from "../src/engine/errors.ts";
 
 const failed = (errorMessage: string) => ({ stopReason: "error", errorMessage }) as never;
 
@@ -10,6 +10,14 @@ describe("provider retry policy", () => {
 		expect(isRetryableProviderMessage(failed("503 Service Unavailable"))).toBe(true);
 		expect(isRetryableProviderMessage(failed("quota exceeded, try again tomorrow"))).toBe(false);
 		expect(isRetryableProviderMessage(failed("invalid api key"))).toBe(false);
+	});
+
+	it("retries replies outside the format, and tells them apart from transport errors", () => {
+		for (const message of ['kiro-cli failed: stopped: native tool call "bash" (the nexo agent offers no tools)', "kiro-cli failed: reply was not a JSON object in the required format"]) {
+			expect(isRetryableProviderMessage(failed(message))).toBe(true);
+			expect(isFormatFailure(failed(message))).toBe(true);
+		}
+		expect(isFormatFailure(failed("503 Service Unavailable"))).toBe(false);
 	});
 
 	it("caps a single backoff at a minute", () => {

@@ -55,7 +55,7 @@ function renderContentBlocks(content: unknown): SafeHtml {
 	})}`;
 }
 
-const SHOWN_ATTRS = new Set(["content", "args", "result", "reason", "trigger", "instruction", "errorMessage"]);
+const SHOWN_ATTRS = new Set(["content", "args", "result", "reason", "trigger", "instruction", "errorMessage", "firstChunkMs", "firstTextMs"]);
 
 /** Fields, messages, tool input and output, and remaining attributes of one span. */
 export function renderSpanDetail(span: Span, attrsTruncated: boolean, nowMs: number): SafeHtml {
@@ -67,6 +67,9 @@ export function renderSpanDetail(span: Span, attrsTruncated: boolean, nowMs: num
 		["started", span.startedAt],
 		["duration", formatDuration(durationMs(span.startedAt, span.endedAt, nowMs)) + (span.endedAt === null ? " (running)" : "")],
 		["queued", span.queuedMs === null ? null : formatDuration(span.queuedMs)],
+		// A model call's wait for its first streamed output (thinking included) and for the first text of the answer.
+		["first output", typeof a.firstChunkMs === "number" ? formatDuration(a.firstChunkMs) : null],
+		["first text", typeof a.firstTextMs === "number" ? formatDuration(a.firstTextMs) : null],
 		["model", span.model ? `${span.provider ?? "?"}/${span.model}` : null],
 		["tier", span.tier],
 		["effort", span.effort],

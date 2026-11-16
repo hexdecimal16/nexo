@@ -13,6 +13,7 @@ import {
 	getCurrentSystemPrompt,
 	getCurrentTools,
 	type JsonObject,
+	type Message,
 	type Model,
 	type Provider,
 	type SimpleStreamOptions,
@@ -24,7 +25,8 @@ import {
 	type Usage,
 } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
-import { renderTranscript } from "./claude-p.ts";
+import { NEXT_TURN_NOTE, renderEntries, renderTranscript } from "./claude-p.ts";
+import { ReplyTextExtractor } from "./reply-text.ts";
 
 /** Provider id: models are referenced as `kiro-p/<kiro model id>`, e.g. `kiro-p/claude-sonnet-5.5` or `kiro-p/auto`. */
 export const KIRO_P_PROVIDER = "kiro-p";
@@ -33,6 +35,10 @@ const KIRO_P_API = "kiro-p";
 export const KIRO_P_COMMAND_ENV = "NEXO_KIRO_P_COMMAND";
 /** Environment variable overriding how long a turn may stay silent before it is cancelled (milliseconds). */
 export const KIRO_P_IDLE_ENV = "NEXO_KIRO_P_IDLE_MS";
+/** Environment variable that, set to `1` or `0`, turns session reuse (see `SessionCache`) on or off whatever the config says. */
+export const KIRO_P_REUSE_ENV = "NEXO_KIRO_P_REUSE_SESSION";
+/** Request `metadata` key carrying the config's `session.reuseKiroSession` for this call (a boolean). */
+export const KIRO_P_REUSE_META = "nexoKiroReuseSession";
 
 const IDLE_MS_DEFAULT = 120_000;
 /** How long a cancelled turn gets to settle before the whole process is considered stuck and killed. */
@@ -67,6 +73,8 @@ export interface KiroPProviderOptions {
 	command?: string;
 	/** Replaces process spawning (tests). */
 	run?: KiroPRunner;
+	/** Session reuse for calls that do not say (no `metadata` switch, no `$NEXO_KIRO_P_REUSE_SESSION`); off by default. */
+	reuseSessions?: boolean;
 }
 
 const isWindows = process.platform === "win32";
@@ -460,9 +468,72 @@ interface RunOutcome {
 	aborted?: boolean;
 }
 
+/** Why a tools turn ended without a usable reply; the engine retries it a few times (see `isFormatFailure`). */
+export const KIRO_P_BAD_REPLY = "reply was not a JSON object in the required format";
+
+/** True when a reply that did not parse was an attempt at the JSON format rather than a plain-prose answer. */
+function looksLikeReplyAttempt(text: string): boolean {
+	return /"tool_calls"\s*:/.test(text) || /^\s*(```|\{)/.test(text);
+}
+
+/** Sessions kept open at once; the oldest is forgotten first. */
+const REUSE_MAX = 16;
+
+interface Reusable {
+	session: Session;
+	/** Agent (system prompt), model and effort the session runs with. */
+	key: string;
+	/** How many conversation entries the session has seen, its own last reply included. */
+	count: number;
+	/** Digest of those entries as rendered, so a conversation that was compacted or trimmed since does not match. */
+	digest: string;
+}
+
+function digestOf(messages: readonly Message[]): string {
+	return createHash("sha256").update(renderEntries(messages)).digest("hex");
+}
+
+/**
+ * Sessions left open after a turn, so the next model call of the same conversation sends only its new entries instead
+ * of the whole transcript (Kiro's time to first output grows with the prompt: about 10s at 30k characters, 55s at 1M).
+ * A session is matched by what it has seen, not by a run id: the call's conversation must start with exactly the
+ * entries the session holds. Each session is handed to one call at a time.
+ */
+class SessionCache {
+	private items: Reusable[] = [];
+
+	/** Removes and returns the session that already holds a strict prefix of `turns`, the longest such prefix first. */
+	take(key: string, turns: readonly Message[]): Reusable | undefined {
+		const digests = new Map<number, string>();
+		let best: Reusable | undefined;
+		for (const item of this.items) {
+			if (item.key !== key || item.session.conn.closed || item.count >= turns.length || (best && item.count <= best.count)) continue;
+			let digest = digests.get(item.count);
+			if (digest === undefined) {
+				digest = digestOf(turns.slice(0, item.count));
+				digests.set(item.count, digest);
+			}
+			if (digest === item.digest) best = item;
+		}
+		this.items = this.items.filter((item) => item !== best && !item.session.conn.closed);
+		return best;
+	}
+
+	put(item: Reusable): void {
+		this.items.push(item);
+		if (this.items.length > REUSE_MAX) this.items.shift();
+	}
+}
+
 const RETRY_NOTE = "Your previous reply was not a single valid JSON object in the required format. Reply again with only that JSON object.";
 
-function streamKiroP(getConn: () => Promise<AcpConnection>, model: Model<string>, context: TranscriptContext, options?: SimpleStreamOptions): AssistantMessageEventStream {
+function streamKiroP(
+	getConn: () => Promise<AcpConnection>,
+	model: Model<string>,
+	context: TranscriptContext,
+	options?: SimpleStreamOptions,
+	sessions?: SessionCache,
+): AssistantMessageEventStream {
 	const stream = createAssistantMessageEventStream();
 	const partial: AssistantMessage = {
 		role: "assistant",
@@ -521,10 +592,14 @@ function streamKiroP(getConn: () => Promise<AcpConnection>, model: Model<string>
 			throw new Error(`stopped: agent "${agentName}" not applied (mode ${mode ?? "none"})`);
 		};
 
-		/** One prompt on a session; plain turns stream their text and thinking into `partial` as it arrives. */
-		const runOnce = async (session: Session, text: string): Promise<RunOutcome> => {
+		/**
+		 * One prompt on a session. Thinking and text stream into `partial` as they arrive; on a tools turn the text shown
+		 * is the reply's `text` field, read out of the JSON while it is still being written (`streamText` off: none).
+		 */
+		const runOnce = async (session: Session, text: string, streamText = true): Promise<RunOutcome> => {
 			const { conn, id } = session;
 			const outcome: RunOutcome = { text: "" };
+			const replyText = useTools ? new ReplyTextExtractor() : undefined;
 			// A native tool call means the model was offered tools after all; Kiro would answer "not available" and loop.
 			let nativeCall: string | undefined;
 			let stalled = false;
@@ -557,10 +632,11 @@ function streamKiroP(getConn: () => Promise<AcpConnection>, model: Model<string>
 					return;
 				}
 				const kind = u.sessionUpdate === "agent_message_chunk" ? "text" : u.sessionUpdate === "agent_thought_chunk" ? "thinking" : undefined;
-				const delta = u.content?.type === "text" ? u.content.text : undefined;
-				if (!kind || !delta) return;
-				if (kind === "text") outcome.text += delta;
-				if (useTools) return;
+				const chunk = u.content?.type === "text" ? u.content.text : undefined;
+				if (!kind || !chunk) return;
+				if (kind === "text") outcome.text += chunk;
+				const delta = kind === "text" && replyText ? (streamText ? replyText.push(chunk) : "") : chunk;
+				if (!delta) return;
 				if (open?.kind !== kind) {
 					close();
 					open = { kind, index: partial.content.length };
@@ -614,10 +690,18 @@ function streamKiroP(getConn: () => Promise<AcpConnection>, model: Model<string>
 		try {
 			stream.push({ type: "start", partial: snapshot() });
 
+			const turns = context.messages.filter((m) => m.role !== "system");
+			const key = `${agentName}|${model.id}|${effort ?? ""}`;
 			const prompt = renderTranscript(context.messages);
-			let session = await startSession();
+			const reused = sessions?.take(key, turns);
+			let session = reused?.session ?? (await startSession());
 			if (signal?.aborted) return fail("aborted", "Request was aborted");
-			let outcome = await runOnce(session, prompt);
+			let outcome = await runOnce(session, reused ? `${renderEntries(turns.slice(reused.count))}\n\n${NEXT_TURN_NOTE}` : prompt);
+			// A kept session that fails before anything streamed is dropped for a fresh one holding the whole transcript.
+			if (reused && outcome.error && !outcome.aborted && !signal?.aborted && partial.content.length === 0) {
+				session = await startSession();
+				outcome = await runOnce(session, prompt);
+			}
 			// The shared server died under this turn before anything streamed: start a fresh one and run it again, once.
 			if (outcome.lost && !signal?.aborted && partial.content.length === 0) {
 				session = await startSession();
@@ -627,18 +711,29 @@ function streamKiroP(getConn: () => Promise<AcpConnection>, model: Model<string>
 			if (outcome.error) return fail("error", `kiro-cli failed: ${outcome.error}`);
 
 			let stopReason: "stop" | "length" | "toolUse" = outcome.stopReason === "max_tokens" ? "length" : "stop";
+			let corrected = false;
 			if (useTools) {
 				let reply = parseReply(outcome.text, tools);
 				if (!reply) {
-					// Same session, so the model still has the transcript: only the correction is sent.
-					outcome = await runOnce(session, RETRY_NOTE);
+					corrected = true;
+					// Same session, so the model still has the transcript: only the correction is sent. Text the first
+					// attempt already streamed is not streamed again.
+					outcome = await runOnce(session, RETRY_NOTE, !partial.content.some((b) => b.type === "text"));
 					if (outcome.aborted || signal?.aborted) return fail("aborted", "Request was aborted");
 					if (outcome.error) return fail("error", `kiro-cli failed: ${outcome.error}`);
 					reply = parseReply(outcome.text, tools);
 				}
-				// Still not the JSON format: keep what the model said as a plain answer rather than dropping it.
+				// Still not the format. A botched attempt at it (JSON naming an unknown action, a truncated object) is an
+				// error the engine retries: shown as the answer it reads as a run that did nothing. Plain prose is kept.
+				if (!reply && looksLikeReplyAttempt(outcome.text)) return fail("error", `kiro-cli failed: ${KIRO_P_BAD_REPLY}`);
 				const { text, calls } = reply ?? { text: outcome.text, calls: [] };
-				if (text) pushText(text);
+				// The parsed reply is the answer. Text that streamed is normally the same; where it is not (the model wrote
+				// the object twice and the last one won) the block takes the parsed text.
+				const streamed = partial.content.findIndex((b) => b.type === "text");
+				if (streamed < 0) {
+					if (text) pushText(text);
+				} else if (text) (partial.content[streamed] as TextContent).text = text;
+				else partial.content.splice(streamed, 1);
 				for (const call of calls) {
 					const contentIndex = partial.content.length;
 					partial.content.push({ ...call, arguments: {} });
@@ -652,6 +747,7 @@ function streamKiroP(getConn: () => Promise<AcpConnection>, model: Model<string>
 				pushText(outcome.text);
 			}
 			const message: AssistantMessage = { ...snapshot(), stopReason };
+			if (sessions && !corrected && stopReason !== "length") sessions.put({ session, key, count: turns.length + 1, digest: digestOf([...turns, message]) });
 			stream.push({ type: "done", reason: stopReason, message });
 			stream.end(message);
 		} catch (error) {
@@ -668,7 +764,7 @@ function streamKiroP(getConn: () => Promise<AcpConnection>, model: Model<string>
  * per-call CLI start-up. Each turn is a fresh session whose agent carries the system prompt (one agent file per
  * prompt hash), no tools and a policy denying every capability, so Kiro's request carries no tool at all; a native
  * tool call cancels the turn. Nexo tools are described in the prompt and the reply parsed as `{ text, tool_calls }`
- * (one correction retry when it does not parse), so tool turns arrive whole rather than streamed. A turn silent for
+ * (one correction retry when it does not parse); the reply's `text` streams as it is written. A turn silent for
  * `$NEXO_KIRO_P_IDLE_MS` (120s) is cancelled; a server that dies is replaced on the next call, and a turn it dropped
  * is re-run once. Kiro bills in credits and reports no token counts, so usage is empty.
  */
@@ -686,9 +782,17 @@ export function kiroPProvider(options: KiroPProviderOptions = {}): Provider {
 		});
 		return opened;
 	};
+	const sessions = new SessionCache();
+	/** The environment variable wins, then the call's own switch (the engine passes the config's), then the provider option. */
+	const reuse = (opts?: SimpleStreamOptions): SessionCache | undefined => {
+		const env = process.env[KIRO_P_REUSE_ENV];
+		const meta = opts?.metadata?.[KIRO_P_REUSE_META];
+		const on = env === "1" || env === "0" ? env === "1" : typeof meta === "boolean" ? meta : (options.reuseSessions ?? false);
+		return on ? sessions : undefined;
+	};
 	const api = {
-		stream: (model: Model<string>, context: TranscriptContext, opts?: SimpleStreamOptions) => streamKiroP(getConn, model, context, opts),
-		streamSimple: (model: Model<string>, context: TranscriptContext, opts?: SimpleStreamOptions) => streamKiroP(getConn, model, context, opts),
+		stream: (model: Model<string>, context: TranscriptContext, opts?: SimpleStreamOptions) => streamKiroP(getConn, model, context, opts, reuse(opts)),
+		streamSimple: (model: Model<string>, context: TranscriptContext, opts?: SimpleStreamOptions) => streamKiroP(getConn, model, context, opts, reuse(opts)),
 	};
 	return createProvider({
 		id: KIRO_P_PROVIDER,
