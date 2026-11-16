@@ -158,6 +158,7 @@ export class SubagentLine implements Component {
 	private status = "";
 	private error = "";
 	private tool = "";
+	private approval = "";
 	private toolCalls = 0;
 	private endedAt: number | null = null;
 	private readonly startedAt = Date.now();
@@ -165,6 +166,8 @@ export class SubagentLine implements Component {
 	private readonly ticker: Ticker;
 	private readonly depth: number;
 	private readonly label: string;
+	/** One line only (no current-tool, approval or error line), for when the live panel is short on rows. */
+	compact = false;
 	constructor(summary: string, depth: number, ticker: Ticker, label: string) {
 		this.summary = summary;
 		this.depth = depth;
@@ -178,19 +181,28 @@ export class SubagentLine implements Component {
 	toolEnded(): void {
 		this.tool = "";
 	}
+	/** Keeps only the latest auto-approval reason; it replaces the previous one instead of piling up in the chat. */
+	approved(reason: string): void {
+		this.approval = reason;
+	}
 	finish(status: string, costUsd: number, error = ""): void {
 		this.state = status === "succeeded" ? "ok" : "error";
 		this.status = status;
 		this.costUsd = costUsd;
 		this.error = error;
 		this.tool = "";
+		this.approval = "";
 		this.endedAt = Date.now();
+	}
+	get running(): boolean {
+		return this.state === "running";
 	}
 	interrupt(): void {
 		if (this.state === "running") {
 			this.state = "error";
 			this.status = "interrupted";
 			this.tool = "";
+			this.approval = "";
 			this.endedAt = Date.now();
 		}
 	}
@@ -201,9 +213,61 @@ export class SubagentLine implements Component {
 		const calls = this.toolCalls > 0 ? ` · ${this.toolCalls} tool${this.toolCalls === 1 ? "" : "s"}` : "";
 		const tail = this.state === "running" ? style.gray(` ${elapsed}${calls}`) : style.gray(` ${this.status} · ${elapsed}${calls} · ${usd(this.costUsd)}`);
 		const lines = [truncateToWidth(`${indent}  ↳ ${mark} ${style.bold(this.label)} ${this.summary}${tail}`, width)];
+		if (this.compact) return lines;
 		if (this.state === "running" && this.tool) lines.push(truncateToWidth(style.gray(`${indent}      ${this.tool}`), width));
+		if (this.state === "running" && this.approval) lines.push(truncateToWidth(style.gray(`${indent}      auto-allowed: ${this.approval}`), width));
 		if (this.state === "error" && this.error) lines.push(truncateToWidth(style.red(`${indent}      ${this.error}`), width));
 		return lines;
+	}
+	invalidate(): void {}
+}
+
+/**
+ * The subagents of the running fan-out, pinned below the chat. Their rows animate (spinner, elapsed time), and the
+ * main-screen renderer clears scrollback and redraws everything whenever a line above the viewport changes, so live rows
+ * must never sit in the chat where new output can push them off screen. Finished rows wait here until the whole wave is
+ * done and are then moved into the chat in one go (see `takeFinished`), where they never change again. The panel never
+ * renders more than `maxRows()` lines: first finished rows collapse into one line, then running rows go one line each,
+ * then the rest are counted.
+ */
+export class SubagentPanel implements Component {
+	private readonly lines: SubagentLine[] = [];
+	private readonly maxRows: () => number;
+	constructor(maxRows: () => number) {
+		this.maxRows = maxRows;
+	}
+	add(line: SubagentLine): void {
+		this.lines.push(line);
+	}
+	get anyRunning(): boolean {
+		return this.lines.some((line) => line.running);
+	}
+	/** Removes and returns every row, in start order, expanded for the chat. */
+	takeFinished(): SubagentLine[] {
+		const taken = this.lines.splice(0);
+		for (const line of taken) line.compact = false;
+		return taken;
+	}
+	clear(): void {
+		this.lines.length = 0;
+	}
+	render(width: number): string[] {
+		if (this.lines.length === 0) return [];
+		const budget = Math.max(3, this.maxRows());
+		for (const line of this.lines) line.compact = false;
+		const full = [""].concat(...this.lines.map((line) => line.render(width)));
+		if (full.length <= budget) return full;
+		const running = this.lines.filter((line) => line.running);
+		const done = this.lines.length - running.length;
+		const out = [""];
+		if (done > 0) out.push(truncateToWidth(style.gray(`  ↳ ${done} subagent${done === 1 ? "" : "s"} finished`), width));
+		for (const line of running) line.compact = true;
+		const room = budget - out.length;
+		const shown = running.length <= room ? running : running.slice(0, Math.max(0, room - 1));
+		for (const line of shown) out.push(...line.render(width));
+		const hidden = running.length - shown.length;
+		if (hidden > 0) out.push(truncateToWidth(style.gray(`  ↳ … +${hidden} more running`), width));
+		return out;
 	}
 	invalidate(): void {}
 }

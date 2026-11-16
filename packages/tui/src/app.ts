@@ -20,7 +20,7 @@ import { type ErrorPayload, toErrorPayload } from "@nexo/telemetry";
 import { describeSessionRule, type Prompter } from "@nexo/tools";
 import { createApprovalPrompter } from "./approvals.ts";
 import { helpText, isSkillCommand, parseSlashCommand, SLASH_COMMANDS, skillSlashCommands } from "./commands.ts";
-import { Block, DynamicLine, QueuedList, SafeContainer, SafeMarkdown, SubagentLine, Ticker, ToolLine, ViewMode } from "./components.ts";
+import { Block, DynamicLine, QueuedList, SafeContainer, SafeMarkdown, SubagentLine, SubagentPanel, Ticker, ToolLine, ViewMode } from "./components.ts";
 import { createAutocompleteProvider } from "./file-autocomplete.ts";
 import { createSessionPickerScreen, type SessionChoice } from "./session-picker.ts";
 import { SettingsScreen, type SettingsScreenMode } from "./settings-screen.ts";
@@ -151,6 +151,8 @@ class InteractiveApp {
 	private readonly tui: TuiMainScreen;
 	private readonly chat = new Container();
 	private readonly status = new Container();
+	/** Running subagents, pinned between the chat and the loader so their animation never happens above the viewport. */
+	private readonly subagentPanel = new SubagentPanel(() => Math.floor(this.terminal.rows / 2));
 	private readonly slot = new Container();
 	private readonly editor: Editor;
 	private readonly ticker = new Ticker();
@@ -210,6 +212,7 @@ class InteractiveApp {
 		this.prompter = createApprovalPrompter({ show: (box) => this.showApproval(box) }, { now: this.now, redact: (text) => this.settings.redact(text) });
 		const root = new SafeContainer();
 		root.addChild(this.chat);
+		root.addChild(this.subagentPanel);
 		root.addChild(this.status);
 		root.addChild(this.queueView);
 		root.addChild(this.slot);
@@ -578,6 +581,7 @@ class InteractiveApp {
 			this.stopTicker();
 			for (const line of this.tools.values()) line.interrupt();
 			for (const line of this.subagents.values()) line.interrupt();
+			this.flushSubagents();
 			this.currentText = null;
 		}
 		if (result) {
@@ -670,13 +674,14 @@ class InteractiveApp {
 				}
 				const line = new SubagentLine(escapeControl(oneLine(event.instruction, 60)), event.depth, this.ticker, escapeControl(`${event.taskId ?? event.runId.slice(-6)} · ${event.model}`));
 				this.subagents.set(event.runId, line);
-				this.chat.addChild(line);
+				this.subagentPanel.add(line);
 				break;
 			}
 			case "run_end": {
 				if (event.depth === 0) return;
 				this.subagents.get(event.runId)?.finish(event.status, event.costUsd, event.error ? escapeControl(`${event.error.code}: ${oneLine(event.error.message, 120)}`) : "");
 				this.subagents.delete(event.runId);
+				if (!this.subagentPanel.anyRunning) this.flushSubagents();
 				break;
 			}
 			case "llm_end":
@@ -695,7 +700,12 @@ class InteractiveApp {
 				break;
 			}
 			case "approval": {
-				this.chat.addChild(new Block(`${event.depth > 0 ? `[subagent ${event.runId.slice(-6)}] ` : ""}auto-allowed: ${escapeControl(oneLine(event.reason, 160))}`, style.gray, "    "));
+				// A subagent's approvals update its own row (latest reason only) so parallel subagents don't flood the chat.
+				if (event.depth > 0) {
+					this.subagents.get(event.runId)?.approved(escapeControl(oneLine(event.reason, 160)));
+					break;
+				}
+				this.chat.addChild(new Block(`auto-allowed: ${escapeControl(oneLine(event.reason, 160))}`, style.gray, "    "));
 				break;
 			}
 			case "escalation_failed": {
@@ -737,6 +747,11 @@ class InteractiveApp {
 				break;
 		}
 		this.tui.requestRender();
+	}
+
+	/** Moves the finished fan-out from the live panel into the chat, where its rows stay frozen. */
+	private flushSubagents(): void {
+		for (const line of this.subagentPanel.takeFinished()) this.chat.addChild(line);
 	}
 
 	private startTicker(): void {
@@ -974,6 +989,7 @@ class InteractiveApp {
 		this.liveModel = null;
 		this.tools.clear();
 		this.subagents.clear();
+		this.subagentPanel.clear();
 		this.editor.setAutocompleteProvider(createAutocompleteProvider([...SLASH_COMMANDS, ...skillSlashCommands(next.skills())], next.cwd));
 		this.chat.clear();
 		this.renderHeader(next);

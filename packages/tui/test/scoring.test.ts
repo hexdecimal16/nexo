@@ -166,7 +166,30 @@ describe("scores and escalations in the chat", () => {
 		await h.done;
 	});
 
-	it("prefixes a subagent's auto-allowed line with its run label", async () => {
+	it("never clears the scrollback while a subagent makes many auto-allowed calls", async () => {
+		const h = await startHarness({ overrides: { ...FAUX_ROLES, tools: { policy: { bash: "ask" }, autoApprove: "on" } } });
+		const calls = 25;
+		const child = Array.from({ length: calls }, (_, i) => [
+			fauxAssistantMessage([fauxToolCall("bash", { command: `sleep 0.05; echo ${i}` })]),
+			fauxAssistantMessage(`{"decision":"allow","reason":"read-only check number ${i} of the workspace"}`),
+		]).flat();
+		h.faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("spawn", { tasks: [{ id: "c", instruction: "run many checks" }] })]),
+			...child,
+			fauxAssistantMessage("child done"),
+			fauxAssistantMessage("done"),
+		]);
+		const before = h.terminal.raw().split("\x1b[3J").length;
+		submit(h.terminal, "delegate");
+		await until(() => expect(h.terminal.output()).toContain("succeeded"));
+		await until(() => !h.session().running);
+		// A clear means a line above the viewport changed: the user's scroll position is lost on every one.
+		expect(h.terminal.raw().split("\x1b[3J").length).toBe(before);
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
+	it("keeps a subagent's auto-allowed reason out of the chat", async () => {
 		const h = await startHarness({ overrides: { ...FAUX_ROLES, tools: { policy: { bash: "ask" }, autoApprove: "on" } } });
 		h.faux.setResponses([
 			fauxAssistantMessage([fauxToolCall("spawn", { tasks: [{ id: "c", instruction: "run echo" }] })]),
@@ -176,8 +199,10 @@ describe("scores and escalations in the chat", () => {
 			fauxAssistantMessage("done"),
 		]);
 		submit(h.terminal, "delegate");
-		await until(() => expect(h.terminal.output()).toMatch(/\[subagent \w{6}\] auto-allowed: prints text/));
+		await until(() => expect(h.terminal.output()).toContain("succeeded"));
 		await until(() => !h.session().running);
+		// The reason goes to the subagent's own row (cleared when it finishes), never a labelled chat line.
+		expect(h.terminal.output()).not.toMatch(/\[subagent \w{6}\] auto-allowed/);
 		h.terminal.send(KEY.ctrlD);
 		await h.done;
 	});

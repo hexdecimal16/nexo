@@ -1,7 +1,7 @@
 import { chmodSync, writeFileSync } from "node:fs";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import { Block, DynamicLine, MaskedInput, SafeMarkdown, SubagentLine, Ticker, ToolLine, ViewMode } from "../src/components.ts";
+import { Block, DynamicLine, MaskedInput, SafeMarkdown, SubagentLine, SubagentPanel, Ticker, ToolLine, ViewMode } from "../src/components.ts";
 import { SettingsScreen } from "../src/settings-screen.ts";
 import { markdownTheme } from "../src/theme.ts";
 import { KEY, until } from "./fake-terminal.ts";
@@ -24,7 +24,9 @@ describe("narrow terminals", () => {
 		fits(tool.render(40), 40);
 		view.verbose = true;
 		fits(tool.render(40), 40);
-		fits(new SubagentLine(LONG, 3, ticker, `${LONG} · faux/fast`).render(40), 40);
+		const sub = new SubagentLine(LONG, 3, ticker, `${LONG} · faux/fast`);
+		sub.approved(LONG);
+		fits(sub.render(40), 40);
 		fits(new Block(`${LONG}\n${LONG}`, (s) => s, "› ").render(40), 40);
 		fits(new DynamicLine(() => `faux/${LONG} · high · turn $0.00`).render(40), 40);
 		fits(new SafeMarkdown(`# ${LONG}\n\n\`\`\`\n${LONG}\n\`\`\`\n\n| a | ${LONG} |\n|---|---|\n| 1 | 2 |`, 0, 1, markdownTheme).render(40), 40);
@@ -133,5 +135,52 @@ describe("masked input", () => {
 		masked.handleInput(KEY.enter);
 		expect(submitted).toEqual(["newkey12"]);
 		expect(masked.length).toBe(0);
+	});
+});
+
+describe("SubagentLine approvals", () => {
+	it("shows only the latest auto-allowed reason while running and drops it when done", () => {
+		const line = new SubagentLine("research", 1, new Ticker(), "c · faux/fast");
+		line.approved("first reason");
+		line.approved("second reason");
+		const running = line.render(120).join("\n");
+		expect(running).toContain("auto-allowed: second reason");
+		expect(running).not.toContain("first reason");
+		line.finish("succeeded", 0);
+		expect(line.render(120).join("\n")).not.toContain("auto-allowed");
+	});
+});
+
+describe("SubagentPanel", () => {
+	const ticker = new Ticker();
+	const make = (n: number) => Array.from({ length: n }, (_, i) => new SubagentLine(`task ${i}`, 1, ticker, `t${i} · faux/fast`));
+
+	it("never renders more rows than its budget, collapsing finished rows and counting the overflow", () => {
+		const panel = new SubagentPanel(() => 6);
+		const lines = make(10);
+		for (const line of lines) {
+			line.toolStarted("web_fetch(https://example.com)");
+			panel.add(line);
+		}
+		lines[0]?.finish("succeeded", 0.01);
+		lines[1]?.finish("succeeded", 0.01);
+		const out = panel.render(80).join("\n");
+		expect(panel.render(80).length).toBeLessThanOrEqual(6);
+		expect(out).toContain("2 subagents finished");
+		expect(out).toContain("… +5 more running");
+		expect(out).not.toContain("web_fetch");
+	});
+
+	it("shows every row in full when they fit, and hands rows over in start order", () => {
+		const panel = new SubagentPanel(() => 40);
+		const lines = make(3);
+		for (const line of lines) panel.add(line);
+		lines[1]?.toolStarted("bash(ls)");
+		expect(panel.render(80).join("\n")).toContain("bash(ls)");
+		expect(panel.anyRunning).toBe(true);
+		for (const line of lines) line.finish("succeeded", 0);
+		expect(panel.anyRunning).toBe(false);
+		expect(panel.takeFinished()).toEqual(lines);
+		expect(panel.render(80)).toEqual([]);
 	});
 });
