@@ -124,7 +124,7 @@ describe("runs view", () => {
 		const markup = renderSessionFilter("s&1", XSS).value;
 		expectInert(markup);
 		expect(markup).toContain("s&amp;1");
-		expect(markup).toContain(`href="/"`);
+		expect(markup).toContain(`href="/runs.html"`);
 		expect(renderSessionFilter("", null).value).toBe("");
 		const f = { tab: "all" as const, status: "", skill: "", since: "", session: "", scored: "" };
 		expect(renderRunsNote({ ...f, tab: "review" }).value).toBe("");
@@ -133,7 +133,7 @@ describe("runs view", () => {
 		expect(note).toContain("Chat turns are listed per session on the <a");
 		expect(note).toContain(">Sessions page</a>");
 		expect(note).toContain(`href="/sessions.html"`);
-		expect(sessionLink("a b")).toBe("/?session=a%20b");
+		expect(sessionLink("a b")).toBe("/runs.html?session=a%20b");
 	});
 
 	it("builds the status filter options from /api/meta", () => {
@@ -172,7 +172,7 @@ describe("run view", () => {
 	it("links a session turn to its session's runs", () => {
 		const markup = renderRunHeader(detail({ run: summary({ sessionId: "s1", turnIndex: 3, sessionTitle: XSS }) }), NOW).value;
 		expectInert(markup);
-		expect(markup).toContain(`href="/?session=s1"`);
+		expect(markup).toContain(`href="/runs.html?session=s1"`);
 		expect(markup).toContain("· turn 3");
 		expect(renderRunHeader(detail(), NOW).value).not.toContain("?session=");
 	});
@@ -507,7 +507,7 @@ describe("sessions view", () => {
 	it("escapes hostile titles and ids, and links the title to the session's turns", () => {
 		const markup = renderSessionRows([sessionItem({ id: "a&b", title: XSS })]).value;
 		expectInert(markup);
-		expect(markup).toContain(`href="/?session=a%26b"`);
+		expect(markup).toContain(`href="/runs.html?session=a%26b"`);
 		expect(markup).toContain(`href="/run.html?id=01RUN"`);
 	});
 

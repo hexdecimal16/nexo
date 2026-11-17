@@ -27,7 +27,7 @@ function render(d: Home, id: string): void {
 	const a = d.areas.find((x) => x.id === id);
 	if (!a) {
 		title.textContent = "Area not found";
-		box.innerHTML = html`<p class="muted">No active area "${id}". <a href="/home.html">Back to Home</a>.</p>`.value;
+		box.innerHTML = html`<p class="muted">No active area "${id}". <a href="/">Back to Home</a>.</p>`.value;
 		return;
 	}
 	title.textContent = a.name;
@@ -38,11 +38,11 @@ function render(d: Home, id: string): void {
 	const pages = a.wikis.reduce((n, w) => n + w.pageCount, 0);
 	const wikis = a.wikis.map((w) => html`<a class="area-card" href="/page.html?path=${encodeURIComponent(`${w.path}/index.html`)}"><strong>${w.name}</strong><span class="muted">${String(w.pageCount)} pages</span>${w.summary ? html`<span class="area-card-text">${w.summary}</span>` : ""}</a>`);
 	const timeline = feed.map((f) => {
-		const link = f.sessionId ? html`<a href="/?session=${encodeURIComponent(f.sessionId)}">session</a>` : html`<a href="/run.html?id=${encodeURIComponent(f.runId)}">run</a>`;
+		const link = f.sessionId ? html`<a href="/runs.html?session=${encodeURIComponent(f.sessionId)}">session</a>` : html`<a href="/run.html?id=${encodeURIComponent(f.runId)}">run</a>`;
 		return html`<li><time>${formatTime(f.at)}${f.wiki ? ` · ${f.wiki}` : ""}</time>${f.text}${f.verified ? "" : html` <span class="home-tag">unverified</span>`} ${pageLinks(f)} ${link}</li>`;
 	});
 	const decisionCards = decisions.map((x) => html`<div class="area-decision"><strong>${x.choice}</strong>${x.reason ? html`<span class="muted">Because ${x.reason}</span>` : ""}<time class="muted">${formatTime(x.at)}</time></div>`);
-	const rows = sessions.map((s) => html`<tr><td><a href="/?session=${encodeURIComponent(s.id)}">${s.title || s.id}</a></td><td class="mono muted">${s.cwd}</td><td class="muted">${formatTime(s.updatedAt)}</td></tr>`);
+	const rows = sessions.map((s) => html`<tr><td><a href="/runs.html?session=${encodeURIComponent(s.id)}">${s.title || s.id}</a></td><td class="mono muted">${s.cwd}</td><td class="muted">${formatTime(s.updatedAt)}</td></tr>`);
 	box.innerHTML = html`<p class="home-note">${a.scope}</p>
 <div class="area-stats">${stat(a.wikis.length, "wikis")}${stat(pages, "pages")}${stat(a.recent, "filed this week")}${stat(decisions.length, "decisions")}</div>
 <section><h2>Wikis</h2>${wikis.length > 0 ? html`<div class="area-grid">${wikis}</div>` : empty("No wikis in this area yet.")}</section>

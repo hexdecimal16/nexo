@@ -29,7 +29,7 @@ export function renderRunHeader(detail: RunDetailResponse, nowMs: number): SafeH
 	const { run, runJson } = detail;
 	const model = runJson?.model;
 	return html`<header class="run-header ${stateClass(run.status)}">
-	<div class="crumbs">${run.parentRunId ? html`<a href="${runLink(run.parentRunId)}">← parent run ${shortId(run.parentRunId)}</a>` : html`<a href="/">← runs</a>`}</div>
+	<div class="crumbs">${run.parentRunId ? html`<a href="${runLink(run.parentRunId)}">← parent run ${shortId(run.parentRunId)}</a>` : html`<a href="/runs.html">← runs</a>`}</div>
 	<h1>${truncate(run.instruction.split("\n")[0] ?? "", 200)}</h1>
 	<div class="facts">
 		${statusBadge(run.status)} ${verdictBadge(run.verdict)}

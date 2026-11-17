@@ -20,7 +20,7 @@ function apply(choice: Choice): void {
 
 function markActive(nav: Element): void {
 	const path = location.pathname;
-	const target = path === '/' || path === '/index.html' || path === '/run.html' ? '/' : path;
+	const target = path === '/index.html' ? '/' : path === '/run.html' ? '/runs.html' : path;
 	for (const a of nav.querySelectorAll('a:not(.brand)')) {
 		if (a.getAttribute('href') === target) a.setAttribute('aria-current', 'page');
 	}

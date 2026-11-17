@@ -219,7 +219,7 @@ function render(state: CompanionState, reviewCount: number): void {
 	const first = state.running[0];
 	if (first) action(state.running.length > 1 ? `Watch the oldest of ${state.running.length} running runs` : "Watch the running run", runLink(first.id));
 	if (state.lastFailed) action("Open the last failure", runLink(state.lastFailed.id));
-	if (reviewCount > 0) action(`Review queue (${reviewCount})`, "/?tab=review");
+	if (reviewCount > 0) action(`Review queue (${reviewCount})`, "/runs.html?tab=review");
 	if (state.latest && state.latest !== state.lastFailed) action("Open the latest run", runLink(state.latest.id));
 	action("Where the money went", "/cost.html");
 }

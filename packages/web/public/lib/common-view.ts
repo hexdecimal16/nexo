@@ -7,7 +7,7 @@ export function runLink(id: string): string {
 
 /** The runs list filtered to one session's turns. */
 export function sessionLink(sessionId: string): string {
-	return `/?session=${encodeURIComponent(sessionId)}`;
+	return `/runs.html?session=${encodeURIComponent(sessionId)}`;
 }
 
 const STATUS_GLYPH = new Map([

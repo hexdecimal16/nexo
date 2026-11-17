@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="nexo-token" content="{{NEXO_TOKEN}}">
+<title>nexo · runs</title>
+<link rel="stylesheet" href="/style.css">
+<script type="module" src="/lib/theme.ts"></script>
+<script type="module" src="/pages/companion.ts"></script>
+<script type="module" src="/pages/runs.ts"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<nav class="top" aria-label="Primary"><a href="/" class="brand">nexo</a><a href="/">Home</a><a href="/runs.html">Runs</a><a href="/sessions.html">Sessions</a><a href="/cost.html">Cost</a><a href="/learning.html">Learning</a><a href="/judge.html">Judge</a><a href="/optim.html">Optimization</a></nav>
+<main id="main" tabindex="-1">
+<h1>Runs</h1>
+<div id="session-filter"></div>
+<div class="tabs" role="tablist">
+<button type="button" role="tab" data-tab="all" aria-selected="true">All runs</button>
+<button type="button" role="tab" data-tab="review" aria-selected="false">Review queue</button>
+</div>
+<form id="filters" class="filters">
+<label>Status <select name="status" id="status-filter"><option value="">any</option></select></label>
+<label>Skill <input name="skill" type="text" placeholder="any"></label>
+<label>Since <input name="since" type="date"></label>
+<label>Scored <select name="scored"><option value="">any</option><option value="true">scored</option><option value="false">not scored</option></select></label>
+<button type="submit">Apply</button>
+</form>
+<div id="error"></div>
+<div class="table-wrap">
+<table class="runs">
+<thead><tr><th>Started (UTC)</th><th>Instruction</th><th>Skill</th><th>Status</th><th>Model</th><th class="num">Duration</th><th class="num">Cost</th><th>Score</th><th>Verdict</th></tr></thead>
+<tbody id="runs-body"></tbody>
+</table>
+</div>
+<div id="pager"></div>
+</main>
+</body>
+</html>

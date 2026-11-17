@@ -60,7 +60,7 @@ describe("home API", () => {
 	});
 
 	it("serves the home page", async () => {
-		const res = await raw(server.port, "/home.html");
+		const res = await raw(server.port, "/");
 		expect(res.status).toBe(200);
 		expect(res.text).toContain("/pages/home.ts");
 	});

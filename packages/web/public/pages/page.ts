@@ -49,7 +49,7 @@ function mount(page: HomePage): void {
 
 const path = new URLSearchParams(location.search).get("path") ?? "";
 const [area = "", folder = ""] = path.split("/");
-crumbs.replaceChildren(link("Home", "/home.html"), " / ", link(area, `/area.html?id=${encodeURIComponent(area)}`), " / ", link(folder, `/page.html?path=${encodeURIComponent(`${area}/${folder}/index.html`)}`));
+crumbs.replaceChildren(link("Home", "/"), " / ", link(area, `/area.html?id=${encodeURIComponent(area)}`), " / ", link(folder, `/page.html?path=${encodeURIComponent(`${area}/${folder}/index.html`)}`));
 getJson<HomePage>(`/api/home/page?path=${encodeURIComponent(path)}`)
 	.then((page) => {
 		titleEl.textContent = page.title;

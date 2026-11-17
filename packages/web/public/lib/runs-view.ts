@@ -68,7 +68,7 @@ export function renderRunRows(runs: RunSummary[], nowMs: number): SafeHtml {
 /** The active session filter, with a link back to all runs; empty without one. */
 export function renderSessionFilter(sessionId: string, title: string | null): SafeHtml {
 	if (!sessionId) return html``;
-	return html`<p class="session-filter">Turns of session <a class="mono" href="${sessionLink(sessionId)}">${title || sessionId}</a> <span class="muted mono">${sessionId}</span> · <a href="/">show all runs</a></p>`;
+	return html`<p class="session-filter">Turns of session <a class="mono" href="${sessionLink(sessionId)}">${title || sessionId}</a> <span class="muted mono">${sessionId}</span> · <a href="/runs.html">show all runs</a></p>`;
 }
 
 /** On the default view (all tabs, no session filter) chat turns are not listed; a muted line points to the Sessions page. */
