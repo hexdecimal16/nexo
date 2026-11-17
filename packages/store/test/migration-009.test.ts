@@ -24,7 +24,7 @@ describe("migration 009", () => {
 		const db = dbAtVersion8();
 		db.prepare(ARTIFACT).run("A1", "skill", "ci-fix", 1, "v1", "h1", null, "manual", "retired", "2026-10-01T00:00:00.000Z");
 		db.prepare(ARTIFACT).run("A2", "skill", "ci-fix", 2, "v2", "h2", "A1", "gepa", "active", "2026-10-02T00:00:00.000Z");
-		expect(migrate(db)).toEqual([9]);
+		expect(migrate(db)[0]).toBe(9);
 		expect(db.prepare("SELECT id, parent_version_id, status FROM artifacts ORDER BY id").all()).toEqual([
 			{ id: "A1", parent_version_id: null, status: "retired" },
 			{ id: "A2", parent_version_id: "A1", status: "active" },

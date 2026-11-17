@@ -1455,6 +1455,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				}).toPayload();
 			} else if (input.signal?.aborted || last?.stopReason === "aborted") {
 				status = "aborted";
+				// Aborted while a provider error was pending (for example during the retry backoff): keep that error so the run says why it stalled.
+				if (last?.stopReason === "error" && last.errorMessage) error = classifyProviderError(last.errorMessage).toPayload();
 			} else if (last?.stopReason === "error") {
 				status = "failed";
 				const message = last.errorMessage ?? "Provider error";

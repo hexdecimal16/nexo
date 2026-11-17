@@ -279,11 +279,28 @@ export function parseReply(raw: string, tools: readonly Tool[]): { text: string;
 	if (Array.isArray(obj.tool_calls)) {
 		for (const c of obj.tool_calls as { name?: unknown; arguments?: unknown }[]) {
 			if (typeof c?.name !== "string" || !known.has(c.name)) return undefined;
-			const args = typeof c.arguments === "object" && c.arguments !== null && !Array.isArray(c.arguments) ? (c.arguments as JsonObject) : {};
+			const args = callArguments(c.arguments);
+			// Arguments that are not an object would reach the tool as {} and fail validation ("command: missing");
+			// treating the reply as unusable sends it through the format-failure retry instead.
+			if (!args) return undefined;
 			calls.push({ type: "toolCall", id: toolCallId(), name: c.name, arguments: args });
 		}
 	}
 	return { text: typeof obj.text === "string" ? obj.text : "", calls };
+}
+
+/** A tool call's arguments as an object: absent means none, a JSON-encoded string is decoded, anything else is unusable. */
+function callArguments(value: unknown): JsonObject | undefined {
+	if (value === undefined || value === null) return {};
+	let parsed: unknown = value;
+	if (typeof value === "string") {
+		try {
+			parsed = JSON.parse(value);
+		} catch {
+			return undefined;
+		}
+	}
+	return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as JsonObject) : undefined;
 }
 
 function effortFlag(reasoning: SimpleStreamOptions["reasoning"]): string | undefined {

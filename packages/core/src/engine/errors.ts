@@ -12,6 +12,14 @@ export function classifyProviderError(message: string): NexoError {
 			hint: "Set the provider's API key environment variable (for example ANTHROPIC_API_KEY or OPENAI_API_KEY) or log in with pi-ai",
 		});
 	}
+	if (/input_too_large|input exceeds the maximum length|context.?length.?exceeded/.test(lower)) return contextOverflowError(message);
+	if (FORMAT_FAILURE.test(message)) {
+		return new NexoError({
+			code: "PROVIDER_UNAVAILABLE",
+			message,
+			hint: "The model kept answering outside the nexo reply format (a native tool call or an unusable JSON reply) after the automatic retries; rerun the turn or switch model",
+		});
+	}
 	if (/\b429\b|rate.?limit|too many requests|resource.?exhausted/.test(lower)) {
 		return new NexoError({ code: "PROVIDER_RATE_LIMIT", message, retryable: true, hint: "Lower providers.<name>.maxConcurrent or retry later" });
 	}
