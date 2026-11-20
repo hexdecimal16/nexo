@@ -197,7 +197,7 @@ export function agyToolsSection(tools: readonly Tool[]): string {
 		"",
 		'Every reply must be exactly one JSON object and nothing else (no prose around it, no code fence): {"text": string, "tool_calls": [{"name": string, "arguments": object}]}.',
 		"`text` is what you say to the user (may be empty). `tool_calls` lists actions for the caller to run now, with arguments matching the action's parameters.",
-		"The actions below are not tools you can invoke: never call them directly and never invoke any built-in tool (such as `manage_task`), only list actions in `tool_calls`. The caller runs them and sends the results back in the next turn as <tool_result> entries. When you are finished, leave `tool_calls` empty and put the final answer in `text`.",
+		"The actions below are not tools you can invoke: never call them directly and never invoke any native or built-in tool (`call_mcp_tool`, `list_resources`, `read_resource`, `manage_task`, etc.). These actions are NOT MCP tools — only list them in the JSON `tool_calls` array. The caller runs them and sends the results back in the next turn as <tool_result> entries. When you are finished, leave `tool_calls` empty and put the final answer in `text`.",
 		"",
 		"Available actions, one JSON definition per line:",
 		defs,
@@ -316,8 +316,42 @@ function rpcErrorMessage(error: { code?: number; message?: string; data?: unknow
 
 interface AcpUpdate {
 	sessionUpdate?: string;
+	toolCallId?: string;
+	name?: string;
 	title?: string;
+	args?: unknown;
+	rawInput?: unknown;
 	content?: { type?: string; text?: string };
+}
+
+function parseObjectArgs(value: unknown): JsonObject | undefined {
+	if (value === undefined || value === null) return {};
+	let parsed: unknown = value;
+	if (typeof value === "string") {
+		try {
+			parsed = JSON.parse(value);
+		} catch {
+			return undefined;
+		}
+	}
+	return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as JsonObject) : undefined;
+}
+
+/**
+ * Extracts a nexo `ToolCall` when a model invokes Antigravity's residual `call_mcp_tool` targeting one of nexo's own
+ * declared actions (e.g. `ToolName: "bash"`). Returns undefined for any non-nexo tool or malformed arguments so real
+ * MCP tools and other native tools are always rejected.
+ */
+export function extractMcpToolCall(update: AcpUpdate, knownTools: ReadonlySet<string>): ToolCall | undefined {
+	if (update.name !== "call_mcp_tool") return undefined;
+	const raw = update.args ?? update.rawInput;
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+	const obj = raw as { ToolName?: unknown; toolName?: unknown; Arguments?: unknown; arguments?: unknown };
+	const toolName = typeof obj.ToolName === "string" ? obj.ToolName : typeof obj.toolName === "string" ? obj.toolName : undefined;
+	if (!toolName || !knownTools.has(toolName)) return undefined;
+	const args = parseObjectArgs(obj.Arguments ?? obj.arguments);
+	if (!args) return undefined;
+	return { type: "toolCall", id: toolCallId(), name: toolName, arguments: args };
 }
 
 interface Pending {
@@ -333,7 +367,7 @@ const AGENT_FILE = [
 	"tools: []",
 	"mainAgent: true",
 	"---",
-	"Follow the instructions provided for this session. Do not invoke any built-in tools.",
+	"Follow the instructions provided for this session. Never invoke any native or built-in tools (including `call_mcp_tool`, `list_resources`, `read_resource`, and `manage_task`).",
 	"Your own working directory is an empty scratch directory unrelated to the caller's. Never resolve or link file paths against it: use relative paths as given, or only absolute paths named in the conversation.",
 	"",
 ].join("\n");
@@ -486,6 +520,7 @@ interface Session {
 
 interface RunOutcome {
 	text: string;
+	recoveredCalls: ToolCall[];
 	stopReason?: string;
 	usage: Usage;
 	error?: string;
@@ -554,6 +589,7 @@ function streamAgyP(
 		if (signal?.aborted) return fail("aborted", "Request was aborted");
 		const tools = getCurrentTools(context.messages);
 		const useTools = tools.length > 0 && options?.toolChoice !== "none";
+		const knownTools = useTools ? new Set(tools.map((t) => t.name)) : new Set<string>();
 		const systemPrompt = [getCurrentSystemPrompt(context.messages), useTools ? agyToolsSection(tools) : ""].filter((s) => s.length > 0).join("\n\n");
 		const idleMs = parseIdleMs(process.env[AGY_P_IDLE_ENV]);
 
@@ -633,10 +669,12 @@ function streamAgyP(
 					? [{ type: "text", text: input }]
 					: input.map((p) => (p.type === "text" ? { type: "text", text: p.text } : { type: "image", data: p.data, mimeType: p.mimeType }));
 			const { conn, id } = session;
-			const outcome: RunOutcome = { text: "", usage: emptyUsage() };
+			const outcome: RunOutcome = { text: "", recoveredCalls: [], usage: emptyUsage() };
 			const replyText = useTools ? new ReplyTextExtractor() : undefined;
-			// A native tool call cancels the turn so the engine retries cleanly.
+			// Any native tool call cancels the turn; `call_mcp_tool` targeting a known nexo action is recovered as a nexo ToolCall.
 			let nativeCall: string | undefined;
+			let cancelledForTool = false;
+			const seenCallIds = new Set<string>();
 			let stalled = false;
 			let open: { kind: "text" | "thinking"; index: number } | undefined;
 			let idle: NodeJS.Timeout | undefined;
@@ -660,8 +698,18 @@ function streamAgyP(
 			conn.listen(id, (u) => {
 				arm();
 				if (u.sessionUpdate === "tool_call") {
-					if (!nativeCall) {
-						nativeCall = u.title ?? "tool";
+					if (typeof u.toolCallId === "string") {
+						if (seenCallIds.has(u.toolCallId)) return;
+						seenCallIds.add(u.toolCallId);
+					}
+					const recovered = useTools ? extractMcpToolCall(u, knownTools) : undefined;
+					if (recovered) {
+						outcome.recoveredCalls.push(recovered);
+					} else if (!nativeCall) {
+						nativeCall = u.title ?? u.name ?? "tool";
+					}
+					if (!cancelledForTool) {
+						cancelledForTool = true;
 						cancel();
 					}
 					return;
@@ -706,7 +754,9 @@ function streamAgyP(
 				if (settled === "aborted") outcome.aborted = true;
 				else if (stalled) outcome.error = `no output for ${Math.round(idleMs / 1000)}s`;
 				else if (nativeCall) outcome.error = `stopped: native tool call "${nativeCall}" (the nexo agent offers no tools)`;
-				else if ("e" in settled) {
+				else if (outcome.recoveredCalls.length > 0) {
+					if (!("e" in settled)) outcome.usage = toUsage(settled.r?.usage);
+				} else if ("e" in settled) {
 					outcome.error = settled.e.message;
 					outcome.lost = conn.closed;
 				} else {
@@ -745,7 +795,11 @@ function streamAgyP(
 
 			let stopReason: "stop" | "length" | "toolUse" = outcome.stopReason === "max_tokens" ? "length" : "stop";
 			if (useTools) {
-				let reply = parseAgyReply(outcome.text, tools);
+				const fromOutcome = (o: RunOutcome): { text: string; calls: ToolCall[] } | undefined =>
+					o.recoveredCalls.length > 0
+						? { text: looksLikeReplyAttempt(o.text) ? "" : o.text.trim(), calls: o.recoveredCalls }
+						: parseAgyReply(o.text, tools);
+				let reply = fromOutcome(outcome);
 				if (!reply) {
 					// Same session, so the model still has the transcript: only the correction is sent. Text the first
 					// attempt already streamed is not streamed again.
@@ -753,7 +807,7 @@ function streamAgyP(
 					usage = addUsage(usage, outcome.usage);
 					if (outcome.aborted || signal?.aborted) return fail("aborted", "Request was aborted", usage);
 					if (outcome.error) return fail("error", `agy failed: ${outcome.error}`, usage);
-					reply = parseAgyReply(outcome.text, tools);
+					reply = fromOutcome(outcome);
 				}
 				// Still not the format. A botched attempt at it (JSON naming an unknown action, a truncated object) is an
 				// error the engine retries; plain prose is kept.

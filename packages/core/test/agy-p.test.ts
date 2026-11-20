@@ -14,6 +14,7 @@ import {
 	type AgyPRequest,
 	type AgyPRunner,
 	createSettings,
+	extractMcpToolCall,
 	nexoModels,
 	parseAgyReply,
 	resolveThoughtLevel,
@@ -345,6 +346,115 @@ describe("agy-p provider", () => {
 		expect(fake.cancels).toEqual(["s1"]);
 		expect(msg.stopReason).toBe("error");
 		expect(msg.errorMessage).toContain('native tool call "manage_task"');
+	});
+
+	it("recovers call_mcp_tool targeting a declared nexo action into a real ToolCall", async () => {
+		const fake = fakeAcp(
+			{},
+			{
+				updates: [
+					chunk("Checking the file."),
+					{
+						sessionUpdate: "tool_call",
+						toolCallId: "c1",
+						name: "call_mcp_tool",
+						title: "MCP Tool read",
+						args: { ServerName: "nexo", ToolName: "read", Arguments: { path: "a.ts" } },
+					},
+					// Duplicate update for the same toolCallId is ignored.
+					{
+						sessionUpdate: "tool_call",
+						toolCallId: "c1",
+						name: "call_mcp_tool",
+						title: "MCP Tool read",
+						args: { ServerName: "nexo", ToolName: "read", Arguments: { path: "a.ts" } },
+					},
+				],
+				stopReason: "cancelled",
+				usage: { inputTokens: 300, outputTokens: 20, totalTokens: 320 },
+			},
+		);
+		const models = modelsWith(fake.run);
+		const msg = await models.completeSimple(models.getModel(AGY_P_PROVIDER, "gemini-3.8-flash")!, toolContext());
+
+		expect(fake.cancels).toEqual(["s1"]);
+		expect(msg.stopReason).toBe("toolUse");
+		expect(msg.content[0]).toEqual({ type: "text", text: "Checking the file." });
+		expect(msg.content[1]).toMatchObject({ type: "toolCall", name: "read", arguments: { path: "a.ts" } });
+		expect((msg.content[1] as { id: string }).id).toMatch(/^agy_p_/);
+		expect(msg.usage).toMatchObject({ input: 300, output: 20, totalTokens: 320 });
+	});
+
+	it("rejects call_mcp_tool for non-nexo MCP tools, mixed native calls, bad arguments, or plain turns", async () => {
+		// Real MCP tool not in nexo's declared tools
+		const unknownMcp = fakeAcp(
+			{},
+			{
+				updates: [
+					{
+						sessionUpdate: "tool_call",
+						toolCallId: "c1",
+						name: "call_mcp_tool",
+						title: "MCP Tool get_logs",
+						args: { ServerName: "last9", ToolName: "get_logs", Arguments: {} },
+					},
+				],
+			},
+		);
+		const m1 = await modelsWith(unknownMcp.run).completeSimple(modelsWith(unknownMcp.run).getModel(AGY_P_PROVIDER, "gemini-3.8-flash")!, toolContext());
+		expect(m1.stopReason).toBe("error");
+		expect(m1.errorMessage).toContain('native tool call "MCP Tool get_logs"');
+
+		// Mixed known nexo call + forbidden native manage_task
+		const mixed = fakeAcp(
+			{},
+			{
+				updates: [
+					{
+						sessionUpdate: "tool_call",
+						toolCallId: "c1",
+						name: "call_mcp_tool",
+						title: "MCP Tool read",
+						args: { ToolName: "read", Arguments: { path: "a.ts" } },
+					},
+					{ sessionUpdate: "tool_call", toolCallId: "c2", name: "manage_task", title: "manage_task" },
+				],
+			},
+		);
+		const m2 = await modelsWith(mixed.run).completeSimple(modelsWith(mixed.run).getModel(AGY_P_PROVIDER, "gemini-3.8-flash")!, toolContext());
+		expect(m2.stopReason).toBe("error");
+		expect(m2.errorMessage).toContain('native tool call "manage_task"');
+
+		// Plain turn (no nexo tools offered) must never recover call_mcp_tool
+		const noTools = fakeAcp(
+			{},
+			{
+				updates: [
+					{
+						sessionUpdate: "tool_call",
+						toolCallId: "c1",
+						name: "call_mcp_tool",
+						title: "MCP Tool read",
+						args: { ToolName: "read", Arguments: { path: "a.ts" } },
+					},
+				],
+			},
+		);
+		const m3 = await modelsWith(noTools.run).completeSimple(modelsWith(noTools.run).getModel(AGY_P_PROVIDER, "gemini-3.8-flash")!, plain());
+		expect(m3.stopReason).toBe("error");
+		expect(m3.errorMessage).toContain('native tool call "MCP Tool read"');
+
+		// Unit checks on extractMcpToolCall edge cases
+		const known = new Set(["read", "bash"]);
+		expect(extractMcpToolCall({ name: "call_mcp_tool", rawInput: { ToolName: "bash", Arguments: '{"command":"ls"}' } }, known)).toMatchObject({
+			type: "toolCall",
+			name: "bash",
+			arguments: { command: "ls" },
+		});
+		expect(extractMcpToolCall({ name: "call_mcp_tool", args: { ToolName: "bash" } }, known)).toMatchObject({ name: "bash", arguments: {} });
+		expect(extractMcpToolCall({ name: "call_mcp_tool", args: { ToolName: "bash", Arguments: [1, 2] } }, known)).toBeUndefined();
+		expect(extractMcpToolCall({ name: "call_mcp_tool", args: { ToolName: "bash", Arguments: "{bad" } }, known)).toBeUndefined();
+		expect(extractMcpToolCall({ name: "manage_task", args: { Action: "list" } }, known)).toBeUndefined();
 	});
 
 	it("refuses session/request_permission (including malformed options) and returns -32601 for unknown agent requests", async () => {
