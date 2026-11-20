@@ -6,7 +6,7 @@ import { createModels, type Message } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { DROPPED_IMAGE_NOTE, limitImages } from "../src/engine/context-trim.ts";
 import { estimatePromptChars, IMAGE_ESTIMATE_CHARS } from "../src/engine/messages.ts";
-import { CLAUDE_P_PROVIDER, claudePProvider, type ClaudePRequest, CODEX_P_PROVIDER, codexPProvider, type CodexPRequest, expandMentions, renderTranscriptParts } from "../src/index.ts";
+import { AGY_P_PROVIDER, agyPProvider, type AgyPRunner, CLAUDE_P_PROVIDER, claudePProvider, type ClaudePRequest, CODEX_P_PROVIDER, codexPProvider, type CodexPRequest, expandMentions, renderTranscriptParts } from "../src/index.ts";
 
 /** A 2×1 PNG: valid header, so the image helpers accept it. */
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAAEUlEQVR4nGP4z8DAwMDAAAAZ8AL+8V3m9wAAAABJRU5ErkJggg==", "base64");
@@ -89,6 +89,70 @@ describe("codex-p images", () => {
 		expect(files[0]!.bytes).toBe("ABC");
 		expect(requests[0]!.stdin).toBe("What color?\n[attached image 1 of 1]");
 		expect(requests[0]!.args.at(-1)).toBe("-");
+	});
+});
+
+describe("agy-p images", () => {
+	it("sends images as ACP image content blocks", async () => {
+		const promptBlocks: unknown[][] = [];
+		const run: AgyPRunner = () => {
+			const out: string[] = [];
+			let notify: (() => void) | undefined;
+			let done = false;
+			let resolveExit!: (r: { code: number | null; stderr: string }) => void;
+			const exit = new Promise<{ code: number | null; stderr: string }>((r) => {
+				resolveExit = r;
+			});
+			const emit = (m: object) => {
+				out.push(JSON.stringify({ jsonrpc: "2.0", ...m }));
+				notify?.();
+			};
+			const lines = (async function* () {
+				while (true) {
+					if (out.length) {
+						yield out.shift()!;
+						continue;
+					}
+					if (done) return;
+					await new Promise<void>((r) => {
+						notify = r;
+					});
+					notify = undefined;
+				}
+			})();
+			return {
+				write: (line: string) => {
+					const msg = JSON.parse(line) as { id?: number; method?: string; params?: Record<string, any> };
+					if (msg.method === "initialize") emit({ id: msg.id, result: { protocolVersion: 1 } });
+					else if (msg.method === "session/new") emit({ id: msg.id, result: { sessionId: "s1", configOptions: [] } });
+					else if (msg.method === "session/set_config_option" || msg.method === "session/close") emit({ id: msg.id, result: {} });
+					else if (msg.method === "session/prompt") {
+						promptBlocks.push(msg.params!.prompt);
+						queueMicrotask(() => {
+							emit({ method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Red." } } } });
+							emit({ id: msg.id, result: { stopReason: "end_turn" } });
+						});
+					}
+				},
+				lines,
+				exit,
+				kill: () => {
+					done = true;
+					resolveExit({ code: null, stderr: "" });
+					notify?.();
+				},
+			};
+		};
+		const models = createModels();
+		models.setProvider(agyPProvider({ run }));
+		const model = models.getModel(AGY_P_PROVIDER, "gemini-3.8-flash")!;
+		expect(model.input).toContain("image");
+		const msg = await models.completeSimple(model, { messages: [userWithImage] });
+		expect(msg.content).toEqual([{ type: "text", text: "Red." }]);
+		expect(promptBlocks[0]).toEqual([
+			{ type: "text", text: "What color?\n" },
+			{ type: "image", data: "QUJD", mimeType: "image/png" },
+		]);
 	});
 });
 

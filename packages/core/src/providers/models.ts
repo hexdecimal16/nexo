@@ -1,12 +1,14 @@
 import type { MutableModels } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { agyPProvider } from "./agy-p.ts";
 import { claudePProvider } from "./claude-p.ts";
 import { codexPProvider } from "./codex-p.ts";
 import { kiroPProvider } from "./kiro-p.ts";
 
-/** pi-ai's built-in providers plus nexo's own (`claude-p`, `codex-p`, `kiro-p`). */
+/** pi-ai's built-in providers plus nexo's own (`agy-p`, `claude-p`, `codex-p`, `kiro-p`). */
 export function nexoModels(): MutableModels {
 	const models = builtinModels();
+	models.setProvider(agyPProvider());
 	models.setProvider(claudePProvider());
 	models.setProvider(codexPProvider());
 	models.setProvider(kiroPProvider());

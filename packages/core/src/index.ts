@@ -19,6 +19,7 @@ export * from "./optimize/mine.ts";
 export * from "./optimize/optimize.ts";
 export * from "./optimize/optimizer-run.ts";
 export * from "./optimize/reflect.ts";
+export * from "./providers/agy-p.ts";
 export * from "./providers/claude-p.ts";
 export * from "./providers/codex-p.ts";
 export * from "./providers/kiro-p.ts";

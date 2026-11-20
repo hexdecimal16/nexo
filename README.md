@@ -28,7 +28,7 @@ nexo doctor                                     # check Node, config, keys and t
 
 `nexo --help` lists every command. Data lives in `~/.nexo`. Set `NEXO_HOME` to move it.
 
-Images (PNG, JPEG, GIF, WebP) work with every vision model, including the `claude-p`, `codex-p` and `kiro-p` CLI providers. In the chat, drag an image file into the terminal or press ctrl+v to paste a screenshot; it shows as `[Image #1]`. `@shot.png` attaches an image in the project, `nexo run "…" --image shot.png` attaches one to a task, and the agent's `read` tool opens image files. Large images are scaled down to 2000 px, older images in a long run are replaced by a note (the file can be read again), and `nexo ui` shows the images each run saw.
+Images (PNG, JPEG, GIF, WebP) work with every vision model, including the `agy-p`, `claude-p`, `codex-p` and `kiro-p` CLI providers. In the chat, drag an image file into the terminal or press ctrl+v to paste a screenshot; it shows as `[Image #1]`. `@shot.png` attaches an image in the project, `nexo run "…" --image shot.png` attaches one to a task, and the agent's `read` tool opens image files. Large images are scaled down to 2000 px, older images in a long run are replaced by a note (the file can be read again), and `nexo ui` shows the images each run saw.
 
 ## Settings and keys
 

@@ -46,7 +46,7 @@ const LINK = /^\/(?:|run\.html\?id=[0-9A-Za-z]{1,64}|cost\.html|sessions\.html|l
 const FOCUS: Record<CompanionPage, string> = {
 	runs: "The user is on the Runs list. Help them find failures, spot what to review first and compare recent runs.",
 	run: "The user is looking at one run. Explain what happened, why it failed or cost what it did, and what to check before a verdict.",
-	cost: "The user is on the Cost page. Explain where spend goes and point out unusually expensive runs. kiro-p spans record $0 because Kiro bills in credits; say so rather than quoting them.",
+	cost: "The user is on the Cost page. Explain where spend goes and point out unusually expensive runs. kiro-p and agy-p spans record $0 because those CLIs bill through credits/quota rather than API dollars; say so rather than quoting them.",
 	sessions: "The user is on the Sessions page. Summarise recent chat sessions and what they did.",
 	learning: "The user is on the Learning page. Summarise what nexo has learned lately and anything worth retiring.",
 	judge: "The user is on the Judge page. Explain how reliable the judge is from its calibration data.",

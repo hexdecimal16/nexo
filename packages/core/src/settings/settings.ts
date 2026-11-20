@@ -30,6 +30,7 @@ import {
 	settingView,
 	writeSetting,
 } from "./config-edit.ts";
+import { AGY_P_PROVIDER } from "../providers/agy-p.ts";
 import { CLAUDE_P_PROVIDER } from "../providers/claude-p.ts";
 import { CODEX_P_PROVIDER } from "../providers/codex-p.ts";
 import { KIRO_P_PROVIDER } from "../providers/kiro-p.ts";
@@ -283,8 +284,8 @@ export function createSettings(options: SettingsOptions): Settings {
 		const inFile = stored !== undefined;
 		const purpose = isSearchProvider(provider) ? "search" : isBrowserProfileKey(provider) ? "browser" : "model";
 		if (optionKeys.has(provider)) return { provider, purpose, state: "option", envVar: null, last4: null, inFile };
-		// claude-p, codex-p and kiro-p run a local CLI that brings its own login: ambient credentials, like AWS or Google ADC.
-		if (provider === CLAUDE_P_PROVIDER || provider === CODEX_P_PROVIDER || provider === KIRO_P_PROVIDER) return { provider, purpose, state: "env", envVar: null, last4: null, inFile };
+		// agy-p, claude-p, codex-p and kiro-p run a local CLI that brings its own login: ambient credentials, like AWS or Google ADC.
+		if (provider === AGY_P_PROVIDER || provider === CLAUDE_P_PROVIDER || provider === CODEX_P_PROVIDER || provider === KIRO_P_PROVIDER) return { provider, purpose, state: "env", envVar: null, last4: null, inFile };
 		if (envKey(provider) !== undefined) return { provider, purpose, state: "env", envVar: envVarOf(provider), last4: null, inFile };
 		if (stored?.apiKey) return { provider, purpose, state: "file", envVar: null, last4: stored.apiKey.slice(-4), inFile };
 		return { provider, purpose, state: "unset", envVar: null, last4: null, inFile };
