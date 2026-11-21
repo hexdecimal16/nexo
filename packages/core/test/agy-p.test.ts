@@ -1,7 +1,7 @@
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createModels, type Context, type Message } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, createModels, type Context, type Message } from "@earendil-works/pi-ai";
 import { resolveNexoPaths } from "@nexo/store";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
@@ -725,6 +725,38 @@ describe("mirrorGeminiDir", () => {
 		await models.completeSimple(models.getModel(AGY_P_PROVIDER, "gemini-4-neon")!, plain());
 		const { args, cwd } = fake.spawns[0]!;
 		expect(args).toEqual(["acp", "--agent", "nexo", "--include-default-customizations=false", "--gemini-dir", join(cwd, ".gemini-home")]);
+	});
+});
+
+describe("agy-p effort levels", () => {
+	// thought_level options `agy acp` reports per model (checked against agy 2026-11-21).
+	const LIVE: Record<string, string[] | null> = {
+		"gemini-4-neon": ["low", "medium", "high", "xhigh"],
+		"gemini-4-hydrogen": ["low", "medium", "high", "xhigh"],
+		"gemini-4-carbon": ["low", "medium", "high"],
+		"gemini-4-argon": ["low", "medium", "high"],
+		"gemini-3.8-flash": ["low", "medium", "high"],
+		"claude-opus-5-5": ["low", "medium", "high"],
+		"claude-sonnet-5-5": ["low", "medium", "high"],
+		"gemini-pro-orchestrator": null,
+		"gpt-oss-120b-medium": null,
+	};
+	const EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+	it("sends the thought_level each effort should reach after the engine's clamp", () => {
+		const models = nexoModels();
+		const sent = (id: string) =>
+			EFFORTS.map((effort) => {
+				const model = models.getModel(AGY_P_PROVIDER, id)!;
+				const clamped = clampThinkingLevel(model, effort);
+				const options = LIVE[id] ? [{ id: "thought_level", currentValue: "unset", options: LIVE[id]!.map((value) => ({ value })) }] : [];
+				return resolveThoughtLevel(clamped === "off" ? undefined : clamped, options) ?? "-";
+			});
+		const fourLevels = ["low", "low", "low", "medium", "high", "xhigh", "xhigh"];
+		const threeLevels = ["low", "low", "low", "medium", "high", "high", "high"];
+		for (const id of ["gemini-4-neon", "gemini-4-hydrogen"]) expect(sent(id), id).toEqual(fourLevels);
+		for (const id of ["gemini-4-carbon", "gemini-4-argon", "gemini-3.8-flash", "claude-opus-5-5", "claude-sonnet-5-5"]) expect(sent(id), id).toEqual(threeLevels);
+		for (const id of ["gemini-pro-orchestrator", "gpt-oss-120b-medium"]) expect(sent(id), id).toEqual(EFFORTS.map(() => "-"));
 	});
 });
 

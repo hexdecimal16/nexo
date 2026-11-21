@@ -18,6 +18,7 @@ import {
 	type SimpleStreamOptions,
 	type TextContent,
 	type ThinkingContent,
+	type ThinkingLevelMap,
 	type Tool,
 	type ToolCall,
 	type TranscriptContext,
@@ -148,22 +149,31 @@ function spawnRunner(command: string): AgyPRunner {
 
 /**
  * Antigravity CLI base model ids (the `model` config option in `agy acp`), paired with display name, context window and
- * reasoning support. Effort maps to ACP's `thought_level` option. Antigravity uses account quota rather than API
- * billing, so cost stays zero.
+ * the highest `thought_level` the model offers (`null`: no `thought_level` option, so no reasoning effort). Antigravity
+ * uses account quota rather than API billing, so cost stays zero.
  */
-const AGY_MODELS: readonly (readonly [id: string, displayName: string, contextWindow: number, reasoning: boolean])[] = [
-	["gemini-4-neon", "Gemini 4 Neon", 1_048_576, true],
-	["gemini-4-carbon", "Gemini 4 Carbon", 1_048_576, true],
-	["gemini-4-argon", "Gemini 4 Argon", 1_048_576, true],
-	["gemini-4-hydrogen", "Gemini 4 Hydrogen", 1_048_576, true],
-	["gemini-3.8-flash", "Gemini 3.8 Flash", 1_048_576, true],
-	["gemini-pro-orchestrator-neon", "Orchestrator (Neon)", 1_048_576, false],
-	["gemini-pro-orchestrator", "Orchestrator (Carbon)", 1_048_576, false],
-	["gemini-pro-orchestrator-argon", "Orchestrator (Argon)", 1_048_576, false],
-	["claude-opus-5-5", "Claude Opus 5.5", 1_000_000, true],
-	["claude-sonnet-5-5", "Claude Sonnet 5.5", 1_000_000, true],
-	["gpt-oss-120b-medium", "GPT-OSS 120B (Medium)", 128_000, false],
+const AGY_MODELS: readonly (readonly [id: string, displayName: string, contextWindow: number, topLevel: "high" | "xhigh" | null])[] = [
+	["gemini-4-neon", "Gemini 4 Neon", 1_048_576, "xhigh"],
+	["gemini-4-carbon", "Gemini 4 Carbon", 1_048_576, "high"],
+	["gemini-4-argon", "Gemini 4 Argon", 1_048_576, "high"],
+	["gemini-4-hydrogen", "Gemini 4 Hydrogen", 1_048_576, "xhigh"],
+	["gemini-3.8-flash", "Gemini 3.8 Flash", 1_048_576, "high"],
+	["gemini-pro-orchestrator-neon", "Orchestrator (Neon)", 1_048_576, null],
+	["gemini-pro-orchestrator", "Orchestrator (Carbon)", 1_048_576, null],
+	["gemini-pro-orchestrator-argon", "Orchestrator (Argon)", 1_048_576, null],
+	["claude-opus-5-5", "Claude Opus 5.5", 1_000_000, "high"],
+	["claude-sonnet-5-5", "Claude Sonnet 5.5", 1_000_000, "high"],
+	["gpt-oss-120b-medium", "GPT-OSS 120B (Medium)", 128_000, null],
 ];
+
+/**
+ * The efforts nexo may pick for a model, as pi's clamp reads them: `thought_level` runs low..high (plus xhigh on some
+ * models), and has no "off" or "minimal", which clamp up to low rather than leave the model on its own default (high).
+ * pi counts xhigh and max as supported only when mapped, so without this map they would clamp down to high.
+ */
+function agyThinkingLevels(topLevel: "high" | "xhigh"): ThinkingLevelMap {
+	return { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: topLevel === "xhigh" ? "xhigh" : null, max: null };
+}
 
 /** Antigravity's base models, borrowing `maxTokens` from pi-ai's Google/Anthropic catalog where an entry matches. */
 function agyPModels(): Model<string>[] {
@@ -171,7 +181,7 @@ function agyPModels(): Model<string>[] {
 	for (const provider of ["google", "anthropic"] as const) {
 		for (const m of getBuiltinModels(provider)) builtin.set(m.id, m);
 	}
-	return AGY_MODELS.map(([id, displayName, contextWindow, reasoning]) => {
+	return AGY_MODELS.map(([id, displayName, contextWindow, topLevel]) => {
 		const base = builtin.get(id);
 		return {
 			...(base ?? { maxTokens: id.startsWith("gemini-") ? 65_536 : 32_000 }),
@@ -180,7 +190,8 @@ function agyPModels(): Model<string>[] {
 			api: AGY_P_API,
 			provider: AGY_P_PROVIDER,
 			baseUrl: "",
-			reasoning,
+			reasoning: topLevel !== null,
+			thinkingLevelMap: topLevel === null ? undefined : agyThinkingLevels(topLevel),
 			input: ["text", "image"],
 			contextWindow,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
