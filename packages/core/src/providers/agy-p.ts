@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import {
@@ -12,6 +12,7 @@ import {
 	getCurrentSystemPrompt,
 	getCurrentTools,
 	type JsonObject,
+	type Message,
 	type Model,
 	type Provider,
 	type SimpleStreamOptions,
@@ -23,7 +24,7 @@ import {
 	type Usage,
 } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
-import { type PromptPart, renderTranscriptParts } from "./claude-p.ts";
+import { NEXT_TURN_NOTE, type PromptPart, renderEntryParts, renderTranscriptParts } from "./claude-p.ts";
 import { parseReply } from "./kiro-p.ts";
 import { ReplyTextExtractor } from "./reply-text.ts";
 
@@ -69,6 +70,11 @@ export interface AgyPProviderOptions {
 	command?: string;
 	/** Replaces process spawning (tests). */
 	run?: AgyPRunner;
+	/**
+	 * The Antigravity data directory to mirror for the server (default `~/.gemini`), so its login and settings carry
+	 * over while its MCP servers do not; `null` runs against the real directory as-is.
+	 */
+	geminiDir?: string | null;
 }
 
 const isWindows = process.platform === "win32";
@@ -198,10 +204,72 @@ export function agyToolsSection(tools: readonly Tool[]): string {
 		'Every reply must be exactly one JSON object and nothing else (no prose around it, no code fence): {"text": string, "tool_calls": [{"name": string, "arguments": object}]}.',
 		"`text` is what you say to the user (may be empty). `tool_calls` lists actions for the caller to run now, with arguments matching the action's parameters.",
 		"The actions below are not tools you can invoke: never call them directly and never invoke any native or built-in tool (`call_mcp_tool`, `list_resources`, `read_resource`, `manage_task`, etc.). These actions are NOT MCP tools — only list them in the JSON `tool_calls` array. The caller runs them and sends the results back in the next turn as <tool_result> entries. When you are finished, leave `tool_calls` empty and put the final answer in `text`.",
+		"When you list `tool_calls`, use `text` for one short sentence: what the earlier results showed and what these calls will check.",
+		"Earlier <assistant> entries may open with <notes>: your own reasoning from that turn, carried over because each turn starts fresh. Build on it, never write <notes> yourself, and do not repeat a command or read whose <tool_result> already answers the question.",
 		"",
 		"Available actions, one JSON definition per line:",
 		defs,
 	].join("\n");
+}
+
+/** How many of the latest assistant turns carry their reasoning forward, and how much of each (its end, where conclusions are). */
+const NOTES_TURNS = 20;
+const NOTES_CHARS = 1_500;
+const NEW_MESSAGE_NOTE = "The last <user> entry is the user's newest message: follow it, even where it changes or stops the earlier work.";
+
+function withNotes(message: Message): Message {
+	if (message.role !== "assistant") return message;
+	const reasoning = message.content
+		.map((b) => (b.type === "thinking" && !b.redacted ? b.thinking.trim() : ""))
+		.filter((t) => t.length > 0)
+		.join("\n");
+	if (!reasoning) return message;
+	const kept = reasoning.length > NOTES_CHARS ? `…${reasoning.slice(-NOTES_CHARS)}` : reasoning;
+	return { ...message, content: [{ type: "text", text: `<notes>\n${kept}\n</notes>` }, ...message.content] };
+}
+
+/**
+ * The conversation as `agy acp` sees it. Each turn is a fresh session, so the model's reasoning from earlier turns
+ * would otherwise be lost: Gemini thinks in thinking blocks and leaves `text` empty on tool turns, then re-derives (and
+ * re-runs) what it already found. The latest turns' reasoning goes back in as <notes>, and a new user message that
+ * ends the transcript is called out so it is not mistaken for context.
+ */
+export function agyTranscriptParts(messages: readonly Message[]): PromptPart[] {
+	const turns = messages.filter((m) => m.role !== "system");
+	if (turns.length === 1 && turns[0]?.role === "user") return renderTranscriptParts(turns);
+	const assistants = turns.flatMap((m, i) => (m.role === "assistant" ? [i] : []));
+	const noted = new Set(assistants.slice(-NOTES_TURNS));
+	const parts = renderEntryParts(turns.map((m, i) => (noted.has(i) ? withNotes(m) : m)));
+	const note = turns.at(-1)?.role === "user" ? `${NEXT_TURN_NOTE} ${NEW_MESSAGE_NOTE}` : NEXT_TURN_NOTE;
+	parts.push({ type: "text", text: `\n\n${note}` });
+	return parts;
+}
+
+/** MCP config agy reads from `<gemini dir>/config/`: the mirror swaps in an empty one. */
+const MCP_CONFIG = "mcp_config.json";
+
+/**
+ * Builds a copy of the Antigravity data directory under `workspace` whose entries are symlinks to the real ones (login,
+ * settings and projects included), except `config/mcp_config.json`, which lists no servers. `agy acp` offers the model
+ * every configured MCP server regardless of the agent's `tools: []` and the session's `mcpServers: []`, and those tools
+ * are what the model reaches for instead of the JSON reply. Returns undefined when there is nothing to mirror or the
+ * mirror cannot be made; the server then runs against the real directory.
+ */
+export function mirrorGeminiDir(source: string, workspace: string): string | undefined {
+	try {
+		if (!statSync(source).isDirectory()) return undefined;
+		const target = join(workspace, ".gemini-home");
+		mkdirSync(join(target, "config"), { recursive: true });
+		for (const name of readdirSync(source)) if (name !== "config") symlinkSync(join(source, name), join(target, name));
+		const config = join(source, "config");
+		if (existsSync(config)) {
+			for (const name of readdirSync(config)) if (name !== MCP_CONFIG) symlinkSync(join(config, name), join(target, "config", name));
+		}
+		writeFileSync(join(target, "config", MCP_CONFIG), '{"mcpServers":{}}\n', "utf8");
+		return target;
+	} catch {
+		return undefined;
+	}
 }
 
 let callSeq = 0;
@@ -394,14 +462,17 @@ class AcpConnection {
 	}
 
 	/** Starts the server and completes the `initialize` handshake. */
-	static async open(run: AgyPRunner, onClose: () => void): Promise<AcpConnection> {
+	static async open(run: AgyPRunner, onClose: () => void, geminiDir: string | null): Promise<AcpConnection> {
 		registerExitHandler();
 		// Throwaway workspace holding the no-tools custom agent under ./.agents/agents, with no project files in reach.
 		const dir = await mkdtemp(join(tmpdir(), "nexo-agy-p-"));
 		liveDirs.add(dir);
 		await mkdir(join(dir, ".agents", "agents"), { recursive: true });
 		await writeFile(join(dir, ".agents", "agents", `${AGENT_NAME}.md`), AGENT_FILE, "utf8");
-		const proc = run({ args: ["acp", "--agent", AGENT_NAME, "--include-default-customizations=false"], cwd: dir });
+		// Removing the workspace later unlinks the mirror's symlinks without touching what they point at.
+		const mirror = geminiDir === null ? undefined : mirrorGeminiDir(geminiDir, dir);
+		const args = ["acp", "--agent", AGENT_NAME, "--include-default-customizations=false", ...(mirror ? ["--gemini-dir", mirror] : [])];
+		const proc = run({ args, cwd: dir });
 		const conn = new AcpConnection(proc, dir, onClose);
 		void conn.pump();
 		void proc.exit.then((exit) => conn.shutdown(new Error(exit.stderr.trim().split("\n").at(-1) || `agy exited with code ${exit.code ?? "null"}`)));
@@ -520,6 +591,8 @@ interface Session {
 
 interface RunOutcome {
 	text: string;
+	/** Title of the native tool call that cancelled the turn, if any. */
+	nativeCall?: string;
 	recoveredCalls: ToolCall[];
 	stopReason?: string;
 	usage: Usage;
@@ -538,6 +611,10 @@ function looksLikeReplyAttempt(text: string): boolean {
 }
 
 const RETRY_NOTE = "Your previous reply was not a single valid JSON object in the required format. Reply again with only that JSON object.";
+
+function nativeRetryNote(call: string): string {
+	return `The tool "${call}" is not available: you have no native, built-in or MCP tools. Reply again with only the JSON object, listing actions in its \`tool_calls\` array.`;
+}
 
 function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T | "aborted"> {
 	if (!signal) return promise;
@@ -753,7 +830,10 @@ function streamAgyP(
 				close();
 				if (settled === "aborted") outcome.aborted = true;
 				else if (stalled) outcome.error = `no output for ${Math.round(idleMs / 1000)}s`;
-				else if (nativeCall) outcome.error = `stopped: native tool call "${nativeCall}" (the nexo agent offers no tools)`;
+				else if (nativeCall) {
+					outcome.nativeCall = nativeCall;
+					outcome.error = `stopped: native tool call "${nativeCall}" (the nexo agent offers no tools)`;
+				}
 				else if (outcome.recoveredCalls.length > 0) {
 					if (!("e" in settled)) outcome.usage = toUsage(settled.r?.usage);
 				} else if ("e" in settled) {
@@ -777,7 +857,7 @@ function streamAgyP(
 		try {
 			stream.push({ type: "start", partial: snapshot() });
 
-			const prompt = renderTranscriptParts(context.messages);
+			const prompt = agyTranscriptParts(context.messages);
 			const opened = await startSession();
 			if (opened === "aborted" || signal?.aborted) return fail("aborted", "Request was aborted");
 			session = opened;
@@ -791,6 +871,13 @@ function streamAgyP(
 			}
 			let usage = outcome.usage;
 			if (outcome.aborted || signal?.aborted) return fail("aborted", "Request was aborted", usage);
+			// A native tool call: correct it once in the same session (it keeps the transcript and its cache) rather
+			// than failing back to the engine, which would resend the whole transcript to a fresh session.
+			if (useTools && outcome.nativeCall) {
+				outcome = await runOnce(session, nativeRetryNote(outcome.nativeCall), !partial.content.some((b) => b.type === "text"));
+				usage = addUsage(usage, outcome.usage);
+				if (outcome.aborted || signal?.aborted) return fail("aborted", "Request was aborted", usage);
+			}
 			if (outcome.error) return fail("error", `agy failed: ${outcome.error}`, usage);
 
 			let stopReason: "stop" | "length" | "toolUse" = outcome.stopReason === "max_tokens" ? "length" : "stop";
@@ -847,20 +934,27 @@ function streamAgyP(
 /**
  * Runs models through one long-lived Antigravity CLI ACP server (`agy acp`), authenticated by the CLI's own login.
  * The server starts on the first call and is shared by every call after it, avoiding per-call language-server start-up.
- * It runs a minimal custom agent with `tools: []` in a throwaway workspace; each turn opens a fresh session carrying
+ * It runs a minimal custom agent with `tools: []` in a throwaway workspace, against a mirror of the Antigravity data
+ * directory with no MCP servers (`mirrorGeminiDir`); each turn opens a fresh session carrying
  * nexo's system prompt via `_meta.antigravity.systemPrompt.append`, sets the base model and `thought_level` from
- * reasoning effort, and closes the session afterwards. Any native tool call cancels the turn. Nexo tools are described
+ * reasoning effort, and closes the session afterwards. The transcript carries the latest turns' reasoning as <notes>
+ * (`agyTranscriptParts`). Any native tool call cancels the turn and is corrected once in the same session. Nexo tools are described
  * in the prompt and parsed as `{ text, tool_calls }` (one correction retry when it does not parse); `text` streams as
  * it is written. Token counts are reported from ACP usage while cost stays $0.
  */
 export function agyPProvider(options: AgyPProviderOptions = {}): Provider {
 	const run = options.run ?? spawnRunner(options.command ?? process.env[AGY_P_COMMAND_ENV] ?? "agy");
+	const geminiDir = options.geminiDir === undefined ? join(homedir(), ".gemini") : options.geminiDir;
 	let current: Promise<AcpConnection> | undefined;
 	const getConn = (): Promise<AcpConnection> => {
 		if (current) return current;
-		const opened: Promise<AcpConnection> = AcpConnection.open(run, () => {
-			if (current === opened) current = undefined;
-		});
+		const opened: Promise<AcpConnection> = AcpConnection.open(
+			run,
+			() => {
+				if (current === opened) current = undefined;
+			},
+			geminiDir,
+		);
 		current = opened;
 		opened.catch(() => {
 			if (current === opened) current = undefined;

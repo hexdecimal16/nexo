@@ -1,7 +1,7 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createModels, type Context } from "@earendil-works/pi-ai";
+import { createModels, type Context, type Message } from "@earendil-works/pi-ai";
 import { resolveNexoPaths } from "@nexo/store";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,10 +11,12 @@ import {
 	AGY_P_IDLE_ENV,
 	AGY_P_PROVIDER,
 	agyPProvider,
+	agyTranscriptParts,
 	type AgyPRequest,
 	type AgyPRunner,
 	createSettings,
 	extractMcpToolCall,
+	mirrorGeminiDir,
 	nexoModels,
 	parseAgyReply,
 	resolveThoughtLevel,
@@ -176,9 +178,9 @@ function fakeAcp(options: FakeOptions, ...scripts: Script[]) {
 
 const chunk = (text: string, kind = "agent_message_chunk") => ({ sessionUpdate: kind, content: { type: "text", text } });
 
-function modelsWith(run: AgyPRunner) {
+function modelsWith(run: AgyPRunner, geminiDir: string | null = null) {
 	const models = createModels();
-	models.setProvider(agyPProvider({ run }));
+	models.setProvider(agyPProvider({ run, geminiDir }));
 	return models;
 }
 
@@ -338,14 +340,33 @@ describe("agy-p provider", () => {
 		expect(msg.content).toEqual([{ type: "text", text: "cut off" }]);
 	});
 
-	it("cancels and fails as a format error if the model attempts a native tool call", async () => {
+	it("cancels a native tool call, corrects it once in the same session, and fails as a format error if it persists", async () => {
 		const fake = fakeAcp({}, { updates: [{ sessionUpdate: "tool_call", title: "manage_task" }] });
 		const models = modelsWith(fake.run);
 		const msg = await models.completeSimple(models.getModel(AGY_P_PROVIDER, "gemini-4-neon")!, toolContext());
 
-		expect(fake.cancels).toEqual(["s1"]);
+		expect(fake.sessions).toHaveLength(1);
+		expect(fake.cancels).toEqual(["s1", "s1"]);
+		expect(fake.prompts[1]).toContain('The tool "manage_task" is not available');
 		expect(msg.stopReason).toBe("error");
 		expect(msg.errorMessage).toContain('native tool call "manage_task"');
+		expect(classifyProviderError(msg.errorMessage!).code).toBe("PROVIDER_UNAVAILABLE");
+	});
+
+	it("recovers from a native tool call when the corrected reply is valid, summing usage", async () => {
+		const fake = fakeAcp(
+			{},
+			{ updates: [{ sessionUpdate: "tool_call", title: "MCP Tool get_current_time" }], usage: { inputTokens: 100, outputTokens: 5, totalTokens: 105 } },
+			{ updates: [chunk('{"text": "Reading.", "tool_calls": [{"name": "read", "arguments": {"path": "a.ts"}}]}')], usage: { inputTokens: 110, outputTokens: 20, totalTokens: 130 } },
+		);
+		const models = modelsWith(fake.run);
+		const msg = await models.completeSimple(models.getModel(AGY_P_PROVIDER, "gemini-4-neon")!, toolContext());
+
+		expect(fake.sessions).toHaveLength(1);
+		expect(fake.prompts).toHaveLength(2);
+		expect(msg.stopReason).toBe("toolUse");
+		expect(msg.content).toMatchObject([{ type: "text", text: "Reading." }, { type: "toolCall", name: "read", arguments: { path: "a.ts" } }]);
+		expect(msg.usage).toMatchObject({ output: 20, totalTokens: 130 });
 	});
 
 	it("recovers call_mcp_tool targeting a declared nexo action into a real ToolCall", async () => {
@@ -620,6 +641,90 @@ describe("agy-p provider", () => {
 		const mPrompt = await modelsPrompt.completeSimple(modelsPrompt.getModel(AGY_P_PROVIDER, "gemini-4-neon")!, plain("x"), { signal: duringPrompt.signal });
 		expect(fakePrompt.cancels).toEqual(["s1"]);
 		expect(mPrompt.stopReason).toBe("aborted");
+	});
+});
+
+describe("agyTranscriptParts", () => {
+	const assistant = (thinking: string, extra: Partial<{ redacted: boolean }> = {}): Message =>
+		({
+			role: "assistant",
+			content: [{ type: "thinking", thinking, ...extra }, { type: "toolCall", id: "c1", name: "bash", arguments: { command: "ls" } }],
+			api: "agy-p",
+			provider: "agy-p",
+			model: "m",
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+			stopReason: "toolUse",
+			timestamp: 1,
+		}) as Message;
+	const result = (text: string): Message => ({ role: "toolResult", toolCallId: "c1", toolName: "bash", content: [{ type: "text", text }], isError: false, timestamp: 1 });
+	const user = (text: string): Message => ({ role: "user", content: text, timestamp: 1 });
+	const textOf = (messages: Message[]) => agyTranscriptParts(messages).map((p) => (p.type === "text" ? p.text : "[image]")).join("");
+
+	it("sends a lone user message as-is", () => {
+		expect(textOf([user("hi")])).toBe("hi");
+	});
+
+	it("carries earlier reasoning forward as <notes>, keeping the end of long reasoning and skipping redacted thinking", () => {
+		const long = `start ${"x".repeat(3000)} conclusion: the bug is in parse()`;
+		const text = textOf([user("debug it"), assistant(long), result("out"), assistant("secret", { redacted: true }), result("out2")]);
+		expect(text).toContain("<assistant>\n<notes>\n…");
+		expect(text).toContain("conclusion: the bug is in parse()\n</notes>\n<tool_call");
+		expect(text).not.toContain("start x");
+		expect(text).not.toContain("secret");
+		expect(text.trimEnd().endsWith("continuing from the last entry above.")).toBe(true);
+	});
+
+	it("limits notes to the latest 20 assistant turns and calls out a new user message at the end", () => {
+		const messages: Message[] = [user("go")];
+		for (let i = 0; i < 25; i++) messages.push(assistant(`thought-${i}.`), result(`r${i}`));
+		messages.push(user("stop and summarise"));
+		const text = textOf(messages);
+		expect(text).not.toContain("thought-4.");
+		expect(text).toContain("thought-5.");
+		expect(text).toContain("thought-24.");
+		expect(text).toContain("The last <user> entry is the user's newest message");
+	});
+});
+
+describe("mirrorGeminiDir", () => {
+	it("links every entry except the MCP config, which lists no servers, and removing the mirror leaves the source intact", () => {
+		const source = mkdtempSync(join(tmpdir(), "nexo-agy-gemini-"));
+		const workspace = mkdtempSync(join(tmpdir(), "nexo-agy-ws-"));
+		tempDirs.push(source, workspace);
+		mkdirSync(join(source, "antigravity-cli"));
+		writeFileSync(join(source, "antigravity-cli", "antigravity-oauth-token"), "tok");
+		mkdirSync(join(source, "config"));
+		writeFileSync(join(source, "config", "config.json"), "{}");
+		writeFileSync(join(source, "config", "mcp_config.json"), '{"mcpServers":{"last9":{"serverUrl":"https://x"}}}');
+
+		const mirror = mirrorGeminiDir(source, workspace)!;
+		expect(mirror).toBe(join(workspace, ".gemini-home"));
+		expect(readlinkSync(join(mirror, "antigravity-cli"))).toBe(join(source, "antigravity-cli"));
+		expect(readlinkSync(join(mirror, "config", "config.json"))).toBe(join(source, "config", "config.json"));
+		expect(lstatSync(join(mirror, "config", "mcp_config.json")).isSymbolicLink()).toBe(false);
+		expect(JSON.parse(readFileSync(join(mirror, "config", "mcp_config.json"), "utf8"))).toEqual({ mcpServers: {} });
+
+		rmSync(workspace, { recursive: true, force: true });
+		expect(readFileSync(join(source, "antigravity-cli", "antigravity-oauth-token"), "utf8")).toBe("tok");
+		expect(readFileSync(join(source, "config", "mcp_config.json"), "utf8")).toContain("last9");
+	});
+
+	it("returns undefined when there is no Antigravity directory", () => {
+		const workspace = mkdtempSync(join(tmpdir(), "nexo-agy-ws-"));
+		tempDirs.push(workspace);
+		expect(mirrorGeminiDir(join(workspace, "missing"), workspace)).toBeUndefined();
+	});
+
+	it("starts the server with --gemini-dir pointing at the mirror", async () => {
+		const source = mkdtempSync(join(tmpdir(), "nexo-agy-gemini-"));
+		tempDirs.push(source);
+		mkdirSync(join(source, "config"));
+		writeFileSync(join(source, "config", "mcp_config.json"), '{"mcpServers":{"last9":{}}}');
+		const fake = fakeAcp({}, { updates: [chunk("hi")] });
+		const models = modelsWith(fake.run, source);
+		await models.completeSimple(models.getModel(AGY_P_PROVIDER, "gemini-4-neon")!, plain());
+		const { args, cwd } = fake.spawns[0]!;
+		expect(args).toEqual(["acp", "--agent", "nexo", "--include-default-customizations=false", "--gemini-dir", join(cwd, ".gemini-home")]);
 	});
 });
 
