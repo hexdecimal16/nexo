@@ -148,21 +148,27 @@ function spawnRunner(command: string): AgyPRunner {
 }
 
 /**
+ * Context nexo budgets for agy models (gpt-oss aside). The models take 1M tokens elsewhere, but `agy acp` answers an
+ * empty turn somewhere past ~210k tokens (seen working at 210k, failing at 315k), so nexo must compact before that.
+ */
+const AGY_CONTEXT = 200_000;
+
+/**
  * Antigravity CLI base model ids (the `model` config option in `agy acp`), paired with display name, context window and
  * the highest `thought_level` the model offers (`null`: no `thought_level` option, so no reasoning effort). Antigravity
  * uses account quota rather than API billing, so cost stays zero.
  */
 const AGY_MODELS: readonly (readonly [id: string, displayName: string, contextWindow: number, topLevel: "high" | "xhigh" | null])[] = [
-	["gemini-4-neon", "Gemini 4 Neon", 1_048_576, "xhigh"],
-	["gemini-4-carbon", "Gemini 4 Carbon", 1_048_576, "high"],
-	["gemini-4-argon", "Gemini 4 Argon", 1_048_576, "high"],
-	["gemini-4-hydrogen", "Gemini 4 Hydrogen", 1_048_576, "xhigh"],
-	["gemini-3.8-flash", "Gemini 3.8 Flash", 1_048_576, "high"],
-	["gemini-pro-orchestrator-neon", "Orchestrator (Neon)", 1_048_576, null],
-	["gemini-pro-orchestrator", "Orchestrator (Carbon)", 1_048_576, null],
-	["gemini-pro-orchestrator-argon", "Orchestrator (Argon)", 1_048_576, null],
-	["claude-opus-5-5", "Claude Opus 5.5", 1_000_000, "high"],
-	["claude-sonnet-5-5", "Claude Sonnet 5.5", 1_000_000, "high"],
+	["gemini-4-neon", "Gemini 4 Neon", AGY_CONTEXT, "xhigh"],
+	["gemini-4-carbon", "Gemini 4 Carbon", AGY_CONTEXT, "high"],
+	["gemini-4-argon", "Gemini 4 Argon", AGY_CONTEXT, "high"],
+	["gemini-4-hydrogen", "Gemini 4 Hydrogen", AGY_CONTEXT, "xhigh"],
+	["gemini-3.8-flash", "Gemini 3.8 Flash", AGY_CONTEXT, "high"],
+	["gemini-pro-orchestrator-neon", "Orchestrator (Neon)", AGY_CONTEXT, null],
+	["gemini-pro-orchestrator", "Orchestrator (Carbon)", AGY_CONTEXT, null],
+	["gemini-pro-orchestrator-argon", "Orchestrator (Argon)", AGY_CONTEXT, null],
+	["claude-opus-5-5", "Claude Opus 5.5", AGY_CONTEXT, "high"],
+	["claude-sonnet-5-5", "Claude Sonnet 5.5", AGY_CONTEXT, "high"],
 	["gpt-oss-120b-medium", "GPT-OSS 120B (Medium)", 128_000, null],
 ];
 
@@ -254,6 +260,52 @@ export function agyTranscriptParts(messages: readonly Message[]): PromptPart[] {
 	const note = turns.at(-1)?.role === "user" ? `${NEXT_TURN_NOTE} ${NEW_MESSAGE_NOTE}` : NEXT_TURN_NOTE;
 	parts.push({ type: "text", text: `\n\n${note}` });
 	return parts;
+}
+
+/**
+ * `agy acp` silently cuts a prompt message at about 68k tokens and keeps its beginning, so on a long conversation the
+ * model never saw the newest tool results or user message and kept redoing its last step. The system prompt is not
+ * cut, so past `PROMPT_CHARS` of text the start of the transcript moves there and the message keeps its last
+ * `TAIL_CHARS` (at ~2.5 characters a token for code and JSON, both stay well under the cap).
+ */
+const PROMPT_CHARS = 100_000;
+const TAIL_CHARS = 40_000;
+const CONTINUED_NOTE = "(The conversation so far is in your instructions under \"Conversation so far\"; it continues here.)\n\n";
+
+/** Splits a long transcript into the part that goes in the system prompt (`history`) and the message to send. */
+export function splitAgyPrompt(parts: readonly PromptPart[]): { history?: string; prompt: PromptPart[] } {
+	const textChars = parts.reduce((n, p) => n + (p.type === "text" ? p.text.length : 0), 0);
+	if (textChars <= PROMPT_CHARS) return { prompt: [...parts] };
+	const tail: PromptPart[] = [];
+	let budget = TAIL_CHARS;
+	let i = parts.length - 1;
+	let headEnd = "";
+	for (; i >= 0; i--) {
+		const part = parts[i]!;
+		if (part.type !== "text") {
+			tail.unshift(part);
+			continue;
+		}
+		if (part.text.length <= budget) {
+			tail.unshift(part);
+			budget -= part.text.length;
+			continue;
+		}
+		const cut = part.text.length - budget;
+		if (budget > 0) tail.unshift({ type: "text", text: part.text.slice(cut) });
+		headEnd = part.text.slice(0, cut);
+		break;
+	}
+	// Images before the split cannot go in the system prompt; they stay as a marker where they were.
+	const history = parts
+		.slice(0, Math.max(0, i))
+		.map((p) => (p.type === "text" ? p.text : "[image]"))
+		.join("") + headEnd;
+	return { history, prompt: [{ type: "text", text: CONTINUED_NOTE }, ...tail] };
+}
+
+function historySection(history: string): string {
+	return `# Conversation so far\n\nThe transcript below is cut where the user message continues it.\n\n${history}`;
 }
 
 /** MCP config agy reads from `<gemini dir>/config/`: the mirror swaps in an empty one. */
@@ -613,6 +665,9 @@ interface RunOutcome {
 	aborted?: boolean;
 }
 
+/** Why a turn failed when agy answered nothing at all. */
+export const AGY_P_EMPTY_REPLY = "agy returned an empty reply with no token usage (the conversation may exceed what agy accepts; compact it or start a new session)";
+
 /** Why a tools turn ended without a usable reply; the engine retries it a few times (see `isFormatFailure`). */
 export const AGY_P_BAD_REPLY = "reply was not a JSON object in the required format";
 
@@ -678,7 +733,10 @@ function streamAgyP(
 		const tools = getCurrentTools(context.messages);
 		const useTools = tools.length > 0 && options?.toolChoice !== "none";
 		const knownTools = useTools ? new Set(tools.map((t) => t.name)) : new Set<string>();
-		const systemPrompt = [getCurrentSystemPrompt(context.messages), useTools ? agyToolsSection(tools) : ""].filter((s) => s.length > 0).join("\n\n");
+		const { history, prompt } = splitAgyPrompt(agyTranscriptParts(context.messages));
+		const systemPrompt = [getCurrentSystemPrompt(context.messages), useTools ? agyToolsSection(tools) : "", history ? historySection(history) : ""]
+			.filter((s) => s.length > 0)
+			.join("\n\n");
 		const idleMs = parseIdleMs(process.env[AGY_P_IDLE_ENV]);
 
 		const closeSession = (session: Session | undefined): void => {
@@ -868,7 +926,6 @@ function streamAgyP(
 		try {
 			stream.push({ type: "start", partial: snapshot() });
 
-			const prompt = agyTranscriptParts(context.messages);
 			const opened = await startSession();
 			if (opened === "aborted" || signal?.aborted) return fail("aborted", "Request was aborted");
 			session = opened;
@@ -890,6 +947,8 @@ function streamAgyP(
 				if (outcome.aborted || signal?.aborted) return fail("aborted", "Request was aborted", usage);
 			}
 			if (outcome.error) return fail("error", `agy failed: ${outcome.error}`, usage);
+			// No text, no calls and no usage: agy declined the prompt without saying why, as it does past its context limit.
+			if (!outcome.text.trim() && outcome.recoveredCalls.length === 0 && usage.totalTokens === 0) return fail("error", `agy failed: ${AGY_P_EMPTY_REPLY}`, usage);
 
 			let stopReason: "stop" | "length" | "toolUse" = outcome.stopReason === "max_tokens" ? "length" : "stop";
 			if (useTools) {

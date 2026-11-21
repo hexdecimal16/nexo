@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { classifyProviderError } from "../src/engine/errors.ts";
 import {
 	AGY_P_BAD_REPLY,
+	AGY_P_EMPTY_REPLY,
 	AGY_P_IDLE_ENV,
 	AGY_P_PROVIDER,
 	agyPProvider,
@@ -20,6 +21,7 @@ import {
 	nexoModels,
 	parseAgyReply,
 	resolveThoughtLevel,
+	splitAgyPrompt,
 } from "../src/index.ts";
 
 /** What the fake ACP server does for one `session/prompt`. */
@@ -204,13 +206,13 @@ describe("agy-p provider", () => {
 		expect(models.getModel(AGY_P_PROVIDER, "gemini-4-neon")).toMatchObject({
 			provider: "agy-p",
 			api: "agy-p",
-			contextWindow: 1_048_576,
+			contextWindow: 200_000,
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		});
 		expect(models.getModel(AGY_P_PROVIDER, "gemini-3.8-flash")).toMatchObject({ provider: "agy-p", reasoning: true });
-		expect(models.getModel(AGY_P_PROVIDER, "claude-sonnet-5-5")).toMatchObject({ provider: "agy-p", contextWindow: 1_000_000, reasoning: true });
+		expect(models.getModel(AGY_P_PROVIDER, "claude-sonnet-5-5")).toMatchObject({ provider: "agy-p", contextWindow: 200_000, reasoning: true });
 		expect(models.getModel(AGY_P_PROVIDER, "gpt-oss-120b-medium")).toMatchObject({ provider: "agy-p", reasoning: false });
 
 		const home = mkdtempSync(join(tmpdir(), "nexo-agy-settings-"));
@@ -330,6 +332,14 @@ describe("agy-p provider", () => {
 		const msgBad = await models.completeSimple(models.getModel(AGY_P_PROVIDER, "gemini-4-neon")!, toolContext());
 		expect(msgBad.stopReason).toBe("error");
 		expect(msgBad.errorMessage).toBe(`agy failed: ${AGY_P_BAD_REPLY}`);
+	});
+
+	it("fails clearly when agy answers an empty turn with no usage", async () => {
+		const fake = fakeAcp({}, { updates: [] });
+		const models = modelsWith(fake.run);
+		const msg = await models.completeSimple(models.getModel(AGY_P_PROVIDER, "gemini-4-neon")!, plain());
+		expect(msg.stopReason).toBe("error");
+		expect(msg.errorMessage).toBe(`agy failed: ${AGY_P_EMPTY_REPLY}`);
 	});
 
 	it("maps max_tokens to stopReason length", async () => {
@@ -683,6 +693,55 @@ describe("agyTranscriptParts", () => {
 		expect(text).toContain("thought-5.");
 		expect(text).toContain("thought-24.");
 		expect(text).toContain("The last <user> entry is the user's newest message");
+	});
+});
+
+describe("splitAgyPrompt", () => {
+	it("sends a short transcript unchanged", () => {
+		const parts = [{ type: "text" as const, text: "a".repeat(1000) }];
+		expect(splitAgyPrompt(parts)).toEqual({ prompt: parts });
+	});
+
+	it("moves the start of a long transcript to the system prompt and keeps the newest 40k characters in the message", () => {
+		const image = { type: "image" as const, data: "AAAA", mimeType: "image/png" };
+		const parts = [
+			{ type: "text" as const, text: `START${"h".repeat(90_000)}` },
+			image,
+			{ type: "text" as const, text: `${"m".repeat(10_000)}MIDDLE${"t".repeat(50_000)}` },
+			image,
+			{ type: "text" as const, text: "NEWEST user message. Write the assistant's next turn." },
+		];
+		const { history, prompt } = splitAgyPrompt(parts);
+		const tailText = prompt.map((p) => (p.type === "text" ? p.text : "")).join("");
+		expect(history!.startsWith("START")).toBe(true);
+		expect(history).toContain("[image]");
+		expect(history).toContain("MIDDLE");
+		expect(tailText).toContain("NEWEST user message");
+		expect(tailText).not.toContain("MIDDLE");
+		expect(prompt[0]).toMatchObject({ type: "text", text: expect.stringContaining("continues here") });
+		expect(prompt.filter((p) => p.type === "image")).toHaveLength(1);
+		// Nothing lost or duplicated: history + tail is the original text, with the image before the split as a marker.
+		const original = parts.map((p) => (p.type === "text" ? p.text : "")).join("");
+		expect(history!.replace("[image]", "") + tailText.slice(tailText.indexOf("\n\n") + 2)).toBe(original);
+		expect(tailText.length - tailText.indexOf("\n\n") - 2).toBe(40_000);
+	});
+
+	it("puts the head in the session's system prompt and only the tail in session/prompt", async () => {
+		const fake = fakeAcp({}, { updates: [chunk('{"text": "Done.", "tool_calls": []}')] });
+		const models = modelsWith(fake.run);
+		const ctx = toolContext();
+		ctx.messages.push(
+			{ role: "assistant", content: [{ type: "toolCall", id: "c1", name: "read", arguments: { path: "a.ts" } }], api: "agy-p", provider: "agy-p", model: "m", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "toolUse", timestamp: 1 } as Message,
+			{ role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "text", text: `OLD${"x".repeat(150_000)}` }], isError: false, timestamp: 1 },
+			{ role: "user", content: "why are you checking again and again", timestamp: 1 },
+		);
+		await models.completeSimple(models.getModel(AGY_P_PROVIDER, "gemini-4-neon")!, ctx);
+		expect(fake.sessions[0]!.systemPrompt).toContain("# Conversation so far");
+		expect(fake.sessions[0]!.systemPrompt).toContain("OLD");
+		const sent = fake.promptBlocks[0]!.map((b) => b.text ?? "").join("");
+		expect(sent.length).toBeLessThan(41_000);
+		expect(sent).toContain("why are you checking again and again");
+		expect(sent).not.toContain("OLD");
 	});
 });
 
