@@ -644,9 +644,15 @@ describe("agy-p provider", () => {
 		const mNew = await modelsNew.completeSimple(modelsNew.getModel(AGY_P_PROVIDER, "gemini-4-neon")!, plain(), { signal: duringNew.signal });
 		expect(mNew.stopReason).toBe("aborted");
 
+		// Abort once the prompt is in flight rather than after a fixed delay, which a slow runner can beat.
 		const duringPrompt = new AbortController();
-		setTimeout(() => duringPrompt.abort(), 20);
 		const fakePrompt = fakeAcp({}, { hang: true });
+		const waitForPrompt = setInterval(() => {
+			if (fakePrompt.prompts.length > 0) {
+				clearInterval(waitForPrompt);
+				duringPrompt.abort();
+			}
+		}, 2);
 		const modelsPrompt = modelsWith(fakePrompt.run);
 		const mPrompt = await modelsPrompt.completeSimple(modelsPrompt.getModel(AGY_P_PROVIDER, "gemini-4-neon")!, plain("x"), { signal: duringPrompt.signal });
 		expect(fakePrompt.cancels).toEqual(["s1"]);
