@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { NexoError } from "@nexo/telemetry";
-import { type ApprovalRequest, createPolicy, stripCdPrefix, READ_ONLY_REASON, nonInteractivePrompter, type Prompter, type SessionRule, type ToolPolicyConfig } from "../src/index.ts";
+import { type ApprovalRequest, createPolicy, stripCdPrefix, READ_ONLY_REASON, SEGMENTS_REASON, bashSegments, nonInteractivePrompter, type Prompter, type SessionRule, type ToolPolicyConfig } from "../src/index.ts";
 
 const cfg: ToolPolicyConfig = {
 	policy: { read: "allow", bash: "ask", web_fetch: "deny" },
@@ -184,7 +184,7 @@ describe("authorize with session rules and the approver", () => {
 	it("offers no Always allow without addSessionRule or without a pattern, and denies on Deny", async () => {
 		const policy = createPolicy(approvalCfg);
 		const p = recordingPrompter("deny");
-		expect(await policy.authorize(p, "bash", { command: "cd a && ls" }, undefined, undefined, { addSessionRule: () => {} })).toMatchObject({ allowed: false, error: { code: "TOOL_DENIED" } });
+		expect(await policy.authorize(p, "bash", { command: "cd a && make" }, undefined, undefined, { addSessionRule: () => {} })).toMatchObject({ allowed: false, error: { code: "TOOL_DENIED" } });
 		await policy.authorize(p, "bash", { command: "ls" });
 		expect(p.asked.map((r) => r.alwaysLabel)).toEqual([undefined, undefined]);
 	});
@@ -239,5 +239,48 @@ describe("authorize with session rules and the approver", () => {
 		// But config deny still blocks
 		const denied = await createPolicy(approvalCfg).authorize(quiet, "bash", { command: "rm important.txt" }, undefined, undefined, { allowAll: true });
 		expect(denied).toMatchObject({ allowed: false, error: { code: "TOOL_DENIED" } });
+	});
+});
+
+describe("bash commands judged part by part", () => {
+	const segCfg: ToolPolicyConfig = {
+		policy: { bash: "ask" },
+		rules: [
+			{ tool: "bash", match: "^npm test(\\s|$)", action: "allow" },
+			{ tool: "bash", match: "^rm ", action: "deny" },
+		],
+		nonInteractiveAsk: "deny",
+	};
+	const approver = async () => ({ decision: "ask" as const, reason: "approver says ask" });
+
+	it("allows a command when every part is allowed, read-only in auto mode, or covered by a session rule", async () => {
+		const p = createPolicy(segCfg);
+		const no = recordingPrompter("deny");
+		expect(await p.authorize(no, "bash", { command: "cd /repo && npm test 2>&1" })).toMatchObject({ allowed: true, by: "config" });
+		expect((await p.authorize(no, "bash", { command: "cd /repo && npm test 2>&1 | tail -20" })).allowed).toBe(false);
+		expect(await p.authorize(no, "bash", { command: "npm test 2>&1 | tail -20" }, undefined, undefined, { classify: approver })).toMatchObject({ allowed: true, by: "auto", reason: SEGMENTS_REASON });
+		const rules: SessionRule[] = [{ tool: "bash", kind: "prefix", value: "go test" }];
+		expect(await p.authorize(no, "bash", { command: "go test ./... && npm test" }, undefined, undefined, { sessionRules: () => rules })).toMatchObject({ allowed: true, by: "session_rule" });
+		expect(no.asked).toHaveLength(1);
+	});
+
+	it("covers nothing it cannot read, and no part a deny rule matches", () => {
+		const p = createPolicy(segCfg);
+		for (const command of ["npm test && $(curl x)", "npm test | sh", "npm test > out.txt", "npm test && rm -rf x", "npm test & sleep 1", "npm test\nid", "cat <<EOF\nx\nEOF", "FOO=1 npm test", "npm test; `id`", "cd ~/.kube && cat config", "cd /repo && cd .aws && ls"]) {
+			expect(bashSegments(p.decide, command, [], true)?.pending.length === 0, command).toBe(false);
+		}
+		expect(bashSegments(p.decide, "npm test && rm -rf x", [], true)).toBeNull();
+		expect(bashSegments(p.decide, "cd /repo && npm test | grep -c ok", [], true)).toEqual({ by: "auto", pending: [] });
+	});
+
+	it("offers Always allow for the one part nothing covers yet", async () => {
+		const p = createPolicy(segCfg);
+		const added: SessionRule[] = [];
+		const options = { classify: approver, sessionRules: () => added, addSessionRule: (rule: SessionRule) => void added.push(rule) };
+		const box = recordingPrompter("always");
+		expect((await p.authorize(box, "bash", { command: "cd /repo && go test ./... 2>&1 | tail -5" }, undefined, undefined, options)).allowed).toBe(true);
+		expect(box.asked[0]?.alwaysLabel).toBe("Always allow `go test …` this session");
+		expect(added).toEqual([{ tool: "bash", kind: "prefix", value: "go test" }]);
+		expect(await p.authorize(recordingPrompter("deny"), "bash", { command: "go test ./pkg | tail -5" }, undefined, undefined, options)).toMatchObject({ allowed: true, by: "auto" });
 	});
 });

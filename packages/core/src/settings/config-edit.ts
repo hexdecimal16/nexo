@@ -93,6 +93,7 @@ const POLICY_DESCRIPTIONS: Record<string, string> = {
 	web_search: "search the web (sends the query to Brave or Tavily)",
 	load_skill: "load a skill's instructions",
 	spawn: "start subagents",
+	attach_mcp_server: "start an on-demand MCP server and add its tools to the run",
 };
 
 const SETTING_LIST: readonly Omit<SettingDefinition, "group">[] = [

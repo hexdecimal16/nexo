@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 
 function git(cwd: string, args: string[]): string {
@@ -76,4 +77,21 @@ export function projectRoots(cwd: string): string[] {
 		// Not a git repo or git is unavailable: the single root stands.
 	}
 	return roots;
+}
+
+/**
+ * The root of the git working tree `cwd` belongs to, in the same path form as `cwd`, or null outside a git repository or
+ * when git is unavailable. The home folder and the filesystem root never count, so a dotfiles repository in `~` does not
+ * make the whole home folder a project. The approver treats this folder like the workspace: git can revert changes there.
+ */
+export function gitProjectRoot(cwd: string): string | null {
+	try {
+		if (git(cwd, ["rev-parse", "--is-inside-work-tree"]).trim() !== "true") return null;
+	} catch {
+		return null;
+	}
+	const root = projectRoot(cwd);
+	const real = realOrSelf(root);
+	if (real === realOrSelf(homedir()) || dirname(real) === real) return null;
+	return root;
 }

@@ -9,6 +9,7 @@ describe("renderSystemPrompt", () => {
 		expect(text).toContain("run them by absolute path from the workspace instead of changing into their folder");
 		expect(text).not.toContain("{{workspace}}");
 		expect(text).toContain("Make independent tool calls in the same turn");
+		expect(text).toContain("Change source, config and text files with write and edit, not with heredocs");
 	});
 
 	it("puts project instructions before the memories, and adds nothing without them", () => {

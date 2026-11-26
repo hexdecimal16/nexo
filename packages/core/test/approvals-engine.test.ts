@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import { getSpent, listSpans } from "@nexo/store";
 import type { ApprovalRequest, Prompter, SessionRule } from "@nexo/tools";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { ensureManualArtifact, insertCandidateArtifact } from "@nexo/store";
 import { createEngine, createEngineEnv, DEFAULT_SYSTEM_PROMPT, type EngineEvent, executeRun, RunBudget } from "../src/index.ts";
 import { makeEnv } from "./helpers.ts";
@@ -172,6 +175,26 @@ describe("approvals in the engine", () => {
 		expect(block("request")).toContain("ROOT-USER-MESSAGE");
 		expect(block("request")).not.toContain("CHILD-TASK-TEXT");
 		expect(block("action")).toContain("subagent task (written by the agent, not the user): CHILD-TASK-TEXT");
+	});
+
+	it("shows the approver the git repository the run was launched in", async () => {
+		const repo = realpathSync(mkdtempSync(join(tmpdir(), "nexo-proj-")));
+		execFileSync("git", ["init", "-q", repo]);
+		const env = makeEnv({ config: { tools: { policy: { bash: "ask" }, autoApprove: "on" } } });
+		env.deps.prompter = prompter("deny");
+		let seen = "";
+		let a = 0;
+		const agent = [bashCall("touch hi"), fauxAssistantMessage("done")];
+		const factory: FauxResponseFactory = async (ctx: TranscriptContext) => {
+			const system = ctx.messages.flatMap((m) => (m.role === "system" ? [getSystemMessageText(m)] : [])).join("\n");
+			if (!system.startsWith("You decide whether an AI agent may run one tool action")) return agent[a++] ?? fauxAssistantMessage("done");
+			seen = JSON.stringify(ctx.messages);
+			return fauxAssistantMessage('{"decision":"allow","reason":"inside the project"}');
+		};
+		env.faux.setResponses(Array.from({ length: 30 }, () => factory));
+		const result = await createEngine(env.deps).run({ instruction: "touch a file", projectDir: repo });
+		expect(result.status).toBe("succeeded");
+		expect(seen).toContain(`<project>\\n${repo}\\n</project>`);
 	});
 
 	it("optimization rollouts never use session rules or the approver", async () => {

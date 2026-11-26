@@ -171,6 +171,8 @@ export const ConfigSchema = Type.Object(
 							args: Type.Optional(Type.Array(Type.String())),
 							env: Type.Optional(Type.Record(Type.String(), Type.String())),
 							timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
+							/** Start this server only when the agent attaches it (`attach_mcp_server`), so its tool definitions stay out of runs that never use them. */
+							deferred: Type.Optional(Type.Boolean()),
 						},
 						{ additionalProperties: false },
 					),
@@ -290,7 +292,7 @@ export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 	instructions: [],
 	skills: { dirs: ["$NEXO_HOME/skills", "./.nexo/skills"], pins: {} },
 	tools: {
-		policy: { read: "allow", write: "allow", edit: "allow", bash: "ask", web_fetch: "ask", web_search: "allow", load_skill: "allow", spawn: "allow", ask_user: "allow" },
+		policy: { read: "allow", write: "allow", edit: "allow", bash: "ask", web_fetch: "ask", web_search: "allow", load_skill: "allow", spawn: "allow", ask_user: "allow", attach_mcp_server: "allow" },
 		rules: [],
 		nonInteractiveAsk: "deny",
 		autoApprove: "off",

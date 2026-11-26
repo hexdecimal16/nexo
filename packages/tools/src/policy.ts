@@ -1,5 +1,5 @@
 import { NexoError } from "@nexo/telemetry";
-import { isReadOnlyCommand } from "./read-only.ts";
+import { isReadOnlyCommand, simpleCommands } from "./read-only.ts";
 import { describeSessionRule, matchesSessionRule, type SessionRule, sessionRuleFor } from "./session-rules.ts";
 
 export type PolicyAction = "allow" | "ask" | "deny";
@@ -108,6 +108,9 @@ export interface ToolPolicy {
 /** The auto-allow reason for a bash command `isReadOnlyCommand` accepts; the approver is not called. */
 export const READ_ONLY_REASON = "read-only command";
 
+/** The auto-allow reason for a bash command whose every part is read-only or already allowed; the approver is not called. */
+export const SEGMENTS_REASON = "every part of the command is read-only or already allowed";
+
 /** Shell metacharacters that chain or redirect commands; an allow rule never vouches for a command containing them. */
 const SHELL_CHAINING = /[;&|`<>\n]|\$\(/;
 
@@ -153,6 +156,39 @@ function policyFor(policy: Record<string, PolicyAction>, toolName: string): Poli
 function stringField(args: unknown, key: string): string | null {
 	const value = typeof args === "object" && args !== null ? (args as Record<string, unknown>)[key] : undefined;
 	return typeof value === "string" ? value : null;
+}
+
+/** How the parts of a bash command stand (see `bashSegments`). */
+export interface BashSegments {
+	/** The weakest source a covered part needed: "auto" (read-only, auto mode) over "session_rule" over "config". */
+	by: "config" | "session_rule" | "auto";
+	/** The parts nothing covers yet, re-quoted; empty when the whole command is allowed. */
+	pending: string[];
+}
+
+/**
+ * Judges a bash command one simple command at a time (see `simpleCommands`), so `cd repo && npm test 2>&1 | tail -20`
+ * passes when `npm test` has an allow rule and `tail` is read-only. A part is covered when it is a `cd` the read-only checker accepts, allowed by
+ * `tools.policy` or an allow rule, matched by a session rule, or read-only while `readOnly` is set (auto mode). Null when
+ * the command cannot be split or a deny rule matches a part; deny rules also see the whole command first in `decide`.
+ */
+export function bashSegments(decide: ToolPolicy["decide"], command: string, sessionRules: readonly SessionRule[], readOnly: boolean): BashSegments | null {
+	const parts = simpleCommands(command);
+	if (!parts) return null;
+	let by: BashSegments["by"] = "config";
+	const pending: string[] = [];
+	for (const part of parts) {
+		// A cd counts only where the read-only checker accepts it, so `cd ~/.kube && cat config` cannot read credentials part by part.
+		if (/^cd( |$)/.test(part) && isReadOnlyCommand(part)) continue;
+		const action = decide("bash", { command: part }).action;
+		if (action === "deny") return null;
+		if (action === "allow") continue;
+		if (sessionRules.some((rule) => matchesSessionRule(rule, "bash", { command: part }))) {
+			if (by === "config") by = "session_rule";
+		} else if (readOnly && isReadOnlyCommand(part)) by = "auto";
+		else pending.push(part);
+	}
+	return { by, pending };
 }
 
 export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
@@ -214,6 +250,10 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
 			if (ruleMatches()) return { allowed: true, by: "session_rule" };
 			if (options.allowAll) return { allowed: true, by: "allow_all", reason: "allow-all" };
 			if (!prompter.interactive && cfg.nonInteractiveAsk === "allow") return { allowed: true, by: "config" };
+			// A chained command passes when each of its parts does (see bashSegments); deny rules have seen the whole command above.
+			const segments = () => (toolName === "bash" && command !== null ? bashSegments(decide, command, options.sessionRules?.() ?? [], options.classify !== undefined) : null);
+			const covered = segments();
+			if (covered && covered.pending.length === 0) return { allowed: true, by: covered.by, ...(covered.by === "auto" ? { reason: command !== null && isReadOnlyCommand(command) ? READ_ONLY_REASON : SEGMENTS_REASON } : {}) };
 			const aborted = (): Authorization => ({
 				allowed: false,
 				error: new NexoError({ code: "TOOL_DENIED", message: `Approval of ${toolName} was interrupted: ${decision.subject}`, context: { toolName } }),
@@ -241,19 +281,19 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
 				};
 			}
 			const prefix = label ? `[${escapeControl(label)}] ` : "";
-			const always = options.addSessionRule ? sessionRuleFor(toolName, args) : null;
+			const always = options.addSessionRule ? (sessionRuleFor(toolName, args) ?? (covered && covered.pending.length === 1 ? sessionRuleFor("bash", { command: covered.pending[0] }) : null)) : null;
 			const answer = await prompter.approve(
 				{
 					question: `${prefix}Allow ${toolName}: ${escapeControl(decision.subject)}?`,
 					...(note ? { note } : {}),
 					...(always ? { alwaysLabel: `Always allow ${describeSessionRule(always)} this session` } : {}),
-					settled: ruleMatches,
+					settled: () => ruleMatches() || segments()?.pending.length === 0,
 				},
 				signal,
 			);
 			if (answer === "always" && always) options.addSessionRule?.(always);
 			if (answer === "always") return { allowed: true, by: "user" };
-			if (answer === "once") return { allowed: true, by: ruleMatches() ? "session_rule" : "user" };
+			if (answer === "once") return { allowed: true, by: ruleMatches() || segments()?.pending.length === 0 ? "session_rule" : "user" };
 			return {
 				allowed: false,
 				error: new NexoError({ code: "TOOL_DENIED", message: `User declined ${toolName}: ${decision.subject}`, context: { toolName } }),

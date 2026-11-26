@@ -339,3 +339,28 @@ export function isReadOnlyCommand(command: string): boolean {
 	}
 	return segments.every((words) => words.length > 0 && simpleCommandReadOnly(words));
 }
+
+/** A word as the shell reads it back: unchanged when it holds only plain characters, otherwise single-quoted. */
+function shellWord(word: string): string {
+	return /^[A-Za-z0-9_+=.,/:@%^-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * The simple commands of `command`, split at `&&`, `||`, `;` and `|`, each as a command string with its words re-quoted
+ * and its redirections dropped. Null when the command uses anything `isReadOnlyCommand` does not model (substitution,
+ * variables, subshells, background jobs, heredocs, newlines) or a redirection other than discarding output or merging
+ * stderr into stdout, so a caller judging each part never sees a part it cannot read.
+ */
+export function simpleCommands(command: string): string[] | null {
+	const tokens = tokenize(command);
+	if (!tokens || tokens.length === 0) return null;
+	const segments: string[][] = [[]];
+	for (const token of tokens) {
+		if (token.type === "op") segments.push([]);
+		else if (token.type === "redirect") {
+			if (!SAFE_REDIRECT.test(token.value)) return null;
+		} else (segments[segments.length - 1] as string[]).push(token.value);
+	}
+	if (segments.some((words) => words.length === 0)) return null;
+	return segments.map((words) => words.map(shellWord).join(" "));
+}

@@ -25,10 +25,16 @@ export interface McpHubOptions {
 	createTransport?: (name: string, spec: McpServerSpec) => Transport;
 }
 
+/** Which servers `McpHub.tools` lists: only the named ones, or all but the named ones. */
+export interface McpToolFilter {
+	only?: readonly string[];
+	except?: readonly string[];
+}
+
 /** The MCP servers of one nexo process: each starts on first use and stays up until `close`. */
 export interface McpHub {
-	/** The tools of every server that is up, listed afresh, named `mcp__<server>__<tool>`. Never rejects. */
-	tools(): Promise<AgentTool<any>[]>;
+	/** The tools of every server `filter` selects (all by default), listed afresh; a server left out is not started, named `mcp__<server>__<tool>`. Never rejects. */
+	tools(filter?: McpToolFilter): Promise<AgentTool<any>[]>;
 	/** Stops every server. */
 	close(): Promise<void>;
 }
@@ -111,6 +117,11 @@ function trackPid(pid: number | null | undefined): void {
 	});
 }
 
+/** True when `filter` lets `McpHub.tools` list the server `name`. */
+function selected(filter: McpToolFilter, name: string): boolean {
+	return (filter.only === undefined || filter.only.includes(name)) && !(filter.except?.includes(name) ?? false);
+}
+
 export function createMcpHub(options: McpHubOptions): McpHub {
 	const live = new Map<string, Promise<Live>>();
 	let closed = false;
@@ -187,10 +198,10 @@ export function createMcpHub(options: McpHubOptions): McpHub {
 	};
 
 	return {
-		async tools() {
+		async tools(filter: McpToolFilter = {}) {
 			if (closed) return [];
 			const lists = await Promise.all(
-				Object.entries(options.servers).map(async ([name, spec]) => {
+				Object.entries(options.servers).filter(([name]) => selected(filter, name)).map(async ([name, spec]) => {
 					try {
 						return await serverTools(name, spec);
 					} catch (error) {

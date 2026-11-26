@@ -81,6 +81,17 @@ describe("createMcpHub", () => {
 		await hub.close();
 	});
 
+	it("lists only the servers a filter selects, and starts no other", async () => {
+		const { hub, starts } = memoryHub({ a: { tools: [{ name: "x", inputSchema: { type: "object" } }] }, b: { tools: [{ name: "y", inputSchema: { type: "object" } }] } });
+		expect((await hub.tools({ only: ["b"] })).map((t) => t.name)).toEqual(["mcp__b__y"]);
+		expect(starts()).toBe(1);
+		expect((await hub.tools({ except: ["b"] })).map((t) => t.name)).toEqual(["mcp__a__x"]);
+		expect(starts()).toBe(2);
+		expect((await hub.tools()).map((t) => t.name)).toEqual(["mcp__a__x", "mcp__b__y"]);
+		expect(starts()).toBe(2);
+		await hub.close();
+	});
+
 	it("skips a tool whose name would pass 64 characters", async () => {
 		const long = "x".repeat(60);
 		const { hub, warnings } = memoryHub({ pw: { tools: [{ name: long, inputSchema: { type: "object" } }] } });

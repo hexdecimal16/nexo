@@ -278,6 +278,7 @@ describe("config settings", () => {
 			"tools.policy.load_skill",
 			"tools.policy.spawn",
 			"tools.policy.ask_user",
+			"tools.policy.attach_mcp_server",
 			"tools.webSearch.count",
 			"tools.nonInteractiveAsk",
 			"tools.autoApprove",

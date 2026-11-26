@@ -66,6 +66,7 @@ import {
 	createWebSearchTool,
 	FileLeases,
 	isReadOnlyCommand,
+	bashSegments,
 	matchesSessionRule,
 	type Prompter,
 	SEARCH_PROVIDER_IDS,
@@ -96,8 +97,9 @@ import {
 import { assistantText, contentText, estimatePromptChars, foreignToolCallsAsText, lastAssistant, recordedContent, withBudgetLine } from "./messages.ts";
 import { DEFAULT_PLANNER_PROMPT, DEFAULT_SYSTEM_PROMPT, renderSystemPrompt } from "./prompts.ts";
 import { loadProjectInstructions } from "../session/project-instructions.ts";
-import { projectScope } from "../session/project-root.ts";
+import { gitProjectRoot, projectScope } from "../session/project-root.ts";
 import { environmentBlock } from "./environment.ts";
+import { createAttachMcpTool } from "./mcp-attach.ts";
 import { KIRO_P_PROVIDER, KIRO_P_REUSE_META } from "../providers/kiro-p.ts";
 import { type ApiKeyResolver, createGatedStreamFn } from "./provider-gate.ts";
 import { Recorder } from "./recorder.ts";
@@ -989,7 +991,21 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		// Retrieval starts before the MCP tools load, so the query embedding runs during that wait.
 		const retrieval = !input.memoryContext && !input.signal?.aborted ? retrieveRunMemories(memoryDeps, request.instruction, ["user", "global", ...(request.projectDir ? [projectScope(request.projectDir)] : []), ...(skill ? [`skill:${skill.name}`] : [])]) : null;
 		retrieval?.catch(() => undefined); // awaited below; a rejection while the MCP tools load is not unhandled
-		if (deps.mcp) baseTools.push(...(await deps.mcp.tools()));
+		// Servers marked `deferred` start only when the agent attaches them, so their tool definitions stay out of runs that never use them.
+		const deferredMcp = deps.mcp ? Object.entries(config.mcp.servers).filter(([, server]) => server.deferred === true).map(([name]) => name) : [];
+		/** Tools of servers the agent attached during the current step; `prepareNextTurnWithContext` adds them to the run. */
+		const attachedMcpTools: AgentTool<any>[] = [];
+		if (deps.mcp) baseTools.push(...(await deps.mcp.tools(deferredMcp.length > 0 ? { except: deferredMcp } : undefined)));
+		if (deps.mcp && deferredMcp.length > 0) {
+			baseTools.push(
+				createAttachMcpTool({
+					hub: deps.mcp,
+					servers: deferredMcp,
+					onAttach: (added) =>
+						attachedMcpTools.push(...added.map((t) => withToolErrorCodes(toolDescriptionOverrides.has(t.name) ? { ...t, description: toolDescriptionOverrides.get(t.name) as string } : t))),
+				}),
+			);
+		}
 		const tools = baseTools
 			.filter((t) => !request.exploreOnly || EXPLORE_TOOLS.has(t.name))
 			.map((t) => (toolDescriptionOverrides.has(t.name) ? { ...t, description: toolDescriptionOverrides.get(t.name) as string } : t))
@@ -1136,6 +1152,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				if (rules.some((rule) => matchesSessionRule(rule, block.name, args))) continue;
 				const command = block.name === "bash" && typeof block.arguments.command === "string" ? block.arguments.command : null;
 				if (command !== null && isReadOnlyCommand(command)) continue;
+				if (command !== null && bashSegments(env.policy.decide, command, rules, true)?.pending.length === 0) continue;
 				earlyVerdicts.set(block.id, { signature: `${block.name}:${stableJson(args)}`, verdict: classifier(block.name, args, block.id, signal) });
 			}
 		};
@@ -1150,6 +1167,14 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			streamFn: env.streamFn,
 			initialState: { systemPrompt, model, thinkingLevel: resolved.effort, tools, messages: history },
 			toolExecution: "parallel",
+			// Tools of an MCP server the agent attached during the last step: added to the loop before the next request, which
+			// declares them to the model, and to the agent state, so a later prompt in this run keeps them.
+			prepareNextTurnWithContext: (turn) => {
+				if (attachedMcpTools.length === 0) return undefined;
+				const added = attachedMcpTools.splice(0);
+				runAgent.state.tools = [...runAgent.state.tools, ...added];
+				return { context: { ...turn.context, tools: [...(turn.context.tools ?? []), ...added] } };
+			},
 			prepareRequest: async ({ context, model: requestModel }) => {
 				const target = active.model;
 				const chars = requestChars(context.messages, context.tools ?? tools);
@@ -1246,6 +1271,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 			},
 		});
 		if (approvals?.auto) {
+			// The approver treats the git repository the session was launched in like the workspace (git can revert changes there).
+			const approverProject = request.projectDir ? gitProjectRoot(request.projectDir) : null;
 			classify = createApprovalClassifier({
 				env,
 				recorder,
@@ -1262,6 +1289,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 					request: approvals.userRequest,
 					...(depth > 0 ? { task: request.instruction } : {}),
 					recent: runAgent.state.messages.filter((m) => m.role !== "system") as Message[],
+					...(approverProject ? { project: approverProject } : {}),
 					workspace,
 					...(depth > 0 ? { label: `subagent ${runId.slice(-6)}` } : {}),
 				}),

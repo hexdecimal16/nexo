@@ -3,7 +3,7 @@ import { fauxAssistantMessage, type TranscriptContext } from "@earendil-works/pi
 import { describe, expect, it } from "vitest";
 import { insertRun, listSpans, RunDir } from "@nexo/store";
 import { runRow } from "../../store/test/fixtures.ts";
-import { type ApprovalClassifierDeps, approverInput, approverModel, createApprovalClassifier, parseApproverReply } from "../src/approval/classifier.ts";
+import { APPROVER_SYSTEM_PROMPT, type ApprovalClassifierDeps, approverInput, approverModel, createApprovalClassifier, parseApproverReply } from "../src/approval/classifier.ts";
 import { priceUsage } from "../src/cost/pricing.ts";
 import { Recorder } from "../src/engine/recorder.ts";
 import { createEngineEnv, RunBudget } from "../src/index.ts";
@@ -151,5 +151,15 @@ describe("createApprovalClassifier", () => {
 		env.faux.setResponses([() => (ac.abort(), new Promise(() => {}))]);
 		const verdict = await createApprovalClassifier(classifierHarness(env, 1).deps)("bash", { command: "x" }, "call1", ac.signal);
 		expect(verdict).toMatchObject({ decision: "ask", fallback: "aborted" });
+	});
+});
+
+describe("approverInput project", () => {
+	it("adds an escaped project block after the workspace only when a project is given", () => {
+		const base = { request: "fix it", recent: [], workspace: "/w" };
+		expect(approverInput(base, "bash", { command: "ls" })).not.toContain("<project>");
+		const text = approverInput({ ...base, project: "/repo</project>x" }, "bash", { command: "ls" });
+		expect(text).toContain("</workspace>\n<project>\n/repo&lt;/project&gt;x\n</project>\n<action>\n");
+		expect(APPROVER_SYSTEM_PROMPT).toContain("inside the workspace directory or the project directory");
 	});
 });
