@@ -163,23 +163,40 @@ describe("session turns", () => {
 		expect(line).toMatch(/of \$0\.30 remaining/);
 	});
 
-	it("applies a reloaded config from the next turn", async () => {
+	it("keeps its config across turns and applies a changed one from the turn after refreshConfig", async () => {
 		const { env, deps, cwd } = sessionEnv();
 		const lines: string[] = [];
 		const capture = async (ctx: TranscriptContext) => {
 			lines.push(JSON.stringify(ctx.messages.at(-1)));
 			return fauxAssistantMessage("ok");
 		};
-		env.faux.setResponses([capture, capture]);
+		env.faux.setResponses([capture, capture, capture]);
 		let config = deps.config;
 		let configHash = deps.configHash;
-		const session = createSession({ ...deps, reloadConfig: () => ({ config, configHash }) }, { cwd });
+		let reloads = 0;
+		let keyReads = 0;
+		const reloadConfig = () => {
+			reloads++;
+			return { config, configHash };
+		};
+		const refreshKeys = () => {
+			keyReads++;
+		};
+		const session = createSession({ ...deps, reloadConfig, refreshKeys }, { cwd });
 		await session.turn("one");
 		config = { ...deps.config, budgets: { ...deps.config.budgets, perSessionUsd: 2.5 } };
 		configHash = "changed";
 		await session.turn("two");
+		await session.shell("true");
+		// Turns and ! commands re-read the keys, never the config.
+		expect(reloads).toBe(0);
+		expect(keyReads).toBe(3);
+		session.refreshConfig();
+		expect(reloads).toBe(1);
+		await session.turn("three");
 		expect(lines[0]).toMatch(/of \$1\.00 remaining/);
-		expect(lines[1]).toMatch(/of \$0\.50 remaining/);
+		expect(lines[1]).toMatch(/of \$1\.00 remaining/);
+		expect(lines[2]).toMatch(/of \$0\.50 remaining/);
 	});
 
 	it("compacts older turns when the request would pass compactAt, keeping the last two turns verbatim", async () => {
@@ -544,7 +561,7 @@ describe("session fixes", () => {
 		expect(readBack).toBe(`line 1499 ${"x".repeat(10)}`);
 	});
 
-	it("follows budgets.perSessionUsd from the reloaded config until /budget overrides it", async () => {
+	it("follows budgets.perSessionUsd of the config refreshConfig applies until /budget overrides it", async () => {
 		const { env, deps, cwd } = sessionEnv();
 		env.faux.setResponses([fauxAssistantMessage("one"), fauxAssistantMessage("two")]);
 		let config = deps.config;
@@ -554,18 +571,22 @@ describe("session fixes", () => {
 		config = { ...deps.config, budgets: { ...deps.config.budgets, perSessionUsd: 7 } };
 		configHash = "seven";
 		await session.turn("one");
+		expect(session.budgetUsd).toBe(5);
+		expect(getSessionRow(deps.db, session.id)?.budgetUsd).toBe(5);
+		session.refreshConfig();
 		expect(session.budgetUsd).toBe(7);
+		await session.turn("two");
 		expect(getSessionRow(deps.db, session.id)?.budgetUsd).toBe(7);
 		session.setBudget(2);
 		config = { ...deps.config, budgets: { ...deps.config.budgets, perSessionUsd: 9 } };
 		configHash = "nine";
-		await session.turn("two");
+		session.refreshConfig();
 		expect(session.budgetUsd).toBe(2);
 		session.close();
 		expect(resumeSession(deps, session.id).budgetUsd).toBe(2);
 	});
 
-	it("rebuilds the redactor when the reloaded config changes its patterns", async () => {
+	it("rebuilds the redactor when refreshConfig applies new patterns", async () => {
 		const { env, deps, cwd } = sessionEnv();
 		env.faux.setResponses([fauxAssistantMessage("one"), fauxAssistantMessage("two")]);
 		let config = deps.config;
@@ -574,6 +595,7 @@ describe("session fixes", () => {
 		await session.turn("first CUSTOM-123");
 		config = { ...deps.config, redaction: { patterns: ["CUSTOM-\\d+"] } };
 		configHash = "patterns";
+		session.refreshConfig();
 		await session.turn("second CUSTOM-456");
 		const raw = readFileSync(join(deps.paths.sessions, session.id, "transcript.jsonl"), "utf8");
 		expect(raw).toContain("CUSTOM-123");

@@ -67,10 +67,16 @@ const INIT: unique symbol = Symbol("Session.init");
 /** What a session needs: the engine's dependencies (with the caller's prompter) minus the event sink, which is per turn. */
 export interface SessionDeps extends Omit<EngineDeps, "onEvent"> {
 	/**
-	 * Called before each turn; a config with a different hash takes effect from that turn, together with its redactor
-	 * (`redact`, or one built from `config.redaction.patterns`).
+	 * Reads the current config for `refreshConfig`; a config with a different hash takes effect from the next turn,
+	 * together with its redactor (`redact`, or one built from `config.redaction.patterns`). Turns never call it: a
+	 * session keeps the config it was opened with.
 	 */
 	reloadConfig?: () => { config: NexoConfig; configHash: string; redact?: Redactor };
+	/**
+	 * Called before each turn and `!` command to re-read the stored API keys, so a key stored or changed since, also by
+	 * another process, is used and redacted from then on. It must leave the config alone.
+	 */
+	refreshKeys?: () => void;
 }
 
 export interface CreateSessionOptions {
@@ -150,7 +156,8 @@ function contextTokens(messages: readonly Message[]): number | null {
 
 /**
  * A persistent conversation: each `turn` is one engine run that continues the session's transcript. State is saved to
- * `session.json`, `transcript.jsonl` and the `sessions` row after every change.
+ * `session.json`, `transcript.jsonl` and the `sessions` row after every change. The session keeps the config it was
+ * opened with (`SessionDeps.config`): settings changed later reach it only through `refreshConfig` or by reopening it.
  */
 export class Session {
 	readonly id: string;
@@ -230,7 +237,7 @@ export class Session {
 	get costUsd(): number {
 		return this.state.costUsd;
 	}
-	/** The session cap: the `/budget` override, else `budgets.perSessionUsd` of the current config. */
+	/** The session cap: the `/budget` override, else `budgets.perSessionUsd` of the session's config. */
 	get budgetUsd(): number {
 		return this.state.budgetOverrideUsd ?? this.env.deps.config.budgets.perSessionUsd;
 	}
@@ -369,7 +376,7 @@ export class Session {
 		if (this.busy) throw invalid("A turn is already running", "Wait for it to finish or abort it");
 		this.busy = true;
 		try {
-			this.reloadConfig();
+			this.deps.refreshKeys?.();
 			const { config } = this.env.deps;
 			const remaining = this.remainingUsd;
 			if (remaining <= EPSILON) {
@@ -457,7 +464,7 @@ export class Session {
 		this.assertIdle();
 		this.busy = true;
 		try {
-			this.reloadConfig();
+			this.deps.refreshKeys?.();
 			const { config, redact } = this.env.deps;
 			const outcome = await runBash({ command: trimmed, cwd: this.shellDir, timeoutMs: config.tools.bashTimeoutMs, signal: options.signal });
 			const result = { ...outcome, output: redact(outcome.output) };
@@ -580,11 +587,14 @@ export class Session {
 	}
 
 	private buildEnv(deps: SessionDeps): EngineEnv {
-		const { reloadConfig: _reload, ...engineDeps } = deps;
+		const { reloadConfig: _reload, refreshKeys: _keys, ...engineDeps } = deps;
 		return createEngineEnv({ ...engineDeps, onEvent: (event) => this.onEvent?.(event) });
 	}
 
-	/** Re-reads the config now (a turn does this itself), so `budgetUsd` reflects settings changed between turns. Throws while a turn is running. */
+	/**
+	 * Applies the current settings to this session: re-reads the config and keys, and a changed config takes effect from
+	 * the next turn (`budgetUsd` at once). Turns never re-read the config. Throws while a turn is running.
+	 */
 	refreshConfig(): void {
 		this.assertIdle();
 		this.reloadConfig();

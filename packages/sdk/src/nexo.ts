@@ -1,6 +1,7 @@
 import type { Models } from "@earendil-works/pi-ai";
 import {
 	type CreateSessionOptions,
+	createEngine,
 	createSession,
 	createSettings,
 	type DeepPartial,
@@ -63,11 +64,17 @@ export interface NexoRunOptions {
 }
 
 export interface Nexo {
-	/** Runs one instruction. Always pass `budgetUsd`: without it the configured budget defaults apply. Errors are `NexoError`; branch on `error.code`. */
+	/**
+	 * Runs one instruction with the settings current when it starts. Always pass `budgetUsd`: without it the configured
+	 * budget defaults apply. Errors are `NexoError`; branch on `error.code`.
+	 */
 	run(request: RunRequest, options?: NexoRunOptions): Promise<RunResult>;
-	/** A chat session; call `session.turn(...)` and `session.close()`. */
+	/**
+	 * A chat session with the current settings, which it keeps until `session.refreshConfig()` (settings changed later
+	 * apply to sessions started afterwards); call `session.turn(...)` and `session.close()`.
+	 */
 	createSession(options: CreateSessionOptions): Session;
-	/** Reopens a session by id. NOT_FOUND for an unknown id, CONFLICT when another process has it open. */
+	/** Reopens a session by id with the current settings. NOT_FOUND for an unknown id, CONFLICT when another process has it open. */
 	resumeSession(id: string): Session;
 	/** Recent runs without a human verdict, worst first (failed, over budget, aborted, low score, unscored). */
 	reviewQueue(options?: ReviewQueueOptions): ReviewQueueItem[];
@@ -100,7 +107,8 @@ export interface Nexo {
 	getSetting(key: string): SettingView;
 	/**
 	 * Writes one setting to the user config (~/.nexo/config.json) after schema validation; INVALID_REQUEST for an unknown
-	 * key or a bad value. This instance keeps the config it was created with; a new `createNexo` picks the change up.
+	 * key or a bad value. Runs and sessions started afterwards, in this process or another, use it; open sessions keep the
+	 * settings they started with until `session.refreshConfig()`.
 	 */
 	setSetting(key: string, value: unknown): SettingView;
 	/** Removes a setting from the user config, so the project config or the default applies again. */
@@ -133,6 +141,9 @@ export function createNexo(options: NexoOptions = {}): Nexo {
 	const prompter = options.prompter ?? nonInteractivePrompter;
 	const allowAll = options.allowAll ?? false;
 	const listeners = new Set<(event: EngineEvent) => void>();
+	const emit = (event: EngineEvent): void => {
+		for (const listener of [...listeners]) listener(event);
+	};
 	const runtime = createRuntime({
 		env,
 		cwd,
@@ -141,17 +152,16 @@ export function createNexo(options: NexoOptions = {}): Nexo {
 		overrides: options.config,
 		apiKeys: options.apiKeys,
 		...(options.fetch ? { fetch: options.fetch } : {}),
-		onEvent: (event) => {
-			for (const listener of [...listeners]) listener(event);
-		},
+		onEvent: emit,
 	});
 	let closed = false;
 	const live = (): void => {
 		if (closed) throw new NexoError({ code: "INVALID_REQUEST", message: "This Nexo instance is closed", hint: "Create a new one with createNexo()" });
 	};
-	const sessionDeps = (): SessionDeps => ({
-		config: runtime.config,
-		configHash: runtime.configHash,
+	/** What runs and sessions share; `config` is read when each run or session starts. */
+	const depsFor = (config: NexoConfig, configHash: string) => ({
+		config,
+		configHash,
 		paths: runtime.paths,
 		db: runtime.db,
 		models: runtime.models,
@@ -160,17 +170,33 @@ export function createNexo(options: NexoOptions = {}): Nexo {
 		prompter,
 		skills: runtime.skills,
 		resolveApiKey: runtime.settings.resolveApiKey,
-		reloadConfig: () => runtime.settings.reloadConfig(),
 		...(runtime.mcp ? { mcp: runtime.mcp } : {}),
 	});
+	// As in the TUI, a session opens with the current settings and keeps them until session.refreshConfig(); keys are
+	// re-read before every turn.
+	const sessionDeps = (): SessionDeps => {
+		const { config, configHash } = runtime.settings.reloadConfig();
+		return { ...depsFor(config, configHash), reloadConfig: () => runtime.settings.reloadConfig(), refreshKeys: () => runtime.settings.refreshKeys() };
+	};
+	// A run starts with the current settings too: the engine is rebuilt when the config changed since the previous run.
+	// Runs in flight keep the engine they started on.
+	let current = { engine: runtime.engine, configHash: runtime.configHash };
+	const currentEngine = () => {
+		const { config, configHash } = runtime.settings.reloadConfig();
+		if (configHash !== current.configHash) {
+			current = { engine: createEngine({ ...depsFor(config, configHash), onEvent: emit, ...(options.fetch ? { fetch: options.fetch } : {}) }), configHash };
+		}
+		return current.engine;
+	};
 
 	return {
 		async run(request, runOptions = {}) {
 			live();
+			const engine = currentEngine();
 			const { onEvent } = runOptions;
 			if (onEvent) listeners.add(onEvent);
 			try {
-				return await runtime.engine.run(
+				return await engine.run(
 					allowAll && request.allowAll === undefined ? { ...request, allowAll: true } : request,
 					runOptions.signal,
 				);
@@ -202,9 +228,11 @@ export function createNexo(options: NexoOptions = {}): Nexo {
 		},
 		async webSearch(query, searchOptions = {}) {
 			live();
+			// Like a run, a search uses the keys and settings current when it starts.
+			runtime.settings.refreshKeys();
 			const keys = Object.fromEntries(SEARCH_PROVIDER_IDS.map((id) => [id, runtime.settings.resolveApiKey(id)])) as Partial<Record<SearchProviderId, string>>;
 			try {
-				return await webSearch(query, { keys, count: searchOptions.count ?? runtime.config.tools.webSearch.count, ...(options.fetch ? { fetch: options.fetch } : {}) }, searchOptions.signal);
+				return await webSearch(query, { keys, count: searchOptions.count ?? runtime.settings.loadConfig().config.tools.webSearch.count, ...(options.fetch ? { fetch: options.fetch } : {}) }, searchOptions.signal);
 			} catch (error) {
 				if (searchOptions.signal?.aborted || error instanceof NexoError) throw error;
 				// An empty query or no key: the message names `nexo settings set-key` and the environment variables.

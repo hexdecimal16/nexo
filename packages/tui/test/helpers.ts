@@ -84,6 +84,7 @@ export function makeHarness(options: HarnessOptions = {}): Omit<Harness, "done">
 			skills: loadSkills([]),
 			resolveApiKey: settings.resolveApiKey,
 			reloadConfig: () => settings.reloadConfig(),
+			refreshKeys: () => settings.refreshKeys(),
 		};
 	};
 

@@ -115,6 +115,11 @@ export interface Settings {
 	loadConfig(): LoadedConfig;
 	/** Re-reads `credentials.json` and the config; pass as `SessionDeps.reloadConfig` (`() => settings.reloadConfig()`). */
 	reloadConfig(): ReloadedConfig;
+	/**
+	 * Re-reads `credentials.json` and registers stored and environment keys with the redactor, leaving the config alone.
+	 * Pass as `SessionDeps.refreshKeys`, so a key stored by another process reaches open sessions at their next turn.
+	 */
+	refreshKeys(): void;
 	/** Sends warnings (keys too short to redact; never their values) to the logger, including ones raised before. */
 	attachLogger(logger: Logger): void;
 	/** INVALID_REQUEST unless the provider is in the registry, the config or the credentials file. */
@@ -325,6 +330,10 @@ export function createSettings(options: SettingsOptions): Settings {
 			const { config, hash } = loadEffective();
 			registerEnvKeys();
 			return { config, configHash: hash, redact };
+		},
+		refreshKeys() {
+			refreshCredentials();
+			registerEnvKeys();
 		},
 		validateKeyProvider(provider) {
 			validateProvider(provider, true);

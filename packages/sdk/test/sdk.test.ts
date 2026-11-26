@@ -147,6 +147,46 @@ describe("createNexo", () => {
 	});
 });
 
+describe("settings changes", () => {
+	it("apply to runs started afterwards", async () => {
+		const lines: string[] = [];
+		const capture: FauxResponseStep = (context) => {
+			lines.push(JSON.stringify(context.messages.at(-1)));
+			return fauxAssistantMessage("ok");
+		};
+		const h = setup([capture, capture]);
+		const nexo = createNexo({ home: h.home, cwd: h.root, env: h.env, models: h.models, config: { learning: { enabled: false } } });
+		try {
+			await nexo.run({ instruction: "one" });
+			nexo.setSetting("budgets.perRunUsd", 0.75);
+			await nexo.run({ instruction: "two" });
+			expect(lines[0]).toMatch(/of \$0\.50 remaining/);
+			expect(lines[1]).toMatch(/of \$0\.75 remaining/);
+		} finally {
+			await nexo.close();
+		}
+	});
+
+	it("apply to sessions started afterwards, and to an open session after session.refreshConfig()", async () => {
+		const h = setup([fauxAssistantMessage("one")]);
+		const nexo = createNexo({ home: h.home, cwd: h.root, env: h.env, models: h.models, config: { learning: { enabled: false } } });
+		try {
+			const open = nexo.createSession({ cwd: h.root });
+			nexo.setSetting("budgets.perSessionUsd", 9);
+			await open.turn("Hi");
+			expect(open.budgetUsd).toBe(5);
+			const later = nexo.createSession({ cwd: h.root });
+			expect(later.budgetUsd).toBe(9);
+			later.close();
+			open.refreshConfig();
+			expect(open.budgetUsd).toBe(9);
+			open.close();
+		} finally {
+			await nexo.close();
+		}
+	});
+});
+
 describe("web search", () => {
 	const BRAVE_KEY = "brave-sdk-key-0123456789";
 	const braveFetch = (calls: string[] = []) =>

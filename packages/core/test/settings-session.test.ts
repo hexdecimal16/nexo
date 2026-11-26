@@ -22,37 +22,44 @@ function filesUnder(dir: string): string[] {
 	return out;
 }
 
+/** A session's dependencies on a fresh home, wired to real settings the way `nexo` wires them. */
+function sessionSetup() {
+	const root = mkdtempSync(join(tmpdir(), "nexo-settings-session-"));
+	const paths = resolveNexoPaths({ NEXO_HOME: join(root, "home") });
+	ensureNexoDirs(paths);
+	const cwd = realpathSync(mkdtempSync(join(tmpdir(), "nexo-cwd-")));
+	const faux = fauxProvider({ models: FAUX_MODELS });
+	const models = createModels();
+	models.setProvider(faux.provider);
+	const settings = createSettings({
+		paths,
+		cwd,
+		env: {},
+		models,
+		overrides: { models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "slow" } }, providers: { faux: { retryBaseDelayMs: 0, rateLimitBaseDelayMs: 0 } }, learning: { enabled: false } },
+	});
+	const { config, hash } = settings.loadConfig();
+	const logger = createLogger({ dir: paths.logs, component: "test", redact: settings.redact });
+	const deps: SessionDeps = {
+		config,
+		configHash: hash,
+		paths,
+		db: openDb(paths.db),
+		models,
+		logger,
+		redact: settings.redact,
+		prompter: nonInteractivePrompter,
+		skills: loadSkills([]),
+		resolveApiKey: settings.resolveApiKey,
+		reloadConfig: () => settings.reloadConfig(),
+		refreshKeys: () => settings.refreshKeys(),
+	};
+	return { paths, cwd, faux, models, settings, logger, deps };
+}
+
 describe("settings in a session", () => {
 	it("uses a key set mid-session from the next turn and never stores it, even when a tool prints it", async () => {
-		const root = mkdtempSync(join(tmpdir(), "nexo-settings-session-"));
-		const paths = resolveNexoPaths({ NEXO_HOME: join(root, "home") });
-		ensureNexoDirs(paths);
-		const cwd = realpathSync(mkdtempSync(join(tmpdir(), "nexo-cwd-")));
-		const faux = fauxProvider({ models: FAUX_MODELS });
-		const models = createModels();
-		models.setProvider(faux.provider);
-		const settings = createSettings({
-			paths,
-			cwd,
-			env: {},
-			models,
-			overrides: { models: { s1: { provider: "faux", id: "fast" }, s2: { provider: "faux", id: "slow" } }, providers: { faux: { retryBaseDelayMs: 0, rateLimitBaseDelayMs: 0 } }, learning: { enabled: false } },
-		});
-		const { config, hash } = settings.loadConfig();
-		const logger = createLogger({ dir: paths.logs, component: "test", redact: settings.redact });
-		const deps: SessionDeps = {
-			config,
-			configHash: hash,
-			paths,
-			db: openDb(paths.db),
-			models,
-			logger,
-			redact: settings.redact,
-			prompter: nonInteractivePrompter,
-			skills: loadSkills([]),
-			resolveApiKey: settings.resolveApiKey,
-			reloadConfig: () => settings.reloadConfig(),
-		};
+		const { paths, cwd, faux, settings, logger, deps } = sessionSetup();
 
 		const keys: (string | undefined)[] = [];
 		faux.setResponses([
@@ -95,5 +102,34 @@ describe("settings in a session", () => {
 		expect(stored.some((f) => f.endsWith(".log"))).toBe(true);
 		expect(stored.some((f) => f.endsWith("nexo.db"))).toBe(true);
 		for (const file of stored) expect(readFileSync(file).includes(KEY), file).toBe(false);
+	});
+
+	it("keeps its config when another process changes a setting, and uses a key that process stores from the next turn", async () => {
+		const { paths, cwd, faux, models, deps } = sessionSetup();
+		// Another nexo process on the same home: its changes reach this session only through the files it writes.
+		const other = createSettings({ paths, cwd, env: {}, models });
+		const keys: (string | undefined)[] = [];
+		faux.setResponses([
+			async (_ctx, opts) => {
+				keys.push(opts?.apiKey);
+				return fauxAssistantMessage("Hello.");
+			},
+			async (_ctx, opts) => {
+				keys.push(opts?.apiKey);
+				return fauxAssistantMessage("Noted.");
+			},
+		]);
+		const session = createSession(deps, { cwd });
+		expect((await session.turn("hi")).status).toBe("succeeded");
+		other.setSetting("budgets.perSessionUsd", 9);
+		other.setKey("faux", KEY);
+		const second = await session.turn(`My key is ${KEY}`);
+		expect(second.status).toBe("succeeded");
+		expect(keys).toEqual([undefined, KEY]);
+		expect(session.budgetUsd).toBe(5);
+		expect(readFileSync(join(paths.sessions, session.id, "transcript.jsonl"), "utf8")).not.toContain(KEY);
+		session.refreshConfig();
+		expect(session.budgetUsd).toBe(9);
+		session.close();
 	});
 });

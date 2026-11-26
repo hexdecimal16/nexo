@@ -42,6 +42,8 @@ nexo settings set budgets.perRunUsd 0.5
 
 Keys are stored in `~/.nexo/credentials.json` (mode 600) and redacted from logs. A provider's environment variable, such as `ANTHROPIC_API_KEY`, takes precedence over the stored key.
 
+A settings change applies to sessions and runs started afterwards. An open session keeps the settings it started with, except the one you close `/settings` in, which uses the change from its next turn. Keys apply to every open session from its next turn.
+
 ## Optional tools
 
 **Web search.** Set a [Brave Search](https://api-dashboard.search.brave.com) or [Tavily](https://app.tavily.com) key and the agent gets a `web_search` tool. With both keys, it queries both and merges the results.
@@ -76,6 +78,7 @@ try {
 
 - Pass keys in code without writing them to disk: `createNexo({ apiKeys: { anthropic: "…" } })`.
 - `nexo.keys()`, `nexo.setKey()` and `nexo.removeKey()` manage stored keys. `nexo.webSearch(query)` searches without a model.
+- `nexo.run()`, `nexo.createSession()` and `nexo.resumeSession()` read the current settings. An open session keeps its own until `session.refreshConfig()`.
 - The SDK denies every tool approval by default, so a backend never waits on a person. Pass `allowAll: true` to `createNexo` or `run` to auto-approve tool actions in sandboxed environments. Always pass `budgetUsd`.
 - `checkSetup()` runs the doctor checks without starting the engine, for a start-up pre-flight.
 - Send images with `run({ instruction, images: [loadImageFile("shot.png").image] })`, `session.turn(text, { images })` or `session.steer(text, images)`.

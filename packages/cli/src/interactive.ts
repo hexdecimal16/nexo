@@ -135,6 +135,7 @@ export async function interactiveCommand(args: string[], io: CliIO, options: Cli
 			skills,
 			resolveApiKey: settings.resolveApiKey,
 			reloadConfig: () => settings.reloadConfig(),
+			refreshKeys: () => settings.refreshKeys(),
 			...(mcp ? { mcp } : {}),
 		};
 	};

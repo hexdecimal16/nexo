@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { createModels, fauxProvider } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { createSettings } from "@nexo/core";
 import { describe, expect, it } from "vitest";
 import { FAUX_MODELS } from "../../core/test/helpers.ts";
@@ -82,6 +82,20 @@ describe("settings screen", () => {
 		h.terminal.send(KEY.escape);
 		await until(() => expect(h.terminal.output()).toContain("$0.00/$9.00"));
 		expect(h.session().budgetUsd).toBe(9);
+		h.terminal.send(KEY.ctrlD);
+		await h.done;
+	});
+
+	it("keeps the open session's settings when another process changes them", async () => {
+		const h = await startHarness({ userConfig: { ...FAUX_ROLES } });
+		await until(() => expect(h.terminal.output()).toContain("$0.00/$5.00"));
+		// Another nexo process writes the user config; this session reads it again only when /settings closes or it is reopened.
+		createSettings({ paths: h.paths, cwd: h.cwd, env: {}, models: h.models }).setSetting("budgets.perSessionUsd", 9);
+		h.faux.setResponses([fauxAssistantMessage("answered on five")]);
+		submit(h.terminal, "hi");
+		await until(() => expect(h.terminal.output()).toContain("answered on five"));
+		await until(() => !h.session().running);
+		expect(h.session().budgetUsd).toBe(5);
 		h.terminal.send(KEY.ctrlD);
 		await h.done;
 	});

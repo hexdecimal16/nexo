@@ -951,7 +951,7 @@ class InteractiveApp {
 							this.sayError(toErrorPayload(error));
 						}
 						this.tui.requestRender();
-						this.say("settings closed; changes apply from the next turn");
+						this.say("settings closed; changes apply to this session from its next turn and to sessions opened later");
 					});
 					break;
 				case "exit":
@@ -1037,6 +1037,8 @@ class InteractiveApp {
 		this.subagentPanel.clear();
 		this.editor.setAutocompleteProvider(createAutocompleteProvider([...SLASH_COMMANDS, ...skillSlashCommands(next.skills())], next.cwd));
 		this.chat.clear();
+		// The footer's default model is the one the resumed session opened with.
+		this.refreshDefaults();
 		this.renderHeader(next);
 		this.tui.requestRender(true);
 	}
