@@ -5,6 +5,16 @@ import type { ScoreRow } from "@nexo/store";
 /** Longest rationale quoted per failed check in the continuation prompt. */
 const RATIONALE_CHARS = 1500;
 
+/**
+ * The instruction scorers judge the run against: the instruction it started from, then each message the user steered in
+ * while it ran. Without the steered messages a judge scores an answer to a later request against the first one.
+ */
+export function scoredInstruction(instruction: string, steered: readonly string[]): string {
+	if (steered.length === 0) return instruction;
+	const notes = steered.map((text, i) => `[Message ${i + 2} from the user, sent while the agent was working; the final answer should address it]\n${text}`);
+	return [instruction, ...notes].join("\n\n");
+}
+
 /** The message that starts an S2 continuation turn: why the answer was rejected and what to do next. */
 export function continuationPrompt(signals: readonly EscalationSignal[], scores: readonly ScoreRow[]): string {
 	const failed = scores.filter((s) => s.status === "ok" && s.passed === false);

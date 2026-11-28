@@ -286,7 +286,7 @@ export const DEFAULT_CONFIG: Omit<NexoConfig, "models"> = {
 		escalationCutoff: 0.8,
 		estimateOutputTokens: 4096,
 	},
-	session: { compactAt: 0.8, compactAtBudgetShare: 0.2, reuseKiroSession: false },
+	session: { compactAt: 0.8, compactAtBudgetShare: 0.2, reuseKiroSession: true },
 	loop: { maxToolCalls: 200, repeatLimit: 3 },
 	spawn: { maxParallelSubagents: 4, maxDepth: 4 },
 	instructions: [],

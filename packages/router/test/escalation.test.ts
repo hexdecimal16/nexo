@@ -93,6 +93,10 @@ describe("escalationBlock", () => {
 		expect(escalationBlock({ ...open, s2CallsAffordable: 0, spentFraction: 0.9 })).toBe("budget_cutoff");
 		expect(escalationBlock({ ...open, escalations: 1 })).toBe("max_escalations");
 		expect(escalationBlock({ ...open, userPinned: true })).toBe("user_model");
+		expect(escalationBlock({ ...open, sameModel: true })).toBe("same_model");
+		expect(escalationBlock({ ...open, sameModel: false })).toBeNull();
+		expect(escalationBlock({ ...open, sameModel: true, userPinned: true })).toBe("user_model");
+		expect(escalationBlock({ ...open, sameModel: true, modelAllowed: false })).toBe("model_not_allowed");
 		expect(escalationBlock({ ...open, modelAllowed: false, userPinned: true })).toBe("model_not_allowed");
 		expect(escalationBlock({ ...open, skillAllows: false, modelAllowed: false, escalations: 5 })).toBe("skill_disabled");
 	});

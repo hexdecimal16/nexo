@@ -170,7 +170,7 @@ export function endOfRunSignals(policy: RouterPolicy, evidence: EndOfRunEvidence
 	return out;
 }
 
-export type EscalationBlock = "skill_disabled" | "model_not_allowed" | "user_model" | "max_escalations" | "budget_cutoff" | "budget_headroom";
+export type EscalationBlock = "skill_disabled" | "model_not_allowed" | "same_model" | "user_model" | "max_escalations" | "budget_cutoff" | "budget_headroom";
 
 /** S2 requests at the run's current context size that the remaining run budget must cover for an escalation to apply. */
 export const MIN_AFFORDABLE_S2_CALLS = 2;
@@ -179,6 +179,7 @@ export const MIN_AFFORDABLE_S2_CALLS = 2;
 export const ESCALATION_BLOCK_REASONS: Record<EscalationBlock, string> = {
 	skill_disabled: 'the skill sets nexo-escalate: "false"',
 	model_not_allowed: "model not allowed",
+	same_model: "the run already uses the escalation target's model and effort",
 	user_model: "the user chose the model",
 	max_escalations: "router.maxEscalations reached",
 	budget_cutoff: "budgets.escalationCutoff reached",
@@ -197,6 +198,8 @@ export interface EscalationGate {
 	skillAllows: boolean;
 	/** False when the escalation target is outside the run's skill `nexo-model-allowed` list. */
 	modelAllowed: boolean;
+	/** True when the run already uses the escalation target's model and effort: escalating would re-run the same model. */
+	sameModel?: boolean;
 	/** True when the user chose the model explicitly (`--model`, `/model` or a project pin). */
 	userPinned: boolean;
 	/** How many S2 requests at the current context size the remaining run budget covers; absent when unknown (unpriced). */
@@ -208,6 +211,7 @@ export function escalationBlock(gate: EscalationGate): EscalationBlock | null {
 	if (!gate.skillAllows) return "skill_disabled";
 	if (!gate.modelAllowed) return "model_not_allowed";
 	if (gate.userPinned) return "user_model";
+	if (gate.sameModel) return "same_model";
 	if (gate.escalations >= gate.maxEscalations) return "max_escalations";
 	if (gate.spentFraction > gate.cutoff) return "budget_cutoff";
 	if (gate.s2CallsAffordable !== undefined && gate.s2CallsAffordable < MIN_AFFORDABLE_S2_CALLS) return "budget_headroom";

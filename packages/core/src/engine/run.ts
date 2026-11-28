@@ -105,7 +105,7 @@ import { type ApiKeyResolver, createGatedStreamFn } from "./provider-gate.ts";
 import { Recorder } from "./recorder.ts";
 import type { ChargedCallDeps } from "../learn/caller.ts";
 import { activePlaybook, emptyMemoryContext, playbookSection, retrieveRunMemories, type RunMemoryContext, skillAppendix } from "../learn/context.ts";
-import { continuationPrompt } from "../scoring/continuation.ts";
+import { continuationPrompt, scoredInstruction } from "../scoring/continuation.ts";
 import { planScoring, runScoringRound, runSelfCheck, type ScoringDeps, summarizeSpans } from "../scoring/runner.ts";
 import { judgeFamilyWarnings, loadJudgeRubric, loadRouterPolicy } from "../scoring/sources.ts";
 
@@ -609,6 +609,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 	let workspaceFrom: { runId: string; bytes: number } | null = null;
 	/** The model requests go to; replaced by S2 when an escalation takes effect. */
 	let active = { model, resolved };
+	/** User messages steered into the run after its instruction, in the order the model saw them; scoring reads them too. */
+	const steered: string[] = [];
 	let escalations = 0;
 	let continuationFailure: ErrorPayload | null = null;
 	/** Model calls of this run that ended without an error; the retry loop resets its attempt count when this grows. */
@@ -823,8 +825,8 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		const blockedOnce = new Set<string>();
 		/** Estimated cost of one S2 request at the run's current context size; set once the agent exists. */
 		let s2RequestUsd: () => number = () => 0;
-		/** Why an escalation may not happen now, or null when it may. Reserved budget counts as spent. */
-		const currentBlock = (): EscalationBlock | null => {
+		/** Why an escalation for `trigger` may not happen now, or null when it may. Reserved budget counts as spent. */
+		const currentBlock = (trigger?: EscalationTrigger): EscalationBlock | null => {
 			const perS2Request = s2RequestUsd();
 			return escalationBlock({
 				escalations,
@@ -833,6 +835,15 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				cutoff: config.budgets.escalationCutoff,
 				skillAllows: skill?.meta.escalate ?? true,
 				modelAllowed: isModelAllowed("s2", skill?.meta.modelAllowed ?? ["s1", "s2"], { s1: config.models.s1, s2: config.models.s2 }),
+				// judge_low only: when the escalation target is the model and effort the run already uses (S1 and S2 configured
+				// the same, or the run is already on S2), the continuation would re-run the same model on the judge's opinion
+				// alone. A failing deterministic scorer or self-check still gets its continuation.
+				sameModel:
+					trigger === "judge_low" &&
+					active.model.provider === escalationTarget.provider &&
+					active.model.id === escalationTarget.id &&
+					active.resolved.effort ===
+						env.registry.clampEffort(escalationTarget, resolved.effortSource === "user" ? resolved.effort : (config.models.s2.effort ?? resolved.effort)),
 				userPinned: resolved.source === "user",
 				// Unpriced S2 (estimate 0): the headroom check is skipped and the cutoff alone applies.
 				...(perS2Request > 0 ? { s2CallsAffordable: budget.remainingUsd() / perS2Request } : {}),
@@ -845,7 +856,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 		const escalate = (signal: EscalationSignal, phase: "mid_run" | "end_of_run"): string | null => {
 			if (phase === "mid_run" && active.resolved.role === "s2") return null;
 			const from = `${active.model.provider}/${active.model.id}`;
-			const blockedBy = currentBlock();
+			const blockedBy = currentBlock(signal.trigger);
 			if (blockedBy) {
 				// A suppressed trigger is recorded once per reason, not on every tool error that re-fires it.
 				const key = `${signal.trigger}:${blockedBy}`;
@@ -1325,7 +1336,10 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 						if (!sawPrompt) sawPrompt = true;
 						else {
 							const text = pendingSteer.shift();
-							if (text !== undefined) deps.onEvent?.({ type: "steer_injected", runId, depth, text: deps.redact(text) });
+							if (text !== undefined) {
+								steered.push(text);
+								deps.onEvent?.({ type: "steer_injected", runId, depth, text: deps.redact(text) });
+							}
 						}
 					}
 					if (event.message.role === "assistant") {
@@ -1516,7 +1530,7 @@ export async function executeRun(env: EngineEnv, input: ExecuteInput): Promise<R
 				for (let round = 0; status === "succeeded" && !input.signal?.aborted; round++) {
 					const scoreInput = {
 						runId,
-						instruction: request.instruction,
+						instruction: scoredInstruction(request.instruction, steered),
 						finalOutput: output,
 						runDir: runDir.root,
 						workspace,

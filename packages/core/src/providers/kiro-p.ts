@@ -314,10 +314,34 @@ function emptyUsage(): Usage {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 }
 
+/** `_meta.kiro` of a V3 `session_info_update`: context usage (`kind: "context_usage"`), summarization and turn lifecycle. */
+export interface KiroSessionInfo {
+	kind?: string;
+	usagePercentage?: number;
+	summarizationThreshold?: number;
+	contextUsage?: { usagePercentage?: number; summarizationThreshold?: number };
+}
+
 interface AcpUpdate {
 	sessionUpdate?: string;
 	title?: string;
 	content?: { type?: string; text?: string };
+	_meta?: { kiro?: KiroSessionInfo };
+}
+
+/** Context-usage points below Kiro's summarization threshold at which a session stops being kept for reuse. */
+const COMPACT_MARGIN = 10;
+
+/**
+ * True when Kiro summarized the session, or its context is within `COMPACT_MARGIN` points of Kiro's automatic
+ * compaction (80% by default; `session/new` cannot turn it off). A compacted session no longer holds exactly the
+ * entries `SessionCache` matched it by, so it is not kept.
+ */
+export function kiroMayCompact(info: KiroSessionInfo): boolean {
+	if (typeof info.kind === "string" && /compact|summar/i.test(info.kind)) return true;
+	const usage = info.usagePercentage ?? info.contextUsage?.usagePercentage;
+	const threshold = info.summarizationThreshold ?? info.contextUsage?.summarizationThreshold;
+	return typeof usage === "number" && typeof threshold === "number" && usage >= threshold - COMPACT_MARGIN;
 }
 
 interface Pending {
@@ -331,6 +355,8 @@ interface Pending {
  */
 class AcpConnection {
 	closed = false;
+	/** The server advertised `session/delete` (Kiro CLI 3.7.0+). */
+	canDelete = false;
 	readonly dir: string;
 	private nextId = 0;
 	private readonly pending = new Map<number, Pending>();
@@ -357,7 +383,10 @@ class AcpConnection {
 		void conn.pump();
 		void proc.exit.then((exit) => conn.shutdown(new Error(exit.stderr.trim().split("\n").at(-1) || `kiro-cli exited with code ${exit.code ?? "null"}`)));
 		try {
-			await conn.request("initialize", { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: "nexo", version: "0" } });
+			const init = (await conn.request("initialize", { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: "nexo", version: "0" } })) as
+				| { agentCapabilities?: { sessionCapabilities?: { delete?: unknown } } }
+				| undefined;
+			conn.canDelete = Boolean(init?.agentCapabilities?.sessionCapabilities?.delete);
 		} catch (error) {
 			conn.shutdown(error instanceof Error ? error : new Error(String(error)));
 			throw error;
@@ -435,6 +464,16 @@ class AcpConnection {
 
 	unlisten(sessionId: string): void {
 		this.listeners.delete(sessionId);
+	}
+
+	/**
+	 * Deletes a finished session from Kiro's store (`~/.kiro/sessions`), where it would otherwise stay for good. Sent
+	 * without waiting and not counted as in flight, so it never holds the host open; the reply is ignored.
+	 */
+	dropSession(sessionId: string): void {
+		this.listeners.delete(sessionId);
+		if (this.closed || !this.canDelete) return;
+		this.send({ id: ++this.nextId, method: "session/delete", params: { sessionId } });
 	}
 
 	/** Writes the agent file for `name` once; later sessions select it with `modeId`. */
@@ -545,7 +584,10 @@ class SessionCache {
 
 	put(item: Reusable): void {
 		this.items.push(item);
-		if (this.items.length > REUSE_MAX) this.items.shift();
+		if (this.items.length > REUSE_MAX) {
+			const evicted = this.items.shift();
+			evicted?.session.conn.dropSession(evicted.session.id);
+		}
 	}
 }
 
@@ -594,6 +636,8 @@ function streamKiroP(
 		const agentName = `nexo-${createHash("sha256").update(agentPrompt).digest("hex").slice(0, 12)}`;
 		const effort = effortFlag(options?.reasoning);
 		const idleMs = Number(process.env[KIRO_P_IDLE_ENV]) || IDLE_MS_DEFAULT;
+		/** Kiro reported a summarization, or context close to its threshold: the session this call ends on is not kept. */
+		let compacting = false;
 
 		/** A fresh session on the shared server, running the agent that carries this turn's system prompt. */
 		const startSession = async (): Promise<Session> => {
@@ -611,6 +655,8 @@ function streamKiroP(
 				})) as { sessionId?: string; modes?: { currentModeId?: string } };
 				mode = res.modes?.currentModeId;
 				if (res.sessionId && mode === agentName) return { conn, id: res.sessionId };
+				// The session runs Kiro's default agent: delete it rather than leave it on disk.
+				if (res.sessionId) conn.dropSession(res.sessionId);
 			}
 			// Still not applied: refuse to run rather than let the model see Kiro's default tools.
 			throw new Error(`stopped: agent "${agentName}" not applied (mode ${mode ?? "none"})`);
@@ -650,6 +696,10 @@ function streamKiroP(
 			};
 			conn.listen(id, (u) => {
 				arm();
+				if (u.sessionUpdate === "session_info_update") {
+					if (u._meta?.kiro && kiroMayCompact(u._meta.kiro)) compacting = true;
+					return;
+				}
 				if (u.sessionUpdate === "tool_call") {
 					if (!nativeCall) {
 						nativeCall = u.title ?? "tool";
@@ -713,6 +763,9 @@ function streamKiroP(
 			return outcome;
 		};
 
+		/** The session the call ends on; deleted afterwards unless it is kept for reuse. */
+		let session: Session | undefined;
+		let kept = false;
 		try {
 			stream.push({ type: "start", partial: snapshot() });
 
@@ -720,11 +773,12 @@ function streamKiroP(
 			const key = `${agentName}|${model.id}|${effort ?? ""}`;
 			const prompt = renderTranscriptParts(context.messages);
 			const reused = sessions?.take(key, turns);
-			let session = reused?.session ?? (await startSession());
+			session = reused?.session ?? (await startSession());
 			if (signal?.aborted) return fail("aborted", "Request was aborted");
 			let outcome = await runOnce(session, reused ? newEntries(turns.slice(reused.count)) : prompt);
 			// A kept session that fails before anything streamed is dropped for a fresh one holding the whole transcript.
 			if (reused && outcome.error && !outcome.aborted && !signal?.aborted && partial.content.length === 0) {
+				session.conn.dropSession(session.id);
 				session = await startSession();
 				outcome = await runOnce(session, prompt);
 			}
@@ -773,12 +827,17 @@ function streamKiroP(
 				pushText(outcome.text);
 			}
 			const message: AssistantMessage = { ...snapshot(), stopReason };
-			if (sessions && !corrected && stopReason !== "length") sessions.put({ session, key, count: turns.length + 1, digest: digestOf([...turns, message]) });
+			if (sessions && !corrected && stopReason !== "length" && !compacting) {
+				sessions.put({ session, key, count: turns.length + 1, digest: digestOf([...turns, message]) });
+				kept = true;
+			}
 			stream.push({ type: "done", reason: stopReason, message });
 			stream.end(message);
 		} catch (error) {
 			if (signal?.aborted) return fail("aborted", "Request was aborted");
 			fail("error", `kiro-cli failed: ${error instanceof Error ? error.message : String(error)}`);
+		} finally {
+			if (session && !kept) session.conn.dropSession(session.id);
 		}
 	});
 	return stream;

@@ -67,6 +67,25 @@ describe("end-of-run escalation", () => {
 		expect(String(escalation?.attrs.reason)).toContain("judge score 0.30 is below 0.6");
 	});
 
+	it("does not re-run the same model and effort on a low judge score (same_model)", async () => {
+		const same = { provider: "faux", id: "fast" };
+		const env = judgeEnv({ config: { models: { s1: same, s2: same, judge: [{ provider: "faux", id: "gemini-judge" }] } } });
+		const calls = route(env, [fauxAssistantMessage("meh")], [verdict(0.3, "missing parts")]);
+		const result = await createEngine(env.deps).run({ instruction: "Write it" });
+		expect(result).toMatchObject({ status: "succeeded", output: "meh", escalations: 0 });
+		expect(calls.agentCalls()).toBe(1);
+		const span = listSpans(env.deps.db, result.trajectoryId as string).find((s) => s.kind === "escalation");
+		expect(span?.attrs).toMatchObject({ trigger: "judge_low", applied: false, blockedBy: "same_model" });
+	});
+
+	it("still continues on the same model when a deterministic scorer fails", async () => {
+		const same = { provider: "faux", id: "fast" };
+		const env = judgeEnv({ config: { ...contains, models: { s1: same, s2: same, judge: [{ provider: "faux", id: "gemini-judge" }] } } });
+		route(env, [fauxAssistantMessage("not yet"), fauxAssistantMessage("DONE now")]);
+		const result = await createEngine(env.deps).run({ instruction: "Finish" });
+		expect(result).toMatchObject({ status: "succeeded", output: "DONE now", escalations: 1 });
+	});
+
 	it("stops after router.maxEscalations and records the suppressed trigger once", async () => {
 		const env = judgeEnv({ config: { ...contains, router: { maxEscalations: 0 } } });
 		route(env, [fauxAssistantMessage("not yet")]);

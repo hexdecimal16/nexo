@@ -22,6 +22,8 @@ interface FakeOptions {
 	mode?: string;
 	/** Number of leading session/new calls that report the default mode (agent file not noticed yet). */
 	lateAgentFor?: number;
+	/** Advertise `session/delete` (Kiro CLI 3.7.0+) and record each delete. */
+	canDelete?: boolean;
 }
 
 /** A scripted ACP server: answers initialize and session/new, and plays one script per prompt (across all spawns). */
@@ -31,6 +33,7 @@ function fakeAcp(options: FakeOptions, ...scripts: Script[]) {
 	const prompts: string[] = [];
 	const promptBlocks: { type: string; text?: string; data?: string; mimeType?: string }[][] = [];
 	const cancels: string[] = [];
+	const deletes: string[] = [];
 
 	const run: KiroPRunner = (request) => {
 		spawns.push(request);
@@ -67,7 +70,11 @@ function fakeAcp(options: FakeOptions, ...scripts: Script[]) {
 
 		const write = (line: string) => {
 			const msg = JSON.parse(line) as { id?: number; method?: string; params?: Record<string, any> };
-			if (msg.method === "initialize") emit({ id: msg.id, result: { protocolVersion: 1 } });
+			if (msg.method === "initialize") emit({ id: msg.id, result: { protocolVersion: 1, ...(options.canDelete ? { agentCapabilities: { sessionCapabilities: { delete: {} } } } : {}) } });
+			else if (msg.method === "session/delete") {
+				deletes.push(msg.params!.sessionId);
+				emit({ id: msg.id, result: {} });
+			}
 			else if (msg.method === "session/new") {
 				const meta = msg.params?._meta?.kiro ?? {};
 				const agent = JSON.parse(readFileSync(join(msg.params!.cwd, ".kiro", "agents", `${meta.modeId}.json`), "utf8"));
@@ -96,7 +103,7 @@ function fakeAcp(options: FakeOptions, ...scripts: Script[]) {
 		};
 		return { write, lines, exit, kill: () => stop(null) };
 	};
-	return { run, spawns, sessions, prompts, promptBlocks, cancels };
+	return { run, spawns, sessions, prompts, promptBlocks, cancels, deletes };
 }
 
 const chunk = (text: string, kind = "agent_message_chunk") => ({ sessionUpdate: kind, content: { type: "text", text } });
@@ -126,6 +133,40 @@ describe("kiro-p provider", () => {
 		expect(models.getModel(KIRO_P_PROVIDER, "claude-sonnet-5.5")).toMatchObject({ provider: "kiro-p", api: "kiro-p", contextWindow: 1_000_000, reasoning: true });
 		expect(models.getModel(KIRO_P_PROVIDER, "auto")).toBeDefined();
 		expect(models.getModel(KIRO_P_PROVIDER, "glm-5")?.cost.input).toBe(0);
+	});
+
+	it("deletes sessions it does not keep when the server supports session/delete", async () => {
+		const fake = fakeAcp({ canDelete: true, lateAgentFor: 1 }, { updates: [chunk("hi")] });
+		const models = modelsWith(fake.run);
+		await models.completeSimple(models.getModel(KIRO_P_PROVIDER, "claude-sonnet-5.5")!, plain());
+		// s1 ran Kiro's default agent and was replaced; s2 answered and was not kept (reuse is off).
+		expect(fake.deletes).toEqual(["s1", "s2"]);
+	});
+
+	it("sends no session/delete to a server that does not advertise it", async () => {
+		const fake = fakeAcp({}, { updates: [chunk("hi")] });
+		const models = modelsWith(fake.run);
+		await models.completeSimple(models.getModel(KIRO_P_PROVIDER, "claude-sonnet-5.5")!, plain());
+		expect(fake.deletes).toEqual([]);
+	});
+
+	it("stops keeping a session once Kiro's context nears its compaction threshold", async () => {
+		const usage = (usagePercentage: number) => ({ sessionUpdate: "session_info_update", _meta: { kiro: { kind: "context_usage", usagePercentage, summarizationThreshold: 80 } } });
+		const fake = fakeAcp({ canDelete: true }, { updates: [usage(75), chunk("a")] }, { updates: [usage(20), chunk("b")] }, { updates: [chunk("c")] });
+		const models = modelsWith(fake.run, true);
+		const model = models.getModel(KIRO_P_PROVIDER, "claude-sonnet-5.5")!;
+		const first = plain("alpha");
+		const r1 = await models.completeSimple(model, first);
+		const second: Context = { messages: [...first.messages, r1, { role: "user", content: "bravo", timestamp: 2 }] };
+		const r2 = await models.completeSimple(model, second);
+		const third: Context = { messages: [...second.messages, r2, { role: "user", content: "charlie", timestamp: 3 }] };
+		await models.completeSimple(model, third);
+		// s1 neared the threshold, so turn two started s2 with the whole transcript; s2 was kept and reused for turn three.
+		expect(fake.sessions).toHaveLength(2);
+		expect(fake.deletes).toEqual(["s1"]);
+		expect(fake.prompts[1]).toContain("alpha");
+		expect(fake.prompts[2]).toContain("charlie");
+		expect(fake.prompts[2]).not.toContain("alpha");
 	});
 
 	it("streams text and thinking through an ACP session with a no-tools agent", async () => {
